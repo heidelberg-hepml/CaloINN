@@ -1,0 +1,27 @@
+run_name: example
+verbose: True
+
+# Data
+train_split: 0.8
+data_path: "../data/calo/eplus.hdf5"
+
+# Training
+lr: 1.e-4
+max_lr: 3.e-4
+batch_size: 512
+lr_scheduler: one_cycle_lr
+weight_decay: 0.
+betas: [0.9, 0.999]
+n_epochs: 100
+max_val_batches: 10
+checkpoint_save_interval: 30
+checkpoint_save_overwrite: True
+
+# Architecture
+n_blocks: 10
+internal_size: 256
+layers_per_block: 3
+coupling_type: cubic
+permute_soft: False
+num_bins: 10
+dropout: 0.05
