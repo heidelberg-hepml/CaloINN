@@ -299,7 +299,7 @@ class CINN(nn.Module):
         z = torch.normal(0, 1, size=(num_pts*condition.shape[0], self.in_dim), device=self.device)
         c = condition.repeat(num_pts,1)
         x, _ = self.model(z, c, rev=True)
-        return x.reshape(num_pts, condition.shape[0], self.in_dim)
+        return x.reshape(num_pts, condition.shape[0], self.in_dim).permute(1,0,2)
 
     def log_prob(self, x, c):
         z, log_jac_det = self.model(x, c, rev=False)
