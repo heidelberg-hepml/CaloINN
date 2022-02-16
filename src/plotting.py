@@ -1,4 +1,5 @@
 import os
+import argparse
 
 import numpy as np
 import h5py
@@ -13,17 +14,17 @@ plt.rcParams['text.usetex'] = True
 labelfont = FontProperties()
 labelfont.set_family('serif')
 labelfont.set_name('Times New Roman')
-labelfont.set_size(18)
+labelfont.set_size(20)
 
 axislabelfont = FontProperties()
 axislabelfont.set_family('serif')
 axislabelfont.set_name('Times New Roman')
-axislabelfont.set_size(20)
+axislabelfont.set_size(24)
 
 tickfont = FontProperties()
 tickfont.set_family('serif')
 tickfont.set_name('Times New Roman')
-tickfont.set_size(18)
+tickfont.set_size(22)
 
 def load_data(data_file):
     full_file = h5py.File(data_file, 'r')
@@ -66,11 +67,11 @@ def plot_hist(
     else:
         bins = np.linspace(vmin, vmax, n_bins)
 
-    fig, ax = plt.subplots(1,1,figsize=(6,4))
+    fig, ax = plt.subplots(1,1,figsize=(5,5))
 
     ax.hist(data, bins=bins, histtype='step', linewidth=2,
         alpha=1, color='blue', density='True', label='CaloINN')
-    
+
     if reference is not None:
         ax.hist(reference, bins=bins, histtype='stepfilled',
             alpha=0.2, color='blue', density='True', label='CaloINN')
@@ -81,7 +82,10 @@ def plot_hist(
     ax.set_xlim([vmin,vmax])
 
     if axis_label:
-        ax.set_xlabel(axis_label)
+        ax.set_xlabel(axis_label, fontproperties=axislabelfont)
+
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
 
     fig.tight_layout()
     fig.savefig(file_name, bbox_inches='tight')
@@ -89,7 +93,7 @@ def plot_hist(
     plt.close()
 
 def calc_e_layer(data, layer=0):
-    return np.sum(data[f'layer_{layer}'],(1,2))
+    return np.sum(data[f'layer_{layer}'],axis=(1,2))
 
 def calc_e_detector(data):
     return np.sum(data['layer_0'],(1,2)) + np.sum(data['layer_1'],(1,2)) + np.sum(data['layer_2'],(1,2))
@@ -149,10 +153,7 @@ def calc_sparsity(data, layer=0, threshold=1e-5):
     layer = data[f'layer_{layer}']
     return (layer > threshold).mean((1, 2))
 
-def main():
-    reference_file = '../data/calo/eplus.hdf5'
-    results_dir = 'results/example'
-
+def plot_all_hist(results_dir, reference_file):
     data_file = os.path.join(results_dir, 'samples.hdf5')
     plot_dir = os.path.join(results_dir, 'plots')
     os.makedirs(plot_dir, exist_ok=True)
@@ -180,16 +181,16 @@ def main():
         plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}.pdf', {'layer': layer},
             {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
         plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}_log.pdf', {'layer': layer},
-            {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)', 'xscale': 'log', 'yscale': 'log'}) )
+            {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)', 'xscale': 'log', 'yscale': 'log', 'vmin': (None, None, 1e-5)[layer]}) )
 
         plots.append( (calc_e_layer, f'e_layer_{layer}.pdf', {'layer': layer},
             {'axis_label': f'\\(E_{layer}\\) (GeV)'}) )
         plots.append( (calc_e_layer, f'e_layer_{layer}_log.pdf', {'layer': layer},
-            {'axis_label': f'\\(E_{layer}\\) (GeV)', 'xscale': 'log', 'yscale': 'log'}) )
-        
+            {'axis_label': f'\\(E_{layer}\\) (GeV)', 'xscale': 'log', 'yscale': 'log', 'vmin': (None, None, 1e-5)[layer]}) )
+
         plots.append( (calc_sparsity, f'sparsity_{layer}.pdf', {'layer': layer},
             {'axis_label': f'sparsity layer {layer}', 'xscale': 'linear', 'yscale': 'linear', 'n_bins': 72+1, 'vmin': 0., 'vmax': 1.}) )
-        
+
         for dir in ['eta', 'phi']:
             plots.append( (calc_centroid_mean, f'{dir}_{layer}.pdf', {'layer': layer, 'dir': dir},
                 {'axis_label': f'\\(\\left<\\{dir}_{layer}\\right>\\)', 'yscale': 'log'}) )
@@ -210,6 +211,14 @@ def main():
             reference=function(reference, **args1),
             **args2
         )
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--results_dir', help='Where to find the results and save the plots')
+    parser.add_argument('--reference_file', help='Where to find the reference data')
+    args = parser.parse_args()
+
+    plot_all_hist(args.results_dir, args.reference_file)
 
 if __name__=='__main__':
     main()
