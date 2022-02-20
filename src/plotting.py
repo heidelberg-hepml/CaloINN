@@ -92,6 +92,49 @@ def plot_hist(
 
     plt.close()
 
+def plot_loss(
+        file_name,
+        loss_train,
+        loss_test):
+    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
+
+    c = len(loss_test)/len(loss_train)
+    ax.plot(np.arange(c,len(loss_test)+c,c), loss_train, color='blue', label='train loss')
+    ax.plot(np.arange(1,len(loss_test)+1), loss_test, color='red', label='test loss')
+    ax.legend(loc='upper right', prop=labelfont)
+
+    ax.set_xlim([0,len(loss_test)])
+    ax.set_xlabel('epoch', fontproperties=axislabelfont)
+    ax.set_ylabel('loss', fontproperties=axislabelfont)
+
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
+
+    fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
+
+def plot_lr(
+        file_name,
+        learning_rate,
+        batches_per_epoch=1):
+    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
+
+    ax.plot(np.arange(1,len(learning_rate)+1)/batches_per_epoch, learning_rate, color='red', label='learning rate')
+
+    ax.set_xlim([0,len(learning_rate)/batches_per_epoch])
+    ax.set_xlabel('epoch', fontproperties=axislabelfont)
+    ax.set_ylabel('learning rate', fontproperties=axislabelfont)
+
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
+
+    fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
+
 def calc_e_layer(data, layer=0):
     return np.sum(data[f'layer_{layer}'],axis=(1,2))
 

@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 
 import data
 from model import CINN
+import plotting
 
 class Trainer:
     def __init__(self, params, device):
@@ -49,8 +50,10 @@ class Trainer:
                 loss = - torch.mean(self.model.log_prob(x,c))
                 loss.backward()
                 self.optim.step()
-                train_loss += loss.detach().cpu().numpy()*len(x)
+                self.losses_train.append(loss.detach().cpu().numpy())
+                train_loss += self.losses_train[-1]*len(x)
                 self.scheduler.step()
+                self.learning_rates.append(self.scheduler.get_last_lr()[0])
             train_loss /= len(self.train_loader.data)
 
             self.model.eval()
@@ -67,9 +70,9 @@ class Trainer:
             tqdm.write(f'lr: {self.scheduler.get_last_lr()[0]}')
             sys.stdout.flush()
 
-            self.losses_train.append(train_loss)
             self.losses_test.append(test_loss)
-            self.learning_rates.append(self.scheduler.get_last_lr()[0])
+            plotting.plot_loss(self.get_file('loss.png'), self.losses_train, self.losses_test)
+            plotting.plot_lr(self.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
