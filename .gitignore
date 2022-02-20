@@ -136,3 +136,5 @@ results
 plots
 run
 test.ipynb
+params
+!params/example.yaml

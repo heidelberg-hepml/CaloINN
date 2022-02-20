@@ -153,8 +153,8 @@ class Trainer:
 
 
 def main():
-    if len(sys.argv)>=3:
-        param_file = sys.argv[-1]
+    if len(sys.argv)>=2:
+        param_file = sys.argv[1]
     else:
         param_file = 'params/example.yaml'
     with open(param_file) as f:
