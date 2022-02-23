@@ -136,5 +136,7 @@ results
 plots
 run
 test.ipynb
+pca.ipynb
+src/search.py
 params
 !params/example.yaml
