@@ -25,8 +25,8 @@ class MyDataLoader:
         self.initialize()
 
     def add_noise(self, input):
-        noise = self.deta_distribution.sample(input.shape)*8e-7
-        return input - noise[...,0]
+        noise = self.deta_distribution.sample(input.shape)*1e-8
+        return input + noise[...,0]
 
     def __len__(self) -> int:
         return self.max_batch

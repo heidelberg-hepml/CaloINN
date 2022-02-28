@@ -62,15 +62,38 @@ class LogTransformation(fm.InvertibleModule):
         else:
             z = torch.log(x + self.alpha)
             jac = - torch.sum( z, dim=1)
-        return (z, ), torch.tensor([1.], device=x.device)
+        return (z, ), torch.tensor([0.], device=x.device) # jac
 
     def output_dims(self, input_dims):
         return input_dims
 
+
+class NormTransformation(fm.InvertibleModule):
+    def __init__(self, dims_in, dims_c=None, log_cond=False):
+        super().__init__(dims_in, dims_c)
+        self.log_cond = log_cond
+
+    def forward(self, x, c=None, rev=False, jac=True):
+        x, = x
+        c, = c
+        if self.log_cond:
+            c = torch.exp(c)
+        if rev:
+            z = x/c
+            jac = -torch.log(c)
+        else:
+            z = x*c
+            jac = torch.log(c)
+        return (z, ), torch.tensor([0.], device=x.device) # jac
+
+    def output_dims(self, input_dims):
+        return input_dims
+
+
 class CINN(nn.Module):
     """ Class to build, train and evaluate a cINN model """
 
-    def __init__(self, params, device, data):
+    def __init__(self, params, device, data, cond):
         """ Initializes model class with run parameters and the torch device
         instance. """
         super(CINN, self).__init__()
@@ -79,22 +102,22 @@ class CINN(nn.Module):
         self.num_dim = data.shape[1]
 
         self.verbose = params["verbose"]
-        self.parton_norm_m = None
+        self.norm_m = None
         self.bayesian = params.get("bayesian", False)
-        self.alpha = params.get("alpha", 1e-6)
+        self.alpha = params.get("alpha", 1e-9)
+        self.log_cond = params.get("log_cond", False)
+        self.use_norm = self.params.get("use_norm", False)
         self.pre_subnet = None
-        if self.bayesian:
-            self.bayesian_layers = []
-        self.losses = {"inn": []}
-        if self.bayesian:
-            self.losses.update({"kl": [], "total": []})
 
-        self.initialize_normalization(data)
+        self.initialize_normalization(data, cond)
         self.define_model_architecture(self.num_dim)
 
     def forward(self, x, c, rev=False, jac=True):
-        c_norm = torch.log(c)
-        if self.pre_subnet is not None:
+        if self.log_cond:
+            c_norm = torch.log(c)
+        else:
+            c_norm = c
+        if self.pre_subnet:
             c_norm = self.pre_subnet(c_norm)
         return self.model.forward(x, c_norm, rev=rev, jac=jac)
 
@@ -156,8 +179,10 @@ class CINN(nn.Module):
 
         return CouplingBlock, block_kwargs
 
-    def initialize_normalization(self, data):
+    def initialize_normalization(self, data, cond):
         """ Calculates the normalization transformation from the training data. """
+        if self.use_norm:
+            data /= cond
         data = torch.log(data + self.alpha)
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
@@ -174,6 +199,16 @@ class CINN(nn.Module):
             self.norm_b = torch.zeros(in_dim)
 
         nodes = [ff.InputNode(in_dim, name="inp")]
+        cond_node = ff.ConditionNode(1, name="cond")
+
+        if self.use_norm:
+                nodes.append(ff.Node(
+                [nodes[-1].out0],
+                NormTransformation,
+                {"log_cond": self.log_cond},
+                conditions = cond_node,
+                name = "norm"
+            ))
         nodes.append(ff.Node(
             [nodes[-1].out0],
             LogTransformation,
@@ -186,8 +221,6 @@ class CINN(nn.Module):
             { "M": self.norm_m, "b": self.norm_b },
             name = "inp_norm"
         ))
-
-        cond_node = ff.ConditionNode(1, name="cond")
 
         CouplingBlock, block_kwargs = self.get_coupling_block(self.params)
         for i in range(self.params.get("n_blocks", 10)):

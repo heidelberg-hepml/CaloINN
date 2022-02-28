@@ -1,5 +1,6 @@
 import sys
 import os
+import shutil
 
 import torch
 import yaml
@@ -26,7 +27,7 @@ class Trainer:
 
         self.num_dim = train_loader.data.shape[1]
 
-        model = CINN(params, device, self.train_loader.data)
+        model = CINN(params, device, self.train_loader.data, self.train_loader.cond)
         self.model = model.to(device)
         self.set_optimizer(steps_per_epoch=len(train_loader))
 
@@ -138,6 +139,7 @@ class Trainer:
         return os.path.join(res_dir, name)
     
     def generate(self, num_samples, batch_size = 10000):
+        self.model.eval()
         with torch.no_grad():
             energies = 0.99*torch.rand((num_samples,1)) + 0.01
             samples = torch.zeros((num_samples,1,self.num_dim))
@@ -162,6 +164,10 @@ def main():
     use_cuda = torch.cuda.is_available() and not params.get('no_cuda', False)
     device = 'cuda:0' if use_cuda else 'cpu'
     print(device)
+
+    os.makedirs(params['res_dir'], exist_ok=True)
+    shutil.copy(param_file, os.path.join(params['res_dir'], 'params.yaml'))
+
     trainer = Trainer(params, device)
     trainer.train()
     trainer.save()
