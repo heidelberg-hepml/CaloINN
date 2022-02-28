@@ -9,12 +9,14 @@ from tqdm.auto import tqdm
 import data
 from model import CINN
 import plotting
+from documenter import Documenter
 
 class Trainer:
-    def __init__(self, params, device):
+    def __init__(self, params, device, doc):
 
         self.params = params
         self.device = device
+        self.doc = doc
 
         train_loader, test_loader = data.get_loaders(
             params.get('data_path'),
@@ -35,12 +37,10 @@ class Trainer:
         self.losses_test = []
         self.learning_rates = []
 
-        os.makedirs(self.get_file(""), exist_ok=True)
-
     def train(self):
 
         for epoch in tqdm(range(1,self.params['n_epochs']+1), desc='Epoch',
-                         disable=not self.params.get('verbose', True)):
+                         disable=not self.params.get('verbose', True), file=self.doc.tee.stderr):
             self.epoch = epoch
             train_loss = 0
             test_loss = 0
@@ -72,8 +72,8 @@ class Trainer:
             sys.stdout.flush()
 
             self.losses_test.append(test_loss)
-            plotting.plot_loss(self.get_file('loss.png'), self.losses_train, self.losses_test)
-            plotting.plot_lr(self.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
+            plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train, self.losses_test)
+            plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
@@ -120,11 +120,11 @@ class Trainer:
                     "net": self.model.state_dict(),
                     "losses": self.losses_test,
                     "learning_rates": self.learning_rates,
-                    "epoch": self.epoch}, self.get_file(f"model{epoch}.pt"))
+                    "epoch": self.epoch}, self.doc.get_file(f"model{epoch}.pt"))
 
     def load(self, epoch=""):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
-        name = self.get_file(f"model{epoch}.pt")
+        name = self.doc.get_file(f"model{epoch}.pt")
         state_dicts = torch.load(name, map_location=self.device)
         self.model.load_state_dict(state_dicts["net"])
 
@@ -134,24 +134,20 @@ class Trainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
     
-    def get_file(self, name):
-        res_dir = self.params.get('res_dir', 'results')
-        return os.path.join(res_dir, name)
-    
     def generate(self, num_samples, batch_size = 10000):
         self.model.eval()
         with torch.no_grad():
             energies = 0.99*torch.rand((num_samples,1)) + 0.01
             samples = torch.zeros((num_samples,1,self.num_dim))
             for batch in tqdm(range((num_samples+batch_size-1)//batch_size), desc='Batch',
-                         disable=not self.params.get('verbose', True)):
+                         disable=not self.params.get('verbose', True), file=self.doc.tee.stderr):
                     start = batch_size*batch
                     stop = min(batch_size*(batch+1), num_samples)
                     energies_l = energies[start:stop].to(self.device)
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
-        data.save_data(self.get_file('samples.hdf5'), samples, energies)
+        data.save_data(self.doc.get_file('samples.hdf5'), samples, energies)
 
 
 def main():
@@ -165,13 +161,15 @@ def main():
     device = 'cuda:0' if use_cuda else 'cpu'
     print(device)
 
-    os.makedirs(params['res_dir'], exist_ok=True)
-    shutil.copy(param_file, os.path.join(params['res_dir'], 'params.yaml'))
+    doc = Documenter(params['run_name'])
+    shutil.copy(param_file, doc.get_file('params.yaml'))
 
-    trainer = Trainer(params, device)
+    trainer = Trainer(params, device, doc)
     trainer.train()
     trainer.save()
     trainer.generate(100000)
+
+    plotting.plot_all_hist(doc.basedir, params['data_path'])
 
 if __name__=='__main__':
     main()    

@@ -1,11 +1,10 @@
-run_name: example
+run_name: eplus
 verbose: False
 no_cuda: False
 
 # Data
 train_split: 0.8
 data_path: "../data/calo/eplus.hdf5"
-res_dir: "results"
 
 # Training
 lr: 1.e-4
