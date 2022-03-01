@@ -1,10 +1,8 @@
 import sys
-import os
 import shutil
 
 import torch
 import yaml
-from tqdm.auto import tqdm
 
 import data
 from model import CINN
@@ -22,7 +20,8 @@ class Trainer:
             params.get('data_path'),
             params.get('batch_size'),
             params.get('train_split', 0.8),
-            device
+            device,
+            params.get("width_noise", 1e-7)
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -39,8 +38,7 @@ class Trainer:
 
     def train(self):
 
-        for epoch in tqdm(range(1,self.params['n_epochs']+1), desc='Epoch',
-                         disable=not self.params.get('verbose', True), file=self.doc.tee.stderr):
+        for epoch in range(1,self.params['n_epochs']+1):
             self.epoch = epoch
             train_loss = 0
             test_loss = 0
@@ -64,11 +62,11 @@ class Trainer:
                     test_loss += loss.detach().cpu().numpy()*len(x)
                 test_loss /= len(self.test_loader.data)
 
-            tqdm.write('')
-            tqdm.write(f'=== epoch {epoch} ===')
-            tqdm.write(f'inn loss (train): {train_loss}')
-            tqdm.write(f'inn loss (test): {test_loss}')
-            tqdm.write(f'lr: {self.scheduler.get_last_lr()[0]}')
+            print('')
+            print(f'=== epoch {epoch} ===')
+            print(f'inn loss (train): {train_loss}')
+            print(f'inn loss (test): {test_loss}')
+            print(f'lr: {self.scheduler.get_last_lr()[0]}')
             sys.stdout.flush()
 
             self.losses_test.append(test_loss)
@@ -139,8 +137,7 @@ class Trainer:
         with torch.no_grad():
             energies = 0.99*torch.rand((num_samples,1)) + 0.01
             samples = torch.zeros((num_samples,1,self.num_dim))
-            for batch in tqdm(range((num_samples+batch_size-1)//batch_size), desc='Batch',
-                         disable=not self.params.get('verbose', True), file=self.doc.tee.stderr):
+            for batch in range((num_samples+batch_size-1)//batch_size):
                     start = batch_size*batch
                     stop = min(batch_size*(batch+1), num_samples)
                     energies_l = energies[start:stop].to(self.device)

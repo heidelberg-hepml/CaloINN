@@ -42,7 +42,7 @@ def save_data(data_file, samples, energies, threshold=0.01):
 
     save_file.close()
 
-def get_loaders(data_file, batch_size, ratio=0.8, device='cpu'):
+def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7):
     data, cond = load_data(data_file)
     data = torch.tensor(data, device=device)
     cond = torch.tensor(cond, device=device)
@@ -52,6 +52,6 @@ def get_loaders(data_file, batch_size, ratio=0.8, device='cpu'):
     data_test = data[index[split:]]
     cond_train = cond[index[:split]]
     cond_test = cond[index[split:]]
-    loader_train = MyDataLoader(data_train, cond_train, batch_size)
-    loader_test = MyDataLoader(data_test, cond_test, batch_size)
+    loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
+    loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
     return loader_train, loader_test
