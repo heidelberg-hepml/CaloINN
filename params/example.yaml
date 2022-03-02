@@ -7,24 +7,21 @@ data_path: "../data/calo/eplus.hdf5"
 width_noise: 1.e-7
 
 # Training
-lr: 1.e-4
-max_lr: 3.e-4
+lr: 1.e-5
+max_lr: 1.e-4
 batch_size: 512
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
 n_epochs: 50
-max_val_batches: 10
-checkpoint_save_interval: 30
-checkpoint_save_overwrite: True
 
 # Architecture
-n_blocks: 10
-internal_size: 256
-layers_per_block: 3
+n_blocks: 12
+internal_size: 512
+layers_per_block: 2
 coupling_type: cubic
 permute_soft: False
-num_bins: 10
+num_bins: 8
 dropout: 0.05
 
 # Preprocessing
