@@ -28,6 +28,7 @@ num_bins: 10
 dropout: 0.05
 
 # Preprocessing
+use_extra_dim: True
 use_norm: False
 log_cond: False
 alpha: 1.e-8

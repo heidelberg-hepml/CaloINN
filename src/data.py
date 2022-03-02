@@ -4,7 +4,7 @@ import torch
 
 from myDataLoader import MyDataLoader
 
-def load_data(data_file):
+def load_data(data_file, use_extra_dim=False):
     full_file = h5py.File(data_file, 'r')
     layer_0 = np.float32(full_file['layer_0'][:] / 1e5)
     layer_1 = np.float32(full_file['layer_1'][:] / 1e5)
@@ -18,10 +18,15 @@ def load_data(data_file):
     x = np.concatenate((layer0, layer1, layer2), 1)
     c = energy
 
+    if use_extra_dim:
+        x = add_extra_dim(x, c)
     return x, c
 
-def save_data(data_file, samples, energies, threshold=0.01):
+def save_data(data_file, samples, energies, threshold=0.01, use_extra_dim=False):
     assert len(energies) == len(samples)
+
+    if use_extra_dim:
+        samples = remove_extra_dim(samples, energies)
 
     data = 1e5*samples.clip(0., 1.)
     data[data < threshold] = 0.
@@ -42,8 +47,20 @@ def save_data(data_file, samples, energies, threshold=0.01):
 
     save_file.close()
 
-def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7):
-    data, cond = load_data(data_file)
+def add_extra_dim(data, energies):
+    s = np.sum(data, axis=1, keepdims=True)
+    factors = s/energies
+    data /= s
+    return np.concatenate((data, factors), axis=1)
+
+def remove_extra_dim(data, energies):
+    factors = data[:,[-1]]
+    data = data[:,:-1]
+    data /= np.sum(data, axis=1, keepdims=True)
+    return data*energies*factors
+
+def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7, use_extra_dim=False):
+    data, cond = load_data(data_file, use_extra_dim)
     data = torch.tensor(data, device=device)
     cond = torch.tensor(cond, device=device)
     index = torch.randperm(len(data), device=device)

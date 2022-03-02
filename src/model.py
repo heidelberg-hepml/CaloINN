@@ -105,7 +105,7 @@ class CINN(nn.Module):
         self.bayesian = params.get("bayesian", False)
         self.alpha = params.get("alpha", 1e-8)
         self.log_cond = params.get("log_cond", False)
-        self.use_norm = self.params.get("use_norm", False)
+        self.use_norm = self.params.get("use_norm", False) and not self.params.get("use_extra_dim", False)
         self.pre_subnet = None
 
         self.initialize_normalization(data, cond)

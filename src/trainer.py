@@ -21,7 +21,8 @@ class Trainer:
             params.get('batch_size'),
             params.get('train_split', 0.8),
             device,
-            params.get("width_noise", 1e-7)
+            params.get("width_noise", 1e-7),
+            params.get("use_extra_dim", False)
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -144,7 +145,7 @@ class Trainer:
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
-        data.save_data(self.doc.get_file('samples.hdf5'), samples, energies)
+        data.save_data(self.doc.get_file('samples.hdf5'), samples, energies, use_extra_dim=self.params.get("use_extra_dim", False))
 
 
 def main():
