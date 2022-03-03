@@ -158,7 +158,7 @@ def calc_brightest_voxel(data, layer=0, N=1):
     layer.sort(axis=1)
     return layer[:,-N]/layer.sum(axis=1)
 
-def calc_centroid(data, layer=0, dir='phi'):
+def get_bin_centers(layer, dir):
     if dir == 'phi':
         cells = (3, 12, 12)[layer]
     elif dir == 'eta':
@@ -166,7 +166,10 @@ def calc_centroid(data, layer=0, dir='phi'):
     else:
         raise ValueError(f"dir={dir} not in ['eta', 'phi']")
     bins = np.linspace(-240, 240, cells + 1)
-    bin_centers = (bins[1:] + bins[:-1]) / 2.
+    return (bins[1:] + bins[:-1]) / 2.
+
+def calc_centroid(data, layer=0, dir='phi'):
+    bin_centers = get_bin_centers(layer, dir)
 
     layer = data[f'layer_{layer}']
     energies = layer.sum(axis=(1, 2))
@@ -190,13 +193,37 @@ def calc_centroid_std(data, layer=0, dir='phi'):
 def calc_layer_diff(data, layer1=0, layer2=1, dir='phi'):
     mean_1, _ = calc_centroid(data, layer1, dir)
     mean_2, _ = calc_centroid(data, layer2, dir)
-    return mean_1 - mean_2
+    return mean_2 - mean_1
 
 def calc_sparsity(data, layer=0, threshold=1e-5):
     layer = data[f'layer_{layer}']
     return (layer > threshold).mean((1, 2))
 
-def plot_all_hist(results_dir, reference_file):
+def calc_spectrum(data, layer=0, threshold=1e-5):
+    data = data[f'layer_{layer}']
+    mask = data > threshold
+    data[~mask] = 0.
+    data /= np.sum(data, axis=(1,2), keepdims=True)
+    return data[mask]
+
+def calc_coro(data, layer=0, threshold=1e-5):
+    img = data[f'layer_{layer}']
+    mask = img > threshold
+    img[~mask] = 0.
+    img /= np.sum(img, axis=(1,2), keepdims=True)
+    xpixels = get_bin_centers(layer, 'eta')
+    ypixels = get_bin_centers(layer, 'phi')
+
+    coro = np.zeros_like(img)
+    for i in range(len(ypixels)):
+        for j in range(len(xpixels)):
+            x, y = np.meshgrid(xpixels-xpixels[j], ypixels-ypixels[i])
+            R = np.sqrt(x*x+y*y)
+            mask_l = mask[:,i,j]
+            coro[mask_l,:,:] += img[mask_l,:,:]*img[mask_l,i,j][:,None,None]*R[None,:,:]**0.2
+    return np.sum(coro, axis=(1,2))
+
+def plot_all_hist(results_dir, reference_file, include_coro=False):
     data_file = os.path.join(results_dir, 'samples.hdf5')
     plot_dir = os.path.join(results_dir, 'plots')
     os.makedirs(plot_dir, exist_ok=True)
@@ -209,14 +236,14 @@ def plot_all_hist(results_dir, reference_file):
             {'axis_label': r'\(\left<\eta_1\right>-\left<\eta_0\right>\)'}),
         (calc_layer_diff, 'eta_diff_0_2.pdf', {'layer2': 2, 'dir': 'eta'},
             {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_0\right>\)'}),
-        (calc_layer_diff, 'eta_diff_1_2.pdf', {'layer2': 1, 'layer2': 2, 'dir': 'eta'},
+        (calc_layer_diff, 'eta_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'eta'},
             {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_1\right>\)'}),
 
         (calc_layer_diff, 'phi_diff_0_1.pdf', {'layer2': 1, 'dir': 'phi'},
             {'axis_label': r'\(\left<\phi_1\right>-\left<\phi_0\right>\)'}),
         (calc_layer_diff, 'phi_diff_0_2.pdf', {'layer2': 2, 'dir': 'phi'},
             {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_0\right>\)'}),
-        (calc_layer_diff, 'phi_diff_1_2.pdf', {'layer2': 1, 'layer2': 2, 'dir': 'phi'},
+        (calc_layer_diff, 'phi_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'phi'},
             {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_1\right>\)'})
     ]
 
@@ -244,6 +271,14 @@ def plot_all_hist(results_dir, reference_file):
             plots.append( (calc_brightest_voxel, f'{N}_brightest_voxel_layer_{layer}.pdf', {'layer': layer, 'N': N},
                 {'axis_label': f'{N}. brightest voxel in layer {layer}', 'yscale': 'linear'}) )
 
+        plots.append( (calc_spectrum, f'spectrum_{layer}.pdf', {'layer': layer},
+            {'axis_label': f'energy fraction', 'xscale': 'log', 'yscale': 'log'}) )
+
+        if include_coro:
+            plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
+                {'axis_label': f'\\(C_{{0.2}}\\) layer {layer}', 'xscale': 'linear', 'yscale': 'log'}) )
+
+
     data = load_data(data_file)
     reference = load_data(reference_file)
 
@@ -259,9 +294,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results_dir', help='Where to find the results and save the plots')
     parser.add_argument('--reference_file', help='Where to find the reference data')
+    parser.add_argument('--include_coro', action='store_true', help='Also plot the pixel to pixel correlation (Computationally expensive)')
     args = parser.parse_args()
 
-    plot_all_hist(args.results_dir, args.reference_file)
+    plot_all_hist(args.results_dir, args.reference_file, args.include_coro)
 
 if __name__=='__main__':
     main()
