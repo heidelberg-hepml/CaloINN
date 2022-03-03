@@ -26,7 +26,8 @@ class Trainer:
             params.get("width_noise", 1e-7),
             params.get("use_extra_dim", False),
             params.get("use_extra_dims", False),
-            params.get("mask", 0)
+            params.get("mask", 0),
+            params.get("calo_layer", None)
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -96,6 +97,7 @@ class Trainer:
                     self.doc.basedir,
                     self.params['data_path'],
                     mask=self.params.get("mask", 0),
+                    calo_layer=self.params.get("calo_layer", None),
                     epoch=epoch)
 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
@@ -175,7 +177,8 @@ class Trainer:
             samples,
             energies,
             use_extra_dim=self.params.get("use_extra_dim", False),
-            use_extra_dims=self.params.get("use_extra_dims", False))
+            use_extra_dims=self.params.get("use_extra_dims", False),
+            layer=self.params.get("calo_layer", None))
 
     def latent_samples(self, epoch=None):
         self.model.eval()

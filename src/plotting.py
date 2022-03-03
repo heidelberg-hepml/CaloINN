@@ -117,7 +117,7 @@ def plot_lr(
 
     plt.close()
 
-def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, epoch=None):
+def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_layer=None, epoch=None):
     data_file = os.path.join(results_dir, 'samples.hdf5')
     if epoch:
         plot_dir = os.path.join(results_dir, 'plots', f'epoch_{epoch:03d}')
@@ -125,31 +125,35 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, epoch
         plot_dir = os.path.join(results_dir, 'plots/final')
     os.makedirs(plot_dir, exist_ok=True)
 
-    plots = [
-        (calc_e_ratio, 'e_ratio.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)'}),
-        (calc_e_ratio, 'e_ratio_log.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)', 'xscale': 'log'}),
-        (calc_e_detector, 'e_detector.pdf', {}, {'axis_label': r'\(E_{tot}\) (GeV)'}),
+    if calo_layer is None:
+        plots = [
+            (calc_e_ratio, 'e_ratio.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)'}),
+            (calc_e_ratio, 'e_ratio_log.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)', 'xscale': 'log'}),
+            (calc_e_detector, 'e_detector.pdf', {}, {'axis_label': r'\(E_{tot}\) (GeV)'}),
 
-        (calc_layer_diff, 'eta_diff_0_1.pdf', {'layer2': 1, 'dir': 'eta'},
-            {'axis_label': r'\(\left<\eta_1\right>-\left<\eta_0\right>\)'}),
-        (calc_layer_diff, 'eta_diff_0_2.pdf', {'layer2': 2, 'dir': 'eta'},
-            {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_0\right>\)'}),
-        (calc_layer_diff, 'eta_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'eta'},
-            {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_1\right>\)'}),
+            (calc_layer_diff, 'eta_diff_0_1.pdf', {'layer2': 1, 'dir': 'eta'},
+                {'axis_label': r'\(\left<\eta_1\right>-\left<\eta_0\right>\)'}),
+            (calc_layer_diff, 'eta_diff_0_2.pdf', {'layer2': 2, 'dir': 'eta'},
+                {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_0\right>\)'}),
+            (calc_layer_diff, 'eta_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'eta'},
+                {'axis_label': r'\(\left<\eta_2\right>-\left<\eta_1\right>\)'}),
 
-        (calc_layer_diff, 'phi_diff_0_1.pdf', {'layer2': 1, 'dir': 'phi'},
-            {'axis_label': r'\(\left<\phi_1\right>-\left<\phi_0\right>\)'}),
-        (calc_layer_diff, 'phi_diff_0_2.pdf', {'layer2': 2, 'dir': 'phi'},
-            {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_0\right>\)'}),
-        (calc_layer_diff, 'phi_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'phi'},
-            {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_1\right>\)'})
-    ]
+            (calc_layer_diff, 'phi_diff_0_1.pdf', {'layer2': 1, 'dir': 'phi'},
+                {'axis_label': r'\(\left<\phi_1\right>-\left<\phi_0\right>\)'}),
+            (calc_layer_diff, 'phi_diff_0_2.pdf', {'layer2': 2, 'dir': 'phi'},
+                {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_0\right>\)'}),
+            (calc_layer_diff, 'phi_diff_1_2.pdf', {'layer1': 1, 'layer2': 2, 'dir': 'phi'},
+                {'axis_label': r'\(\left<\phi_2\right>-\left<\phi_1\right>\)'})
+        ]
+    else:
+        plots = []
 
-    for layer in [0,1,2]:
-        plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}.pdf', {'layer': layer},
-            {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
-        plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}_log.pdf', {'layer': layer},
-            {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)', 'xscale': 'log', 'yscale': 'log', 'vmin': (None, None, 1e-5)[layer]}) )
+    for layer in ([0,1,2] if calo_layer is None else [calo_layer]):
+        if calo_layer is None:
+            plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}.pdf', {'layer': layer},
+                {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
+            plots.append( (calc_e_layer_normd, f'e_normd_layer_{layer}_log.pdf', {'layer': layer},
+                {'axis_label': f'\\(E_{layer}/E_{{tot}}\\)', 'xscale': 'log', 'yscale': 'log', 'vmin': (None, None, 1e-5)[layer]}) )
 
         plots.append( (calc_e_layer, f'e_layer_{layer}.pdf', {'layer': layer},
             {'axis_label': f'\\(E_{layer}\\) (GeV)'}) )
@@ -233,9 +237,10 @@ def main():
     parser.add_argument('--reference_file', help='Where to find the reference data')
     parser.add_argument('--include_coro', action='store_true', help='Also plot the pixel to pixel correlation (Computationally expensive)')
     parser.add_argument('--mask', default=0, type=int)
+    parser.add_argument('--layer', default=None, type=int, help='Which layer to plot')
     args = parser.parse_args()
 
-    plot_all_hist(args.results_dir, args.reference_file, args.include_coro, args.mask)
+    plot_all_hist(args.results_dir, args.reference_file, args.include_coro, args.mask, args.layer)
 
 if __name__=='__main__':
     main()
