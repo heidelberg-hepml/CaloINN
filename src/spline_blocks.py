@@ -109,7 +109,7 @@ class CubicSplineBlock(fm.InvertibleModule):
             masked_outputs[outside_interval_mask] = inputs[outside_interval_mask]
             masked_logabsdet[outside_interval_mask] = 0
         else:
-            raise RuntimeError('{} tails are not implemented.'.format(tails))
+            raise RuntimeError('{} tails are not implemented.'.format(self.tails))
 
         inputs = inputs[inside_interval_mask]
         theta = theta[inside_interval_mask, :]
@@ -455,7 +455,7 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
             masked_logabsdet[outside_interval_mask] = 0
 
         else:
-            raise RuntimeError('{} tails are not implemented.'.format(tails))
+            raise RuntimeError('{} tails are not implemented.'.format(self.tails))
         inputs = inputs[inside_interval_mask]
         theta = theta[inside_interval_mask, :]
         bound = torch.min(self.bounds)
