@@ -71,22 +71,47 @@ def plot_hist2d(
 
     plt.close()
 
-def plot_all_hist2d(data_file, plot_dir):
+def apply_mask(data, mask):
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+
+    return {
+        'layer_0': layer_0[mask],
+        'layer_1': layer_1[mask],
+        'layer_2': layer_2[mask],
+        'energy': energy[mask]
+    }
+
+def plot_all_hist2d(data_file, plot_dir, eplus=False, mask=0):
     os.makedirs(plot_dir, exist_ok=True)
 
+    e_ratio_e_part_args = {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': r'\(E_{tot}/E_{part}\)'}
+    if eplus:
+        e_ratio_e_part_args.update({'ymin': 0.985, 'ymax': 1.001})
+
     plots = [
-        ('e_ratio_e_part.pdf', calc_e_parton, {}, calc_e_ratio, {},
-            {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': r'\(E_{tot}/E_{part}\)'}) #, 'ymin': 0.985, 'ymax': 1.001})
+        ('e_ratio_e_part.pdf', calc_e_parton, {}, calc_e_ratio, {}, e_ratio_e_part_args)
     ]
 
     for layer in [0,1,2]:
         plots.append( (f'sparsity_{layer}_e_part.pdf', calc_e_parton, {}, calc_sparsity, {'layer': layer},
             {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': f'sparsity layer {layer}', 'nbins': 46, 'ymin': 0., 'ymax': 1.}) )
-
+        plots.append( (f'e_layer_{layer}_e_part.pdf', calc_e_parton, {}, calc_e_layer_normd, {'layer': layer},
+            {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
 
     data = load_data(data_file)
 
+    if mask==1:
+        data = apply_mask(data, calc_sparsity(data, layer=1) < 0.25)
+    elif mask==2:
+        data = apply_mask(data, calc_sparsity(data, layer=1) >= 0.25)
+    if mask:
+        print(len(data['energy']))
+
     for name, function1, args1, function2, args2, args_plot in plots:
+        print(name)
         plot_hist2d(
             file_name=os.path.join(plot_dir, name),
             data_x=function1(data, **args1),
@@ -98,9 +123,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--file', help='Where to find the data')
     parser.add_argument('--plot_dir', help='Where to save the plots')
+    parser.add_argument('--mask', default=0, type=int)
     args = parser.parse_args()
 
-    plot_all_hist2d(args.file, args.plot_dir)
+    plot_all_hist2d(args.file, args.plot_dir, 'eplus' in args.file, args.mask)
 
 if __name__=='__main__':
     main()
