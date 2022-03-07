@@ -18,6 +18,19 @@ def load_data(data_file):
 
     return data
 
+def apply_mask(data, mask):
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+
+    return {
+        'layer_0': layer_0[mask],
+        'layer_1': layer_1[mask],
+        'layer_2': layer_2[mask],
+        'energy': energy[mask]
+    }
+
 def calc_e_layer(data, layer=0):
     return np.sum(data[f'layer_{layer}'],axis=(1,2))
 

@@ -4,7 +4,7 @@ import torch
 
 from myDataLoader import MyDataLoader
 
-def load_data(data_file, use_extra_dim=False):
+def load_data(data_file, use_extra_dim=False,threshold=1e-7, mask=0):
     full_file = h5py.File(data_file, 'r')
     layer_0 = np.float32(full_file['layer_0'][:] / 1e5)
     layer_1 = np.float32(full_file['layer_1'][:] / 1e5)
@@ -15,8 +15,16 @@ def load_data(data_file, use_extra_dim=False):
     layer0 = layer_0.reshape(layer_0.shape[0], -1)
     layer1 = layer_1.reshape(layer_1.shape[0], -1)
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
-    x = np.concatenate((layer0, layer1, layer2), 1)
-    c = energy
+
+    if mask==1:
+        binary_mask = (layer1 > threshold).mean(1) < 0.25
+    elif mask==2:
+        binary_mask = (layer1 > threshold).mean(1) >= 0.25
+    else:
+        binary_mask = np.full(len(energy), True)
+
+    x = np.concatenate((layer0, layer1, layer2), 1)[binary_mask]
+    c = energy[binary_mask]
 
     if use_extra_dim:
         x = add_extra_dim(x, c)
@@ -59,8 +67,8 @@ def remove_extra_dim(data, energies):
     data /= np.sum(data, axis=1, keepdims=True)
     return data*energies*factors
 
-def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7, use_extra_dim=False):
-    data, cond = load_data(data_file, use_extra_dim)
+def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7, use_extra_dim=False, mask=0):
+    data, cond = load_data(data_file, use_extra_dim, mask=mask)
     data = torch.tensor(data, device=device)
     cond = torch.tensor(cond, device=device)
     index = torch.randperm(len(data), device=device)

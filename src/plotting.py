@@ -29,7 +29,7 @@ tickfont.set_size(22)
 def plot_hist(
         file_name,
         data,
-        reference=None,
+        reference,
         axis_label=None,
         xscale='linear',
         yscale='log',
@@ -55,8 +55,7 @@ def plot_hist(
     ax.hist(data, bins=bins, histtype='step', linewidth=2,
         alpha=1, color='blue', density='True', label='CaloINN')
 
-    if reference is not None:
-        ax.hist(reference, bins=bins, histtype='stepfilled',
+    ax.hist(reference, bins=bins, histtype='stepfilled',
             alpha=0.2, color='blue', density='True', label='CaloINN')
 
     ax.set_yscale(yscale)
@@ -118,7 +117,7 @@ def plot_lr(
 
     plt.close()
 
-def plot_all_hist(results_dir, reference_file, include_coro=False):
+def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
     data_file = os.path.join(results_dir, 'samples.hdf5')
     plot_dir = os.path.join(results_dir, 'plots')
     os.makedirs(plot_dir, exist_ok=True)
@@ -173,9 +172,17 @@ def plot_all_hist(results_dir, reference_file, include_coro=False):
             plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
                 {'axis_label': f'\\(C_{{0.2}}\\) layer {layer}', 'xscale': 'linear', 'yscale': 'log'}) )
 
-
     data = load_data(data_file)
     reference = load_data(reference_file)
+
+    if mask==1:
+        data = apply_mask(data, calc_sparsity(data, layer=1) < 0.25)
+        reference = apply_mask(data, calc_sparsity(reference, layer=1) < 0.25)
+    elif mask==2:
+        data = apply_mask(data, calc_sparsity(data, layer=1) >= 0.25)
+        reference = apply_mask(data, calc_sparsity(reference, layer=1) < 0.25)
+    if mask:
+        print(len(data['energy']))
 
     for function, name, args1, args2 in plots:
         plot_hist(
@@ -190,9 +197,10 @@ def main():
     parser.add_argument('--results_dir', help='Where to find the results and save the plots')
     parser.add_argument('--reference_file', help='Where to find the reference data')
     parser.add_argument('--include_coro', action='store_true', help='Also plot the pixel to pixel correlation (Computationally expensive)')
+    parser.add_argument('--mask', default=0, type=int)
     args = parser.parse_args()
 
-    plot_all_hist(args.results_dir, args.reference_file, args.include_coro)
+    plot_all_hist(args.results_dir, args.reference_file, args.include_coro, args.mask)
 
 if __name__=='__main__':
     main()

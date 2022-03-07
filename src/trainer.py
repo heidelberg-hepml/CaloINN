@@ -22,7 +22,8 @@ class Trainer:
             params.get('train_split', 0.8),
             device,
             params.get("width_noise", 1e-7),
-            params.get("use_extra_dim", False)
+            params.get("use_extra_dim", False),
+            params.get("mask", 0)
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -167,7 +168,7 @@ def main():
     trainer.save()
     trainer.generate(100000)
 
-    plotting.plot_all_hist(doc.basedir, params['data_path'])
+    plotting.plot_all_hist(doc.basedir, params['data_path'], mask=params.get("mask", 0))
 
 if __name__=='__main__':
     main()    

@@ -71,19 +71,6 @@ def plot_hist2d(
 
     plt.close()
 
-def apply_mask(data, mask):
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-
-    return {
-        'layer_0': layer_0[mask],
-        'layer_1': layer_1[mask],
-        'layer_2': layer_2[mask],
-        'energy': energy[mask]
-    }
-
 def plot_all_hist2d(data_file, plot_dir, eplus=False, mask=0):
     os.makedirs(plot_dir, exist_ok=True)
 
