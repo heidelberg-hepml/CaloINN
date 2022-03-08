@@ -177,10 +177,10 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
 
     if mask==1:
         data = apply_mask(data, calc_sparsity(data, layer=1) < 0.25)
-        reference = apply_mask(data, calc_sparsity(reference, layer=1) < 0.25)
+        reference = apply_mask(reference, calc_sparsity(reference, layer=1) < 0.25)
     elif mask==2:
         data = apply_mask(data, calc_sparsity(data, layer=1) >= 0.25)
-        reference = apply_mask(data, calc_sparsity(reference, layer=1) < 0.25)
+        reference = apply_mask(reference, calc_sparsity(reference, layer=1) >= 0.25)
     if mask:
         print(len(data['energy']))
 
