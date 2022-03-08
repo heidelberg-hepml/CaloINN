@@ -68,6 +68,35 @@ class LogTransformation(fm.InvertibleModule):
         return input_dims
 
 
+class LogitTransformation(fm.InvertibleModule):
+    def __init__(self, dims_in, dims_c=None, alpha = 0.):
+        super().__init__(dims_in, dims_c)
+        self.alpha = alpha
+
+    def forward(self, x, c=None, rev=False, jac=True):
+        x, = x
+        if not rev:
+            x = x*(1-2*self.alpha) + self.alpha
+            z = torch.logit(x)
+        else:
+            if not self.training:
+                x[:,:-1] = self.norm_logit(x[:,:-1])
+            z = torch.sigmoid(x)
+            z = (z - self.alpha)/(1-2*self.alpha)
+        return (z, ), torch.tensor([0.], device=x.device) # jac
+
+    def norm_logit(self, t: torch.Tensor):
+         f = lambda x: torch.sum(1/(1+torch.exp(-t-x)), dim=1) - 1 - self.alpha*(t.shape[1] - 2)
+         f_ = lambda x: torch.sum(torch.exp(-t-x)/(1+torch.exp(-t-x))**2,dim=1)
+         c = torch.zeros((t.shape[0], 1), device=t.device)
+         for i in range(8):
+             c = c - (f(c)/f_(c))[...,None]
+         return t+c
+
+    def output_dims(self, input_dims):
+        return input_dims
+
+
 class NormTransformation(fm.InvertibleModule):
     def __init__(self, dims_in, dims_c=None, log_cond=False):
         super().__init__(dims_in, dims_c)
