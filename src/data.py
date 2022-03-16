@@ -17,9 +17,9 @@ def load_data(data_file, use_extra_dim=False,threshold=1e-7, mask=0):
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
 
     if mask==1:
-        binary_mask = (layer1 > threshold).mean(1) < 0.25
+        binary_mask = (layer1 > threshold).mean(1) < 0.1+0.2*np.log10(100*energy[:,0])
     elif mask==2:
-        binary_mask = (layer1 > threshold).mean(1) >= 0.25
+        binary_mask = (layer1 > threshold).mean(1) >= 0.1+0.2*np.log10(100*energy[:,0])
     else:
         binary_mask = np.full(len(energy), True)
 

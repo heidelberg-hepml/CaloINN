@@ -176,19 +176,19 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
     reference = load_data(reference_file)
 
     if mask==1:
-        data = apply_mask(data, calc_sparsity(data, layer=1) < 0.25)
-        reference = apply_mask(reference, calc_sparsity(reference, layer=1) < 0.25)
+        reference = apply_mask(reference, calc_sparsity(reference, layer=1) < 0.1+0.2*np.log10(calc_e_parton(reference)))
     elif mask==2:
-        data = apply_mask(data, calc_sparsity(data, layer=1) >= 0.25)
-        reference = apply_mask(reference, calc_sparsity(reference, layer=1) >= 0.25)
+        reference = apply_mask(reference, calc_sparsity(reference, layer=1) >= 0.1+0.2*np.log10(calc_e_parton(reference)))
     if mask:
-        print(len(data['energy']))
+        print(len(reference['energy']))
 
     for function, name, args1, args2 in plots:
+        data_coppy = {k: np.copy(v) for k, v in data.items()}
+        reference_coppy = {k: np.copy(v) for k, v in reference.items()}
         plot_hist(
             file_name=os.path.join(plot_dir, name),
-            data=function(data, **args1),
-            reference=function(reference, **args1),
+            data=function(data_coppy, **args1),
+            reference=function(reference_coppy, **args1),
             **args2
         )
 
