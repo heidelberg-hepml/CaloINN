@@ -1,5 +1,6 @@
 import sys
 import shutil
+import argparse
 
 import torch
 import yaml
@@ -133,7 +134,7 @@ class Trainer:
         self.epoch = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
-    
+
     def generate(self, num_samples, batch_size = 10000):
         self.model.eval()
         with torch.no_grad():
@@ -146,22 +147,25 @@ class Trainer:
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
+        samples -= self.params.get("width_noise", 1e-7)
         data.save_data(self.doc.get_file('samples.hdf5'), samples, energies, use_extra_dim=self.params.get("use_extra_dim", False))
 
 
 def main():
-    if len(sys.argv)>=2:
-        param_file = sys.argv[1]
-    else:
-        param_file = 'params/example.yaml'
-    with open(param_file) as f:
+    parser = argparse.ArgumentParser(description='train network')
+    parser.add_argument('param_file', help='where to find the parameters')
+    parser.add_argument('-c', '--use_cuda', action='store_true', default=False,
+        help='whether cuda should be used')
+    args = parser.parse_args()
+
+    with open(args.param_file) as f:
         params = yaml.load(f, Loader=yaml.FullLoader)
-    use_cuda = torch.cuda.is_available() and not params.get('no_cuda', False)
+    use_cuda = torch.cuda.is_available() and args.use_cuda
     device = 'cuda:0' if use_cuda else 'cpu'
-    print(device)
 
     doc = Documenter(params['run_name'])
-    shutil.copy(param_file, doc.get_file('params.yaml'))
+    shutil.copy(args.param_file, doc.get_file('params.yaml'))
+    print(device)
 
     trainer = Trainer(params, device, doc)
     trainer.train()
@@ -171,4 +175,4 @@ def main():
     plotting.plot_all_hist(doc.basedir, params['data_path'], mask=params.get("mask", 0))
 
 if __name__=='__main__':
-    main()    
+    main()

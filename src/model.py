@@ -180,6 +180,7 @@ class CINN(nn.Module):
 
     def initialize_normalization(self, data, cond):
         """ Calculates the normalization transformation from the training data. """
+        data = torch.clone(data)
         if self.use_norm:
             data /= cond
         data = torch.log(data + self.alpha)
@@ -187,6 +188,11 @@ class CINN(nn.Module):
         std = torch.std(data, dim=0)
         self.norm_m = torch.diag(1 / std)
         self.norm_b = - mean/std
+
+        data -= mean
+        data /= std
+
+        print('num samples out of bounds:', torch.count_nonzero(torch.max(torch.abs(data), dim=1)[0] > self.params.get("bounds_init", 10)))
 
     def define_model_architecture(self, in_dim):
         """ Create a ReversibleGraphNet model based on the settings, using
