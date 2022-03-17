@@ -100,10 +100,7 @@ def calc_sparsity(data, layer=0, threshold=1e-5):
 
 def calc_spectrum(data, layer=0, threshold=1e-5):
     data = data[f'layer_{layer}']
-    mask = data > threshold
-    data[~mask] = 0.
-    data /= np.sum(data, axis=(1,2), keepdims=True)
-    return data[mask]
+    return data[data > threshold]
 
 def calc_coro(data, layer=0, threshold=1e-5):
     img = data[f'layer_{layer}']

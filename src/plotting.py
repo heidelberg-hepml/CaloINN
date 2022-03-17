@@ -124,6 +124,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
 
     plots = [
         (calc_e_ratio, 'e_ratio.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)'}),
+        (calc_e_ratio, 'e_ratio_log.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)', 'xscale': 'log'}),
         (calc_e_detector, 'e_detector.pdf', {}, {'axis_label': r'\(E_{tot}\) (GeV)'}),
 
         (calc_layer_diff, 'eta_diff_0_1.pdf', {'layer2': 1, 'dir': 'eta'},
@@ -166,7 +167,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
                 {'axis_label': f'{N}. brightest voxel in layer {layer}', 'yscale': 'linear'}) )
 
         plots.append( (calc_spectrum, f'spectrum_{layer}.pdf', {'layer': layer},
-            {'axis_label': f'energy fraction', 'xscale': 'log', 'yscale': 'log'}) )
+            {'axis_label': f'voxel energy (GeV)', 'xscale': 'log', 'yscale': 'log'}) )
 
         if include_coro:
             plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
