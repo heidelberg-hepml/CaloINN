@@ -117,9 +117,12 @@ def plot_lr(
 
     plt.close()
 
-def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0):
+def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, epoch=None):
     data_file = os.path.join(results_dir, 'samples.hdf5')
-    plot_dir = os.path.join(results_dir, 'plots')
+    if epoch:
+        plot_dir = os.path.join(results_dir, 'plots', f'epoch_{epoch:03d}')
+    else:
+        plot_dir = os.path.join(results_dir, 'plots')
     os.makedirs(plot_dir, exist_ok=True)
 
     plots = [

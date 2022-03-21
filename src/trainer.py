@@ -1,6 +1,7 @@
 import sys
 import shutil
 import argparse
+import os
 
 import torch
 import yaml
@@ -75,6 +76,19 @@ class Trainer:
             self.losses_test.append(test_loss)
             plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train, self.losses_test)
             plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
+
+            if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
+                self.save()
+                if not epoch == self.params['n_epochs']:
+                    self.generate(10000)
+                else:
+                    self.generate(100000)
+
+                plotting.plot_all_hist(
+                    self.doc.basedir,
+                    self.params['data_path'],
+                    mask=self.params.get("mask", 0),
+                    epoch=epoch)
 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
@@ -165,14 +179,11 @@ def main():
 
     doc = Documenter(params['run_name'])
     shutil.copy(args.param_file, doc.get_file('params.yaml'))
-    print(device)
+    print('device: ', device)
+    print('commit: ', os.popen(r'git rev-parse --short HEAD').read(), end='')
 
     trainer = Trainer(params, device, doc)
     trainer.train()
-    trainer.save()
-    trainer.generate(100000)
-
-    plotting.plot_all_hist(doc.basedir, params['data_path'], mask=params.get("mask", 0))
 
 if __name__=='__main__':
     main()

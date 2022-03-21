@@ -192,7 +192,7 @@ class CINN(nn.Module):
         data -= mean
         data /= std
 
-        print('num samples out of bounds:', torch.count_nonzero(torch.max(torch.abs(data), dim=1)[0] > self.params.get("bounds_init", 10)))
+        print('num samples out of bounds:', torch.count_nonzero(torch.max(torch.abs(data), dim=1)[0] > self.params.get("bounds_init", 10)).item())
 
     def define_model_architecture(self, in_dim):
         """ Create a ReversibleGraphNet model based on the settings, using
@@ -246,7 +246,7 @@ class CINN(nn.Module):
         self.params_trainable = list(filter(
                 lambda p: p.requires_grad, self.model.parameters()))
         n_trainable = sum(p.numel() for p in self.params_trainable)
-        print(f"  Number of parameters: {n_trainable}", flush=True)
+        print(f"number of parameters: {n_trainable}", flush=True)
 
     def set_bayesian_std_grad(self, requires_grad):
         for layer in self.bayesian_layers:
