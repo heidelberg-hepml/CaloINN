@@ -81,7 +81,7 @@ def plot_loss(
     fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
 
     c = len(loss_test)/len(loss_train)
-    ax.plot(np.arange(c,len(loss_test)+c,c), loss_train, color='blue', label='train loss')
+    ax.plot(c*np.arange(1,len(loss_train)+1), loss_train, color='blue', label='train loss')
     ax.plot(np.arange(1,len(loss_test)+1), loss_test, color='red', label='test loss')
     ax.legend(loc='upper right', prop=labelfont)
 
@@ -195,6 +195,37 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, epoch
             reference=function(reference_coppy, **args1),
             **args2
         )
+
+def plot_latent(samples, results_dir, epoch=None):
+    if epoch is not None:
+        plot_dir = os.path.join(results_dir, 'latent', f'epoch_{epoch:03d}')
+    else:
+        plot_dir = os.path.join(results_dir, 'latent')
+    os.makedirs(plot_dir, exist_ok=True)
+    for idx in range(8):
+        min_v = -3
+        max_v = 3
+        bins = np.linspace(min_v, max_v, 51)
+
+        fig,axs = plt.subplots(1,1,figsize=(6,4))
+
+        axs.hist(samples[:,idx], bins, color='red', histtype='step', density=True)
+
+        axs.set_xlim(min_v, max_v)
+
+        z_ = np.linspace(min_v, max_v, 501)
+        p = 1/np.sqrt(2*np.pi)*np.exp(-z_**2/2)
+        axs.plot(z_, p, color='black')
+
+        plt.xticks(fontproperties=tickfont)
+        plt.yticks(fontproperties=tickfont)
+
+        axs.set_xlabel(f'\\(z_{{{idx+1}}}\\)', fontproperties=axislabelfont)
+        axs.set_ylabel('normalized distribution', fontproperties=axislabelfont)
+
+        fig.tight_layout()
+        fig.savefig(os.path.join(plot_dir, f'latent_{idx:03d}.pdf'), bbox_inches='tight')
+        plt.close()
 
 def main():
     parser = argparse.ArgumentParser()

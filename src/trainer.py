@@ -42,6 +42,8 @@ class Trainer:
 
     def train(self):
 
+        self.latent_samples(0)
+
         for epoch in range(1,self.params['n_epochs']+1):
             self.epoch = epoch
             train_loss = 0
@@ -83,6 +85,8 @@ class Trainer:
                     self.generate(10000)
                 else:
                     self.generate(100000)
+
+                self.latent_samples(epoch)
 
                 plotting.plot_all_hist(
                     self.doc.basedir,
@@ -163,6 +167,18 @@ class Trainer:
             energies = energies.cpu().numpy()
         samples -= self.params.get("width_noise", 1e-7)
         data.save_data(self.doc.get_file('samples.hdf5'), samples, energies, use_extra_dim=self.params.get("use_extra_dim", False))
+
+    def latent_samples(self, epoch=None):
+        self.model.eval()
+        with torch.no_grad():
+            samples = torch.zeros(self.train_loader.data.shape)
+            stop = 0
+            for x, c in self.train_loader:
+                start = stop
+                stop += len(x)
+                samples[start:stop] = self.model(x,c)[0].cpu()
+            samples = samples.numpy()
+        plotting.plot_latent(samples, self.doc.basedir, epoch)
 
 
 def main():
