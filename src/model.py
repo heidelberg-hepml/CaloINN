@@ -6,6 +6,7 @@ import FrEIA.framework as ff
 import FrEIA.modules as fm
 
 from spline_blocks import CubicSplineBlock, RationalQuadraticSplineBlock
+from myBlocks.made import MaskedPiecewiseCubicAutoregressiveTransform as MADE
 from vblinear import VBLinear
 
 class Subnet(nn.Module):
@@ -172,6 +173,16 @@ class CINN(nn.Module):
                             "subnet_constructor": constructor_fct,
                             "bounds_init":  params.get("bounds_init", 10),
                             "permute_soft" : permute_soft
+                           }
+        elif coupling_type == "MADE":
+            CouplingBlock = MADE
+            block_kwargs = {
+                            "num_bins": params.get("num_bins", 10),
+                            "bounds_init":  params.get("bounds_init", 10),
+                            "permute_soft" : permute_soft,
+                            "hidden_features": params.get("internal_size"),
+                            "num_blocks": params.get("layers_per_block", 3)-2,
+                            "dropout": params.get("dropout", 0.)
                            }
         else:
             raise ValueError(f"Unknown Coupling block type {coupling_type}")
