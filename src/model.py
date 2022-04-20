@@ -5,8 +5,7 @@ import torch.nn as nn
 import FrEIA.framework as ff
 import FrEIA.modules as fm
 
-from spline_blocks import CubicSplineBlock, RationalQuadraticSplineBlock
-from myBlocks.made import MaskedPiecewiseCubicAutoregressiveTransform as MADE
+from myBlocks import *
 from vblinear import VBLinear
 
 class Subnet(nn.Module):
