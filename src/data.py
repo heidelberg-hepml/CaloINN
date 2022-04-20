@@ -4,7 +4,7 @@ import torch
 
 from myDataLoader import MyDataLoader
 
-def load_data(data_file, use_extra_dim=False,threshold=1e-7, mask=0):
+def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=1e-7, mask=0):
     full_file = h5py.File(data_file, 'r')
     layer_0 = np.float32(full_file['layer_0'][:] / 1e5)
     layer_1 = np.float32(full_file['layer_1'][:] / 1e5)
@@ -23,17 +23,26 @@ def load_data(data_file, use_extra_dim=False,threshold=1e-7, mask=0):
     else:
         binary_mask = np.full(len(energy), True)
 
-    x = np.concatenate((layer0, layer1, layer2), 1)[binary_mask]
+    x = np.concatenate((layer0, layer1, layer2), 1)
+    if use_extra_dims:
+        binary_mask &= np.sum(x, axis=1) < energy[:,0]
+        binary_mask &= np.sum(layer_0, axis=(1,2)) > 3e-4
+
+    x = x[binary_mask]
     c = energy[binary_mask]
 
-    if use_extra_dim:
+    if use_extra_dims:
+        x = add_extra_dims(x, c)
+    elif use_extra_dim:
         x = add_extra_dim(x, c)
     return x, c
 
-def save_data(data_file, samples, energies, threshold=0.01, use_extra_dim=False):
+def save_data(data_file, samples, energies, threshold=0.01, use_extra_dim=False, use_extra_dims=False):
     assert len(energies) == len(samples)
 
-    if use_extra_dim:
+    if use_extra_dims:
+        samples = remove_extra_dims(samples, energies)
+    elif use_extra_dim:
         samples = remove_extra_dim(samples, energies)
 
     data = 1e5*samples.clip(0., 1.)
@@ -67,8 +76,58 @@ def remove_extra_dim(data, energies):
     data /= np.sum(data, axis=1, keepdims=True)
     return data*energies*factors
 
-def get_loaders(data_file, batch_size, ratio=0.8, device='cpu', width_noise=1e-7, use_extra_dim=False, mask=0):
-    data, cond = load_data(data_file, use_extra_dim, mask=mask)
+def add_extra_dims(data, e_part):
+    e0 = np.sum(data[..., :288], axis=1, keepdims=True)
+    e1 = np.sum(data[..., 288:432], axis=1, keepdims=True)
+    e2 = np.sum(data[..., 432:], axis=1, keepdims=True)
+    u1 = (e0+e1+e2)/e_part
+    u2 = e0/(e0+e1+e2)
+    u3 = e1/(e1+e2)
+    data /= np.sum(data, axis=1, keepdims=True)
+    return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
+
+def remove_extra_dims(data, e_part):
+    u1 = data[:,[-3]]/(1+data[:,[-3]])
+    u2 = data[:,[-2]]/(1+data[:,[-2]])
+    u3 = data[:,[-1]]/(1+data[:,[-1]])
+    e_tot = u1*e_part
+    e0 = u2*e_tot
+    e1 = u3*(e_tot-e0)
+    e2 = e_tot - e0 -e1
+    data = data[:,:-3]
+    data[data<0] = 0.
+    data[..., :288]    /= (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
+    data[..., 288:432] /= (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
+    data[..., 432:]    /= (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
+    data[..., :288]    *= e0
+    data[..., 288:432] *= e1
+    data[..., 432:]    *= e2
+    return data
+
+# def add_extra_dims(data, energies):
+#     factors_0 = np.sum(data[..., :288], axis=1, keepdims=True)/energies
+#     factors_1 = np.sum(data[..., 288:432], axis=1, keepdims=True)/energies
+#     factors_2 = np.sum(data[..., 432:], axis=1, keepdims=True)/energies
+#     data /= np.sum(data, axis=1, keepdims=True)
+#     return np.concatenate((data, factors_0, factors_1, factors_2), axis=1)
+
+# def remove_extra_dims(data, energies):
+#     factors_0 = data[:,[-3]]
+#     factors_1 = data[:,[-2]]
+#     factors_2 = data[:,[-1]]
+#     data = data[:,:-3]
+#     data[data<0] = 0.
+#     data[..., :288]    /= (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
+#     data[..., 288:432] /= (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
+#     data[..., 432:]    /= (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
+#     data[..., :288]    *= energies*factors_0
+#     data[..., 288:432] *= energies*factors_1
+#     data[..., 432:]    *= energies*factors_2
+#     return data
+
+def get_loaders(data_file, batch_size, ratio=0.8, device='cpu',
+        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0):
+    data, cond = load_data(data_file, use_extra_dim, use_extra_dims, mask=mask)
     data = torch.tensor(data, device=device)
     cond = torch.tensor(cond, device=device)
     index = torch.randperm(len(data), device=device)

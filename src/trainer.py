@@ -25,6 +25,7 @@ class Trainer:
             device,
             params.get("width_noise", 1e-7),
             params.get("use_extra_dim", False),
+            params.get("use_extra_dims", False),
             params.get("mask", 0)
         )
         self.train_loader = train_loader
@@ -166,7 +167,12 @@ class Trainer:
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
         samples -= self.params.get("width_noise", 1e-7)
-        data.save_data(self.doc.get_file('samples.hdf5'), samples, energies, use_extra_dim=self.params.get("use_extra_dim", False))
+        data.save_data(
+            self.doc.get_file('samples.hdf5'),
+            samples,
+            energies,
+            use_extra_dim=self.params.get("use_extra_dim", False),
+            use_extra_dims=self.params.get("use_extra_dims", False))
 
     def latent_samples(self, epoch=None):
         self.model.eval()
