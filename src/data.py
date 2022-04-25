@@ -82,7 +82,7 @@ def add_extra_dims(data, e_part):
     e2 = np.sum(data[..., 432:], axis=1, keepdims=True)
     u1 = (e0+e1+e2)/e_part
     u2 = e0/(e0+e1+e2)
-    u3 = e1/(e1+e2)
+    u3 = e1/(e1+e2+1e-7)
     data /= np.sum(data, axis=1, keepdims=True)
     return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
 

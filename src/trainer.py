@@ -166,7 +166,7 @@ class Trainer:
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
-        samples -= self.params.get("width_noise", 1e-7)
+        samples -= 0.5*self.params.get("width_noise", 1e-7)
         data.save_data(
             self.doc.get_file('samples.hdf5'),
             samples,
