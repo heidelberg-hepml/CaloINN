@@ -79,7 +79,7 @@ def calc_centroid(data, layer=0, dir='phi'):
         value = bin_centers.reshape(1, -1)
 
     mean = np.sum(layer * value, axis=(1, 2))/(energies+1e-10)
-    std = np.sqrt(np.sum((layer * value - mean[:,None, None])**2, axis=(1, 2))/(energies+1e-10))
+    std = np.sqrt(np.sum(layer * (value - mean[:,None, None])**2, axis=(1, 2))/(energies+1e-10))
 
     return mean, std
 

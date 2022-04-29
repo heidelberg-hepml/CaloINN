@@ -122,7 +122,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, epoch
     if epoch:
         plot_dir = os.path.join(results_dir, 'plots', f'epoch_{epoch:03d}')
     else:
-        plot_dir = os.path.join(results_dir, 'plots')
+        plot_dir = os.path.join(results_dir, 'plots/final')
     os.makedirs(plot_dir, exist_ok=True)
 
     plots = [

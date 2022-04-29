@@ -6,7 +6,7 @@ import os
 import torch
 import yaml
 
-import data
+import data_util
 from model import CINN
 import plotting
 from documenter import Documenter
@@ -18,7 +18,7 @@ class Trainer:
         self.device = device
         self.doc = doc
 
-        train_loader, test_loader = data.get_loaders(
+        train_loader, test_loader = data_util.get_loaders(
             params.get('data_path'),
             params.get('batch_size'),
             params.get('train_split', 0.8),
@@ -33,7 +33,10 @@ class Trainer:
 
         self.num_dim = train_loader.data.shape[1]
 
-        model = CINN(params, device, self.train_loader.data, self.train_loader.cond)
+        data = torch.clone(train_loader.add_noise(train_loader.data))
+        cond = torch.clone(train_loader.cond)
+
+        model = CINN(params, device, data, cond)
         self.model = model.to(device)
         self.set_optimizer(steps_per_epoch=len(train_loader))
 
@@ -166,8 +169,8 @@ class Trainer:
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
-        samples -= 0.5*self.params.get("width_noise", 1e-7)
-        data.save_data(
+        samples -= self.params.get("width_noise", 1e-7)
+        data_util.save_data(
             self.doc.get_file('samples.hdf5'),
             samples,
             energies,
