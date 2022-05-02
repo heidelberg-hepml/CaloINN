@@ -135,8 +135,7 @@ dmypy.json
 results
 plots
 run
-test.ipynb
-pca.ipynb
+*.ipynb
 src/search.py
 params
 !params/example.yaml

@@ -167,7 +167,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
             plots.append( (calc_centroid_mean, f'{dir}_{layer}.pdf', {'layer': layer, 'dir': dir},
                 {'axis_label': f'\\(\\left<\\{dir}_{layer}\\right>\\)', 'yscale': 'log'}) )
             plots.append( (calc_centroid_std, f'{dir}_{layer}_std.pdf', {'layer': layer, 'dir': dir},
-                {'axis_label': f'std \\(\\{dir}_{layer}\\)', 'xscale': 'log', 'yscale': 'log'}) )
+                {'axis_label': f'std \\(\\{dir}_{layer}\\)', 'vmin': 1, 'vmax': 2e2, 'xscale': 'log', 'yscale': 'log'}) )
 
         for N in range(1,6):
             plots.append( (calc_brightest_voxel, f'{N}_brightest_voxel_layer_{layer}.pdf', {'layer': layer, 'N': N},
