@@ -162,7 +162,7 @@ class Trainer:
     def generate(self, num_samples, batch_size = 10000):
         self.model.eval()
         with torch.no_grad():
-            energies = 0.99*torch.rand((num_samples,1)) + 0.01
+            energies = 99.0*torch.rand((num_samples,1)) + 1.0
             samples = torch.zeros((num_samples,1,self.num_dim))
             for batch in range((num_samples+batch_size-1)//batch_size):
                     start = batch_size*batch

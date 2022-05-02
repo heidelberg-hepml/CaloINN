@@ -4,12 +4,14 @@ import torch
 
 from myDataLoader import MyDataLoader
 
-def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=1e-7, mask=0, layer=None):
+def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.01, mask=0, layer=None):
+    threshold /= 1e3
+
     full_file = h5py.File(data_file, 'r')
-    layer_0 = np.float32(full_file['layer_0'][:] / 1e5)
-    layer_1 = np.float32(full_file['layer_1'][:] / 1e5)
-    layer_2 = np.float32(full_file['layer_2'][:] / 1e5)
-    energy = np.float32(full_file['energy'][:] /1e2)
+    layer_0 = np.float32(full_file['layer_0'][:] / 1e3)
+    layer_1 = np.float32(full_file['layer_1'][:] / 1e3)
+    layer_2 = np.float32(full_file['layer_2'][:] / 1e3)
+    energy = np.float32(full_file['energy'][:] / 1e0)
     full_file.close()
 
     layer0 = layer_0.reshape(layer_0.shape[0], -1)
@@ -17,15 +19,15 @@ def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=1e
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
 
     if mask==1:
-        binary_mask = (layer1 > threshold).mean(1) < 0.1+0.2*np.log10(100*energy[:,0])
+        binary_mask = (layer1 > threshold).mean(1) < 0.1+0.2*np.log10(energy[:,0])
     elif mask==2:
-        binary_mask = (layer1 > threshold).mean(1) >= 0.1+0.2*np.log10(100*energy[:,0])
+        binary_mask = (layer1 > threshold).mean(1) >= 0.1+0.2*np.log10(energy[:,0])
     else:
         binary_mask = np.full(len(energy), True)
 
     if layer is not None:
         x = (layer0, layer1, layer2)[layer]
-        binary_mask &= np.sum(x, axis=1) > 1e-7
+        binary_mask &= np.sum(x, axis=1) > threshold
     else:
         x = np.concatenate((layer0, layer1, layer2), 1)
 
@@ -50,10 +52,9 @@ def save_data(data_file, samples, energies, threshold=0.01, use_extra_dim=False,
     elif use_extra_dim:
         samples = remove_extra_dim(samples, energies)
 
-    data = 1e5*samples.clip(0., 1.)
+    data = 1e3 * samples
     data[data < threshold] = 0.
 
-    energies = energies*1e2
     overflow = np.zeros((len(energies), 3))
 
     if layer is not None:
