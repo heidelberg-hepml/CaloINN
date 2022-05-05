@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class VBLinear(nn.Module):
     def __init__(self, in_features, out_features, prior_prec=1.0, _map=False, std_init=-9):
@@ -38,7 +39,7 @@ class VBLinear(nn.Module):
         if loguniform:
             k1 = 0.63576; k2 = 1.87320; k3 = 1.48695
             log_alpha = self.logsig2_w - 2 * torch.log(self.mu_w.abs() + 1e-8)
-            kl = -th.sum(k1 * torch.sigmoid(k2 + k3 * log_alpha)
+            kl = -torch.sum(k1 * torch.sigmoid(k2 + k3 * log_alpha)
                          - 0.5 * F.softplus(-log_alpha) - k1)
         else:
             logsig2_w = self.logsig2_w.clamp(-11, 11)

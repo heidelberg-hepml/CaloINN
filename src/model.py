@@ -137,6 +137,9 @@ class CINN(nn.Module):
         self.use_norm = self.params.get("use_norm", False) and not self.params.get("use_extra_dim", False)
         self.pre_subnet = None
 
+        if self.bayesian:
+            self.bayesian_layers = []
+
         self.initialize_normalization(data, cond)
         self.define_model_architecture(self.num_dim)
 
@@ -296,6 +299,9 @@ class CINN(nn.Module):
 
     def import_random_state(self, state):
         [layer.import_random_state(s) for layer, s in zip(self.bayesian_layers, state)]
+
+    def get_kl(self):
+        return sum(layer.KL() for layer in self.bayesian_layers)
 
     def sample(self, num_pts, condition):
         z = torch.normal(0, 1, size=(num_pts*condition.shape[0], self.in_dim), device=self.device)

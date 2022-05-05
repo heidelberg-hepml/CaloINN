@@ -41,8 +41,8 @@ class Trainer:
         self.model = model.to(device)
         self.set_optimizer(steps_per_epoch=len(train_loader))
 
-        self.losses_train = []
-        self.losses_test = []
+        self.losses_train = {'inn': [], 'kl': [], 'total': []}
+        self.losses_test = {'inn': [], 'kl': [], 'total': []}
         self.learning_rates = []
 
     def train(self):
@@ -53,35 +53,77 @@ class Trainer:
             self.epoch = epoch
             train_loss = 0
             test_loss = 0
+            train_inn_loss = 0
+            test_inn_loss = 0
+            if self.model.bayesian:
+                train_kl_loss = 0
+                test_kl_loss = 0
 
             self.model.train()
             for x, c in self.train_loader:
                 self.optim.zero_grad()
-                loss = - torch.mean(self.model.log_prob(x,c))
+                inn_loss = - torch.mean(self.model.log_prob(x,c))
+                if self.model.bayesian:
+                    kl_loss = self.model.get_kl() / self.params.get('batch_size')
+                    loss = inn_loss + kl_loss
+                    self.losses_train['kl'].append(kl_loss.item())
+                    train_kl_loss += kl_loss.item()*len(x)
+                else:
+                    loss = inn_loss
                 loss.backward()
                 self.optim.step()
-                self.losses_train.append(loss.detach().cpu().numpy())
-                train_loss += self.losses_train[-1]*len(x)
+
+                self.losses_train['inn'].append(inn_loss.item())
+                self.losses_train['total'].append(loss.item())
+                train_inn_loss += inn_loss.item()*len(x)
+                train_loss += loss.item()*len(x)
                 self.scheduler.step()
                 self.learning_rates.append(self.scheduler.get_last_lr()[0])
-            train_loss /= len(self.train_loader.data)
 
             self.model.eval()
             with torch.no_grad():
                 for x, c in self.test_loader:
-                    loss = - torch.mean(self.model.log_prob(x,c))
-                    test_loss += loss.detach().cpu().numpy()*len(x)
-                test_loss /= len(self.test_loader.data)
+                    inn_loss = - torch.mean(self.model.log_prob(x,c))
+                    if self.model.bayesian:
+                        kl_loss = self.model.get_kl() / self.params.get('batch_size')
+                        loss = inn_loss + kl_loss
+                        test_kl_loss += kl_loss.item()*len(x)
+                    else:
+                        loss = inn_loss
+                    test_inn_loss += inn_loss.item()*len(x)
+                    test_loss += loss.item()*len(x)
+
+            test_inn_loss /= len(self.test_loader.data)
+            test_loss /= len(self.test_loader.data)
+
+            train_inn_loss /= len(self.train_loader.data)
+            train_loss /= len(self.train_loader.data)
+
+            self.losses_test['inn'].append(test_inn_loss)
+            self.losses_test['total'].append(test_loss)
+
+            if self.model.bayesian:
+                test_kl_loss /= len(self.test_loader.data)
+                train_kl_loss /= len(self.train_loader.data)
+                self.losses_test['kl'].append(test_kl_loss)
 
             print('')
             print(f'=== epoch {epoch} ===')
-            print(f'inn loss (train): {train_loss}')
-            print(f'inn loss (test): {test_loss}')
+            print(f'inn loss (train): {train_inn_loss}')
+            if self.model.bayesian:
+                print(f'kl loss (train): {train_kl_loss}')
+                print(f'total loss (train): {train_loss}')
+            print(f'inn loss (test): {test_inn_loss}')
+            if self.model.bayesian:
+                print(f'kl loss (test): {test_kl_loss}')
+                print(f'total loss (test): {test_loss}')
             print(f'lr: {self.scheduler.get_last_lr()[0]}')
             sys.stdout.flush()
 
-            self.losses_test.append(test_loss)
-            plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train, self.losses_test)
+            plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train['total'], self.losses_test['total'])
+            if self.model.bayesian:
+                plotting.plot_loss(self.doc.get_file('loss_inn.png'), self.losses_train['inn'], self.losses_test['inn'])
+                plotting.plot_loss(self.doc.get_file('loss_kl.png'), self.losses_train['kl'], self.losses_test['kl'])
             plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
