@@ -86,6 +86,7 @@ def plot_loss(
     ax.legend(loc='upper right', prop=labelfont)
 
     ax.set_xlim([0,len(loss_test)])
+    ax.set_ylim([min(loss_train)- 20,loss_test[0] + 20])
     ax.set_xlabel('epoch', fontproperties=axislabelfont)
     ax.set_ylabel('loss', fontproperties=axislabelfont)
 

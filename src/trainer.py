@@ -120,11 +120,12 @@ class Trainer:
             print(f'lr: {self.scheduler.get_last_lr()[0]}')
             sys.stdout.flush()
 
-            plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train['total'], self.losses_test['total'])
-            if self.model.bayesian:
-                plotting.plot_loss(self.doc.get_file('loss_inn.png'), self.losses_train['inn'], self.losses_test['inn'])
-                plotting.plot_loss(self.doc.get_file('loss_kl.png'), self.losses_train['kl'], self.losses_test['kl'])
-            plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
+            if epoch >= 1:
+                plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train['total'], self.losses_test['total'])
+                if self.model.bayesian:
+                    plotting.plot_loss(self.doc.get_file('loss_inn.png'), self.losses_train['inn'], self.losses_test['inn'])
+                    plotting.plot_loss(self.doc.get_file('loss_kl.png'), self.losses_train['kl'], self.losses_test['kl'])
+                plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
                 self.save()
