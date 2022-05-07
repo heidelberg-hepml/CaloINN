@@ -1,6 +1,5 @@
 import math
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -44,7 +43,7 @@ class VBLinear(nn.Module):
         else:
             logsig2_w = self.logsig2_w.clamp(-11, 11)
             kl = 0.5 * (self.prior_prec * (self.mu_w.pow(2) + logsig2_w.exp())
-                        - logsig2_w - 1 - np.log(self.prior_prec)).sum()
+                        - logsig2_w - 1 - math.log(self.prior_prec)).sum()
         return kl
 
     def forward(self, input):
@@ -52,22 +51,22 @@ class VBLinear(nn.Module):
             # local reparameterization trick is more efficient and leads to
             # an estimate of the gradient with smaller variance.
             # https://arxiv.org/pdf/1506.02557.pdf
-            mu_out = nn.functional.linear(input, self.mu_w, self.bias)
+            mu_out = F.linear(input, self.mu_w, self.bias)
             logsig2_w = self.logsig2_w.clamp(-11, 11)
             s2_w = logsig2_w.exp()
-            var_out = nn.functional.linear(input.pow(2), s2_w) + 1e-8
+            var_out = F.linear(input.pow(2), s2_w) + 1e-8
             return mu_out + var_out.sqrt() * torch.randn_like(mu_out)
 
         else:
             if self.map:
-                return nn.functional.linear(input, self.mu_w, self.bias)
+                return F.linear(input, self.mu_w, self.bias)
 
             logsig2_w = self.logsig2_w.clamp(-11, 11)
             if self.random is None:
                 self.random = torch.randn_like(self.logsig2_w)
             s2_w = logsig2_w.exp()
             weight = self.mu_w + s2_w.sqrt() * self.random
-            return nn.functional.linear(input, weight, self.bias) + 1e-8
+            return F.linear(input, weight, self.bias) + 1e-8
 
     def __repr__(self):
         return f"{self.__class__.__name__} ({self.n_in}) -> ({self.n_out})"

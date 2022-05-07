@@ -107,6 +107,18 @@ class Trainer:
                 train_kl_loss /= len(self.train_loader.data)
                 self.losses_test['kl'].append(test_kl_loss)
 
+            if self.model.bayesian:
+                max_bias = 0.0
+                max_mu_w = 0.0
+                max_logsig2_w = 0.0
+                for name, param in self.model.named_parameters():
+                    if 'bias' in name:
+                        max_bias = max(max_bias, torch.max(torch.abs(param)).item())
+                    if 'mu_w' in name:
+                        max_mu_w = max(max_mu_w, torch.max(torch.abs(param)).item())
+                    if 'logsig2_w' in name:
+                        max_logsig2_w = max(max_logsig2_w, torch.max(torch.abs(param)).item())
+
             print('')
             print(f'=== epoch {epoch} ===')
             print(f'inn loss (train): {train_inn_loss}')
@@ -118,6 +130,10 @@ class Trainer:
                 print(f'kl loss (test): {test_kl_loss}')
                 print(f'total loss (test): {test_loss}')
             print(f'lr: {self.scheduler.get_last_lr()[0]}')
+            if self.model.bayesian:
+                print(f'maximum bias: {max_bias}')
+                print(f'maximum mu_w: {max_mu_w}')
+                print(f'maximum logsig2_w: {max_logsig2_w}')
             sys.stdout.flush()
 
             if epoch >= 1:
