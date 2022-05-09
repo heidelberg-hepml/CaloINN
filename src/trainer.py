@@ -48,6 +48,7 @@ class Trainer:
     def train(self):
 
         self.latent_samples(0)
+        N = len(self.train_loader.data)
 
         for epoch in range(1,self.params['n_epochs']+1):
             self.epoch = epoch
@@ -64,7 +65,7 @@ class Trainer:
                 self.optim.zero_grad()
                 inn_loss = - torch.mean(self.model.log_prob(x,c))
                 if self.model.bayesian:
-                    kl_loss = self.model.get_kl() / self.params.get('batch_size')
+                    kl_loss = self.model.get_kl() / N
                     loss = inn_loss + kl_loss
                     self.losses_train['kl'].append(kl_loss.item())
                     train_kl_loss += kl_loss.item()*len(x)
@@ -85,7 +86,7 @@ class Trainer:
                 for x, c in self.test_loader:
                     inn_loss = - torch.mean(self.model.log_prob(x,c))
                     if self.model.bayesian:
-                        kl_loss = self.model.get_kl() / self.params.get('batch_size')
+                        kl_loss = self.model.get_kl() / N
                         loss = inn_loss + kl_loss
                         test_kl_loss += kl_loss.item()*len(x)
                     else:
