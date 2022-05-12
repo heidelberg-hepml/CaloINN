@@ -76,14 +76,15 @@ class CubicSplineBlock(fm.InvertibleModule):
 
         if permute_soft:
             w = special_ortho_group.rvs(channels)
+            w = torch.tensor(w, dtype=torch.get_default_dtype())
         else:
             w = torch.zeros((channels, channels))
             for i, j in enumerate(np.random.permutation(channels)):
                 w[i, channels-i-1] = 1.
 
-        self.w_perm = nn.Parameter(torch.FloatTensor(w).view(channels, channels, *([1] * self.input_rank)),
+        self.w_perm = nn.Parameter(w.view(channels, channels, *([1] * self.input_rank)),
                                    requires_grad=False)
-        self.w_perm_inv = nn.Parameter(torch.FloatTensor(w.T).view(channels, channels, *([1] * self.input_rank)),
+        self.w_perm_inv = nn.Parameter(w.T.view(channels, channels, *([1] * self.input_rank)),
                                        requires_grad=False)
 
         if subnet_constructor is None:
@@ -112,7 +113,7 @@ class CubicSplineBlock(fm.InvertibleModule):
             raise RuntimeError('{} tails are not implemented.'.format(self.tails))
 
         inputs = inputs[inside_interval_mask]
-        theta = theta[inside_interval_mask, :]
+        theta = theta[inside_interval_mask]
 
         min_bin_width=self.DEFAULT_MIN_BIN_WIDTH
         min_bin_height=self.DEFAULT_MIN_BIN_HEIGHT
@@ -124,15 +125,11 @@ class CubicSplineBlock(fm.InvertibleModule):
         right = bound
         bottom = -bound
         top = bound
-        #if not rev and (torch.min(inputs).item() < left or torch.max(inputs).item() > right):
-        #    raise ValueError("Spline Block inputs are not within boundaries")
-        #elif rev and (torch.min(inputs).item() < bottom or torch.max(inputs).item() > top):
-        #    raise ValueError("Spline Block inputs are not within boundaries")
 
         unnormalized_widths = theta[...,:self.num_bins]
         unnormalized_heights = theta[...,self.num_bins:self.num_bins*2]
-        unnorm_derivatives_left = theta[...,-2].reshape(theta.shape[0], self.splits[1], 1)
-        unnorm_derivatives_right = theta[...,-1].reshape(theta.shape[0], self.splits[1], 1)
+        unnorm_derivatives_left = theta[...,[-2]]
+        unnorm_derivatives_right = theta[...,[-1]]
 
         if rev:
             inputs = (inputs - bottom) / (top - bottom)
@@ -162,8 +159,8 @@ class CubicSplineBlock(fm.InvertibleModule):
         )
         min_something = torch.min(min_something_1, min_something_2)
 
-        derivatives_left = torch.sigmoid(unnorm_derivatives_left) * 3 * slopes[..., 0][..., None]
-        derivatives_right = torch.sigmoid(unnorm_derivatives_right) * 3 * slopes[..., -1][..., None]
+        derivatives_left = min_bin_width + torch.sigmoid(unnorm_derivatives_left) * (3 * slopes[..., [0]] - 2*min_bin_width)
+        derivatives_right = min_bin_width + torch.sigmoid(unnorm_derivatives_right) * (3 * slopes[..., [-1]] - 2*min_bin_width)
 
         derivatives = min_something * (torch.sign(slopes[..., :-1]) + torch.sign(slopes[..., 1:]))
         derivatives = torch.cat([derivatives_left,
@@ -235,18 +232,18 @@ class CubicSplineBlock(fm.InvertibleModule):
             root_2 = root_2 * root_scale + root_shift
             root_3 = root_3 * root_scale + root_shift
 
-            root1_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_1).float()
-            root1_mask *= (root_1 < (input_right_cumwidths[three_roots_mask] + eps)).float()
+            root1_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_1)
+            root1_mask &= (root_1 < (input_right_cumwidths[three_roots_mask] + eps))
 
-            root2_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_2).float()
-            root2_mask *= (root_2 < (input_right_cumwidths[three_roots_mask] + eps)).float()
+            root2_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_2)
+            root2_mask &= (root_2 < (input_right_cumwidths[three_roots_mask] + eps))
 
-            root3_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_3).float()
-            root3_mask *= (root_3 < (input_right_cumwidths[three_roots_mask] + eps)).float()
+            root3_mask = ((input_left_cumwidths[three_roots_mask] - eps) < root_3)
+            root3_mask &= (root_3 < (input_right_cumwidths[three_roots_mask] + eps))
 
             roots = torch.stack([root_1, root_2, root_3], dim=-1)
             masks = torch.stack([root1_mask, root2_mask, root3_mask], dim=-1)
-            mask_index = torch.argsort(masks, dim=-1, descending=True)[..., 0][..., None]
+            mask_index = torch.argsort(1.*masks, dim=-1, descending=True)[..., [0]]
             outputs[three_roots_mask] = torch.gather(roots, dim=-1, index=mask_index).view(-1)
 
             # Deal with a -> 0 (almost quadratic) cases.

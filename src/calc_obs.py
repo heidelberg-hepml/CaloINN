@@ -3,10 +3,10 @@ import h5py
 
 def load_data(data_file):
     full_file = h5py.File(data_file, 'r')
-    layer_0 = np.float32(full_file['layer_0'][:] / 1e3)
-    layer_1 = np.float32(full_file['layer_1'][:] / 1e3)
-    layer_2 = np.float32(full_file['layer_2'][:] / 1e3)
-    energy = np.float32(full_file['energy'][:] /1e0)
+    layer_0 = full_file['layer_0'][:] / 1e3
+    layer_1 = full_file['layer_1'][:] / 1e3
+    layer_2 = full_file['layer_2'][:] / 1e3
+    energy = full_file['energy'][:] /1e0
     full_file.close()
 
     data = {
@@ -118,4 +118,3 @@ def calc_coro(data, layer=0, threshold=1e-5):
             mask_l = mask[:,i,j]
             coro[mask_l,:,:] += img[mask_l,:,:]*img[mask_l,i,j][:,None,None]*R[None,:,:]**0.2
     return np.sum(coro, axis=(1,2))
-

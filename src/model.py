@@ -40,7 +40,7 @@ class Subnet(nn.Module):
 
         self.layers = nn.Sequential(*self.layer_list)
 
-        final_layer_name = str(len(list(self.layers.modules())) - 2)
+        final_layer_name = str(len(self.layers) - 1)
         for name, param in self.layers.named_parameters():
             if name[0] == final_layer_name and "logsig2_w" not in name:
                 param.data *= 0.02

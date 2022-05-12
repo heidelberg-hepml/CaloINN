@@ -23,7 +23,7 @@ class MyDataLoader:
             self.max_batch = len(self.data) // self.batch_size
         else:
             self.max_batch = math.ceil(len(self.data) / self.batch_size)
-  
+
         self.initialize()
 
     def add_noise(self, input):

@@ -59,6 +59,7 @@ class Trainer:
             if self.model.bayesian:
                 train_kl_loss = 0
                 test_kl_loss = 0
+            max_grad = 0.0
 
             self.model.train()
             for x, c in self.train_loader:
@@ -80,6 +81,9 @@ class Trainer:
                 train_loss += loss.item()*len(x)
                 self.scheduler.step()
                 self.learning_rates.append(self.scheduler.get_last_lr()[0])
+
+                for param in self.model.params_trainable:
+                    max_grad = max(max_grad, torch.max(torch.abs(param.grad)).item())
 
             self.model.eval()
             with torch.no_grad():
@@ -111,14 +115,16 @@ class Trainer:
             if self.model.bayesian:
                 max_bias = 0.0
                 max_mu_w = 0.0
-                max_logsig2_w = 0.0
+                min_logsig2_w = 100.0
+                max_logsig2_w = -100.0
                 for name, param in self.model.named_parameters():
                     if 'bias' in name:
                         max_bias = max(max_bias, torch.max(torch.abs(param)).item())
                     if 'mu_w' in name:
                         max_mu_w = max(max_mu_w, torch.max(torch.abs(param)).item())
                     if 'logsig2_w' in name:
-                        max_logsig2_w = max(max_logsig2_w, torch.max(torch.abs(param)).item())
+                        min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
+                        max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
 
             print('')
             print(f'=== epoch {epoch} ===')
@@ -134,7 +140,9 @@ class Trainer:
             if self.model.bayesian:
                 print(f'maximum bias: {max_bias}')
                 print(f'maximum mu_w: {max_mu_w}')
+                print(f'minimum logsig2_w: {min_logsig2_w}')
                 print(f'maximum logsig2_w: {max_logsig2_w}')
+            print(f'maximum gradient: {max_grad}')
             sys.stdout.flush()
 
             if epoch >= 1:
@@ -269,6 +277,14 @@ def main():
     shutil.copy(args.param_file, doc.get_file('params.yaml'))
     print('device: ', device)
     print('commit: ', os.popen(r'git rev-parse --short HEAD').read(), end='')
+
+    dtype = params.get('dtype', '')
+    if dtype=='float64':
+        torch.set_default_dtype(torch.float64)
+    elif dtype=='float16':
+        torch.set_default_dtype(torch.float16)
+    elif dtype=='float32':
+        torch.set_default_dtype(torch.float32)
 
     trainer = Trainer(params, device, doc)
     trainer.train()

@@ -8,10 +8,10 @@ def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.
     threshold /= 1e3
 
     full_file = h5py.File(data_file, 'r')
-    layer_0 = np.float32(full_file['layer_0'][:] / 1e3)
-    layer_1 = np.float32(full_file['layer_1'][:] / 1e3)
-    layer_2 = np.float32(full_file['layer_2'][:] / 1e3)
-    energy = np.float32(full_file['energy'][:] / 1e0)
+    layer_0 = full_file['layer_0'][:] / 1e3
+    layer_1 = full_file['layer_1'][:] / 1e3
+    layer_2 = full_file['layer_2'][:] / 1e3
+    energy = full_file['energy'][:] / 1e0
     full_file.close()
 
     layer0 = layer_0.reshape(layer_0.shape[0], -1)
@@ -141,8 +141,8 @@ def remove_extra_dims(data, e_part):
 def get_loaders(data_file, batch_size, ratio=0.8, device='cpu',
         width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
     data, cond = load_data(data_file, use_extra_dim, use_extra_dims, mask=mask, layer=layer)
-    data = torch.tensor(data, device=device)
-    cond = torch.tensor(cond, device=device)
+    data = torch.tensor(data, device=device, dtype=torch.get_default_dtype())
+    cond = torch.tensor(cond, device=device, dtype=torch.get_default_dtype())
     index = torch.randperm(len(data), device=device)
     split = int(ratio*len(data))
     data_train = data[index[:split]]
