@@ -73,6 +73,8 @@ class Trainer:
                 else:
                     loss = inn_loss
                 loss.backward()
+                if 'grad_clip' in self.params:
+                    torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], float('inf'))
                 self.optim.step()
 
                 self.losses_train['inn'].append(inn_loss.item())
