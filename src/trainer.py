@@ -47,6 +47,9 @@ class Trainer:
 
     def train(self):
 
+        if self.model.bayesian:
+            self.model.enable_map()
+
         self.latent_samples(0)
         N = len(self.train_loader.data)
 

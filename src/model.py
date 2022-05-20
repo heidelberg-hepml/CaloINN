@@ -43,7 +43,7 @@ class Subnet(nn.Module):
         final_layer_name = str(len(self.layers) - 1)
         for name, param in self.layers.named_parameters():
             if name[0] == final_layer_name and "logsig2_w" not in name:
-                param.data *= 0.02
+                param.data.zero_()
 
     def forward(self, x):
         return self.layers(x)
@@ -302,6 +302,18 @@ class CINN(nn.Module):
 
     def get_kl(self):
         return sum(layer.KL() for layer in self.bayesian_layers)
+
+    def enable_map(self):
+        for layer in self.bayesian_layers:
+            layer.enable_map()
+
+    def disenable_map(self):
+        for layer in self.bayesian_layers:
+            layer.disenable_map()
+
+    def reset_random(self):
+        for layer in self.bayesian_layers:
+            layer.reset_random()
 
     def sample(self, num_pts, condition):
         z = torch.normal(0, 1, size=(num_pts*condition.shape[0], self.in_dim), device=self.device)

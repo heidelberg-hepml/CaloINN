@@ -18,6 +18,12 @@ class VBLinear(nn.Module):
         self.std_init = std_init
         self.reset_parameters()
 
+    def enable_map(self):
+        self.map = True
+
+    def disenable_map(self):
+        self.map = False
+
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.mu_w.size(1))
         self.mu_w.data.normal_(0, stdv)
@@ -26,6 +32,7 @@ class VBLinear(nn.Module):
 
     def reset_random(self):
         self.random = None
+        self.map = False
 
     def sample_random_state(self):
         return torch.randn_like(self.logsig2_w).detach().cpu().numpy()
