@@ -1,0 +1,79 @@
+e_ratio.pdf:
+    label: '\(E_{tot}/E_{part}\)'
+    func: calc_e_ratio
+
+e_ratio_log.pdf:
+    label: '\(E_{tot}\) (GeV)'
+    func: calc_e_ratio
+    x_log: True
+
+e_detector.pdf:
+    label: '\(E_{tot}\) (GeV)'
+    func: calc_e_detector
+
+eta_diff_0_1.pdf:
+    label: '\(\left<\eta_1\right>-\left<\eta_0\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 1, 'dir': 'eta'}
+
+eta_diff_0_2.pdf:
+    label: '\(\left<\eta_2\right>-\left<\eta_0\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 2, 'dir': 'eta'}
+
+eta_diff_1_2.pdf:
+    label: '\(\left<\eta_2\right>-\left<\eta_1\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 1, 'dir': 'eta'}
+
+phi_diff_0_1.pdf:
+    label: '\(\left<\phi_1\right>-\left<\phi_0\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 1, 'dir': 'phi'}
+
+phi_diff_0_2.pdf:
+    label: '\(\left<\phi_2\right>-\left<\phi_0\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 2, 'dir': 'phi'}
+
+phi_diff_1_2.pdf:
+    label: '\(\left<\phi_2\right>-\left<\phi_1\right>\)'
+    func: calc_layer_diff
+    args: {'layer2': 1, 'dir': 'phi'}
+
+e_normd_layer_0.pdf:
+    label: '\(E_0/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 0}
+
+e_normd_layer_1.pdf:
+    label: '\(E_1/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 1}
+
+e_normd_layer_2.pdf:
+    label: '\(E_2/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 2}
+
+e_normd_layer_0_log.pdf:
+    label: '\(E_0/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 0}
+    x_log: True
+    y_log: True
+
+e_normd_layer_1_log.pdf:
+    label: '\(E_1/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 1}
+    x_log: True
+    y_log: True
+
+e_normd_layer_2_log.pdf:
+    label: '\(E_2/E_{tot}\)'
+    func: calc_e_layer_normd
+    args: {'layer': 2}
+    x_log: True
+    y_log: True
+    range: [1.e-5, Null]

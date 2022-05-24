@@ -1,0 +1,81 @@
+e_layer_1.pdf:
+    label: '\(E_{1}\) (GeV)'
+    func: calc_e_layer
+    y_log: True
+    args: {'layer': 1}
+
+e_layer_1_log.pdf:
+    label: '\(E_{1}\) (GeV)'
+    func: calc_e_layer
+    args: {'layer': 1}
+    x_log: True
+    y_log: True
+
+sparsity_1.pdf:
+    label: 'sparsity layer 1'
+    func: calc_sparsity
+    args: {'layer': 1}
+    n_bins: 36
+    range: [0., 1.]
+
+eta_1.pdf:
+    label: '\(\left<\eta_1\right>\)'
+    func: calc_centroid_mean
+    args: {'layer': 1, 'dir': 'eta'}
+    y_log: True
+    range: [-200., 200.]
+
+eta_1_std.pdf:
+    label: '\(std \eta_1\)'
+    func: calc_centroid_std
+    args: {'layer': 1, 'dir': 'eta'}
+    x_log: True
+    y_log: True
+    range: [1., 200.]
+
+phi_1.pdf:
+    label: '\(\left<\phi_1\right>\)'
+    func: calc_centroid_mean
+    args: {'layer': 1, 'dir': 'phi'}
+    y_log: True
+    range: [-200., 200.]
+
+phi_1_std.pdf:
+    label: '\(std \phi_1\)'
+    func: calc_centroid_std
+    args: {'layer': 1, 'dir': 'phi'}
+    x_log: True
+    y_log: True
+    range: [1., 200.]
+
+1_brightest_voxel_layer_1.pdf:
+    label: '1. brightest voxel in layer 1'
+    func: calc_brightest_voxel
+    args: {'layer': 1, 'N': 1}
+
+2_brightest_voxel_layer_1.pdf:
+    label: '2. brightest voxel in layer 1'
+    func: calc_brightest_voxel
+    args: {'layer': 1, 'N': 2}
+
+3_brightest_voxel_layer_1.pdf:
+    label: '3. brightest voxel in layer 1'
+    func: calc_brightest_voxel
+    args: {'layer': 1, 'N': 3}
+
+4_brightest_voxel_layer_1.pdf:
+    label: '4. brightest voxel in layer 1'
+    func: calc_brightest_voxel
+    args: {'layer': 1, 'N': 4}
+
+5_brightest_voxel_layer_1.pdf:
+    label: '5. brightest voxel in layer 1'
+    func: calc_brightest_voxel
+    args: {'layer': 1, 'N': 5}
+
+spectrum_1.pdf:
+    label: 'voxel energy (GeV)'
+    func: calc_spectrum
+    args: {'layer': 1}
+    x_log: True
+    y_log: True

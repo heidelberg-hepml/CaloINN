@@ -1,15 +1,11 @@
 import sys
-import shutil
-import argparse
-import os
 
 import torch
-import yaml
 
 import data_util
 from model import CINN
 import plotting
-from documenter import Documenter
+from plotter import Plotter
 
 class Trainer:
     def __init__(self, params, device, doc):
@@ -246,12 +242,15 @@ class Trainer:
             energies = energies.cpu().numpy()
         samples -= self.params.get("width_noise", 1e-7)
         data_util.save_data(
-            self.doc.get_file('samples.hdf5'),
-            samples,
-            energies,
-            use_extra_dim=self.params.get("use_extra_dim", False),
-            use_extra_dims=self.params.get("use_extra_dims", False),
-            layer=self.params.get("calo_layer", None))
+            data = data_util.postprocess(
+                samples,
+                energies,
+                use_extra_dim=self.params.get("use_extra_dim", False),
+                use_extra_dims=self.params.get("use_extra_dims", False),
+                layer=self.params.get("calo_layer", None)
+            ),
+            data_file = self.doc.get_file('samples.hdf5')
+        )
 
     def latent_samples(self, epoch=None):
         self.model.eval()
@@ -265,34 +264,34 @@ class Trainer:
             samples = samples.numpy()
         plotting.plot_latent(samples, self.doc.basedir, epoch)
 
-
-def main():
-    parser = argparse.ArgumentParser(description='train network')
-    parser.add_argument('param_file', help='where to find the parameters')
-    parser.add_argument('-c', '--use_cuda', action='store_true', default=False,
-        help='whether cuda should be used')
-    args = parser.parse_args()
-
-    with open(args.param_file) as f:
-        params = yaml.load(f, Loader=yaml.FullLoader)
-    use_cuda = torch.cuda.is_available() and args.use_cuda
-    device = 'cuda:0' if use_cuda else 'cpu'
-
-    doc = Documenter(params['run_name'])
-    shutil.copy(args.param_file, doc.get_file('params.yaml'))
-    print('device: ', device)
-    print('commit: ', os.popen(r'git rev-parse --short HEAD').read(), end='')
-
-    dtype = params.get('dtype', '')
-    if dtype=='float64':
-        torch.set_default_dtype(torch.float64)
-    elif dtype=='float16':
-        torch.set_default_dtype(torch.float16)
-    elif dtype=='float32':
-        torch.set_default_dtype(torch.float32)
-
-    trainer = Trainer(params, device, doc)
-    trainer.train()
-
-if __name__=='__main__':
-    main()
+    def plot_uncertaintys(self, plot_params, num_samples=100000, num_rand=30, batch_size = 10000):
+        l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
+        data = data_util.load_data(
+            data_file=self.params.get('data_path'),
+            mask=self.params.get("mask", 0))
+        data['energy'] = data['energy'][:,0]
+        l_plotter.bin_train_data(data)
+        self.model.eval()
+        for i in range(num_rand):
+            self.model.reset_random()
+            with torch.no_grad():
+                energies = 99.0*torch.rand((num_samples,1)) + 1.0
+                samples = torch.zeros((num_samples,1,self.num_dim))
+                for batch in range((num_samples+batch_size-1)//batch_size):
+                        start = batch_size*batch
+                        stop = min(batch_size*(batch+1), num_samples)
+                        energies_l = energies[start:stop].to(self.device)
+                        samples[start:stop] = self.model.sample(1, energies_l).cpu()
+                samples = samples[:,0,...].cpu().numpy()
+                energies = energies.cpu().numpy()
+            samples -= self.params.get("width_noise", 1e-7)
+            data = data_util.postprocess(
+                    samples,
+                    energies,
+                    use_extra_dim=self.params.get("use_extra_dim", False),
+                    use_extra_dims=self.params.get("use_extra_dims", False),
+                    layer=self.params.get("calo_layer", None)
+                )
+            data['energy'] = data['energy'][:,0]
+            l_plotter.update(data)
+        l_plotter.plot()

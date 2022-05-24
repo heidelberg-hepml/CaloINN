@@ -4,9 +4,7 @@ import torch
 
 from myDataLoader import MyDataLoader
 
-def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.01, mask=0, layer=None):
-    threshold /= 1e3
-
+def load_data(data_file, mask=None, threshold=1e-5):
     full_file = h5py.File(data_file, 'r')
     layer_0 = full_file['layer_0'][:] / 1e3
     layer_1 = full_file['layer_1'][:] / 1e3
@@ -14,16 +12,61 @@ def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.
     energy = full_file['energy'][:] / 1e0
     full_file.close()
 
+    data = {
+        'layer_0': layer_0,
+        'layer_1': layer_1,
+        'layer_2': layer_2,
+        'energy': energy
+    }
+
+    if mask==1:
+        binary_mask = (layer_1 > threshold).mean((1,2)) < 0.1+0.2*np.log10(energy[:,0])
+    elif mask==2:
+        binary_mask = (layer_1 > threshold).mean((1,2)) >= 0.1+0.2*np.log10(energy[:,0])
+    else:
+        binary_mask = np.full(len(energy), True)
+
+    return apply_mask(data, binary_mask)
+
+def save_data(data, data_file):
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+    overflow = np.zeros((len(energy), 3))
+
+    save_file = h5py.File(data_file, 'w')
+    save_file.create_dataset('layer_0', data=layer_0*1e3)
+    save_file.create_dataset('layer_1', data=layer_1*1e3)
+    save_file.create_dataset('layer_2', data=layer_2*1e3)
+    save_file.create_dataset('energy', data=energy*1e0)
+    save_file.create_dataset('overflow', data=overflow)
+    save_file.close()
+
+def apply_mask(data, mask):
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+
+    return {
+        'layer_0': layer_0[mask],
+        'layer_1': layer_1[mask],
+        'layer_2': layer_2[mask],
+        'energy': energy[mask]
+    }
+
+def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None):
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+    
     layer0 = layer_0.reshape(layer_0.shape[0], -1)
     layer1 = layer_1.reshape(layer_1.shape[0], -1)
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
 
-    if mask==1:
-        binary_mask = (layer1 > threshold).mean(1) < 0.1+0.2*np.log10(energy[:,0])
-    elif mask==2:
-        binary_mask = (layer1 > threshold).mean(1) >= 0.1+0.2*np.log10(energy[:,0])
-    else:
-        binary_mask = np.full(len(energy), True)
+    binary_mask = np.full(len(energy), True)
 
     if layer is not None:
         x = (layer0, layer1, layer2)[layer]
@@ -33,7 +76,6 @@ def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.
 
     if use_extra_dims:
         binary_mask &= np.sum(x, axis=1) < energy[:,0]
-        binary_mask &= np.sum(layer_0, axis=(1,2)) > 3e-4
 
     x = x[binary_mask]
     c = energy[binary_mask]
@@ -44,38 +86,32 @@ def load_data(data_file, use_extra_dim=False, use_extra_dims=False, threshold=0.
         x = add_extra_dim(x, c)
     return x, c
 
-def save_data(data_file, samples, energies, threshold=0.01, use_extra_dim=False, use_extra_dims=False, layer=None):
-    assert len(energies) == len(samples)
+def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5):
+    assert len(energy) == len(samples)
 
     if use_extra_dims:
-        samples = remove_extra_dims(samples, energies)
+        samples = remove_extra_dims(samples, energy)
     elif use_extra_dim:
-        samples = remove_extra_dim(samples, energies)
+        samples = remove_extra_dim(samples, energy)
 
-    data = 1e3 * samples
-    data[data < threshold] = 0.
-
-    overflow = np.zeros((len(energies), 3))
+    samples[samples < threshold] = 0.
 
     if layer is not None:
-        layer_0 = np.zeros((len(data), 3, 96))
-        layer_1 = np.zeros((len(data), 12, 12))
-        layer_2 = np.zeros((len(data), 12, 6))
-        (layer_0, layer_1, layer_2)[layer][:] = data.reshape(((-1, 3, 96),(-1, 12, 12),(-1, 12, 6))[layer])
+        layer_0 = np.zeros((len(samples), 3, 96))
+        layer_1 = np.zeros((len(samples), 12, 12))
+        layer_2 = np.zeros((len(samples), 12, 6))
+        (layer_0, layer_1, layer_2)[layer][:] = samples.reshape(((-1, 3, 96),(-1, 12, 12),(-1, 12, 6))[layer])
     else:
-        layer_0 = data[..., :288].reshape(-1, 3, 96)
-        layer_1 = data[..., 288:432].reshape(-1, 12, 12)
-        layer_2 = data[..., 432:].reshape(-1, 12, 6)
+        layer_0 = samples[..., :288].reshape(-1, 3, 96)
+        layer_1 = samples[..., 288:432].reshape(-1, 12, 12)
+        layer_2 = samples[..., 432:].reshape(-1, 12, 6)
 
-    save_file = h5py.File(data_file, 'w')
-
-    save_file.create_dataset('layer_0', data=layer_0)
-    save_file.create_dataset('layer_1', data=layer_1)
-    save_file.create_dataset('layer_2', data=layer_2)
-    save_file.create_dataset('energy', data=energies)
-    save_file.create_dataset('overflow', data=overflow)
-
-    save_file.close()
+    return {
+        'layer_0': layer_0,
+        'layer_1': layer_1,
+        'layer_2': layer_2,
+        'energy': energy
+    }
 
 def add_extra_dim(data, energies):
     s = np.sum(data, axis=1, keepdims=True)
@@ -140,7 +176,9 @@ def remove_extra_dims(data, e_part):
 
 def get_loaders(data_file, batch_size, ratio=0.8, device='cpu',
         width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
-    data, cond = load_data(data_file, use_extra_dim, use_extra_dims, mask=mask, layer=layer)
+    data, cond = preprocess(load_data(data_file, mask),
+        use_extra_dim, use_extra_dims, layer=layer)
+    postprocess(data, cond, use_extra_dim, use_extra_dims, layer)
     data = torch.tensor(data, device=device, dtype=torch.get_default_dtype())
     cond = torch.tensor(cond, device=device, dtype=torch.get_default_dtype())
     index = torch.randperm(len(data), device=device)

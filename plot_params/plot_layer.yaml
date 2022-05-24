@@ -1,0 +1,82 @@
+e_layer_%layer.pdf:
+    label: '\(E_{%layer}\) (GeV)'
+    func: calc_e_layer
+    y_log: True
+    args: {'layer': %layer}
+
+e_layer_%layer_log.pdf:
+    label: '\(E_{%layer}\) (GeV)'
+    func: calc_e_layer
+    args: {'layer': %layer}
+    x_log: True
+    y_log: True
+    # range: [1e-5, Null]
+
+sparsity_%layer.pdf:
+    label: 'sparsity layer %layer'
+    func: calc_sparsity
+    args: {'layer': %layer}
+    n_bins: 36
+    range: [0., 1.]
+
+eta_%layer.pdf:
+    label: '\(\left<\eta_%layer\right>\)'
+    func: calc_centroid_mean
+    args: {'layer': %layer, 'dir': 'eta'}
+    y_log: True
+    range: [-200., 200.]
+
+eta_%layer_std.pdf:
+    label: '\(std \eta_%layer\)'
+    func: calc_centroid_std
+    args: {'layer': %layer, 'dir': 'eta'}
+    x_log: True
+    y_log: True
+    range: [1., 200.]
+
+phi_%layer.pdf:
+    label: '\(\left<\phi_%layer\right>\)'
+    func: calc_centroid_mean
+    args: {'layer': %layer, 'dir': 'phi'}
+    y_log: True
+    range: [-200., 200.]
+
+phi_%layer_std.pdf:
+    label: '\(std \phi_%layer\)'
+    func: calc_centroid_std
+    args: {'layer': %layer, 'dir': 'phi'}
+    x_log: True
+    y_log: True
+    range: [1., 200.]
+
+1_brightest_voxel_layer_%layer.pdf:
+    label: '1. brightest voxel in layer %layer'
+    func: calc_brightest_voxel
+    args: {'layer': %layer, 'N': 1}
+
+2_brightest_voxel_layer_%layer.pdf:
+    label: '2. brightest voxel in layer %layer'
+    func: calc_brightest_voxel
+    args: {'layer': %layer, 'N': 2}
+
+3_brightest_voxel_layer_%layer.pdf:
+    label: '3. brightest voxel in layer %layer'
+    func: calc_brightest_voxel
+    args: {'layer': %layer, 'N': 3}
+
+4_brightest_voxel_layer_%layer.pdf:
+    label: '4. brightest voxel in layer %layer'
+    func: calc_brightest_voxel
+    args: {'layer': %layer, 'N': 4}
+
+5_brightest_voxel_layer_%layer.pdf:
+    label: '5. brightest voxel in layer %layer'
+    func: calc_brightest_voxel
+    args: {'layer': %layer, 'N': 5}
+
+spectrum_%layer.pdf:
+    label: 'voxel energy (GeV)'
+    func: calc_spectrum
+    args: {'layer': %layer}
+    x_log: True
+    y_log: True
