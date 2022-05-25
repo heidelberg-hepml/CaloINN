@@ -269,7 +269,6 @@ class Trainer:
         data = data_util.load_data(
             data_file=self.params.get('data_path'),
             mask=self.params.get("mask", 0))
-        data['energy'] = data['energy'][:,0]
         l_plotter.bin_train_data(data)
         self.model.eval()
         for i in range(num_rand):
@@ -292,6 +291,5 @@ class Trainer:
                     use_extra_dims=self.params.get("use_extra_dims", False),
                     layer=self.params.get("calo_layer", None)
                 )
-            data['energy'] = data['energy'][:,0]
             l_plotter.update(data)
         l_plotter.plot()

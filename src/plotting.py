@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 
+import data_util
 from calc_obs import *
 
 plt.rcParams['font.family'] = 'Times New Roman'
@@ -181,15 +182,8 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
             plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
                 {'axis_label': f'\\(C_{{0.2}}\\) layer {layer}', 'xscale': 'linear', 'yscale': 'log'}) )
 
-    data = load_data(data_file)
-    reference = load_data(reference_file)
-
-    if mask==1:
-        reference = apply_mask(reference, calc_sparsity(reference, layer=1) < 0.1+0.2*np.log10(calc_e_parton(reference)))
-    elif mask==2:
-        reference = apply_mask(reference, calc_sparsity(reference, layer=1) >= 0.1+0.2*np.log10(calc_e_parton(reference)))
-    if mask:
-        print(len(reference['energy']))
+    data = data_util.load_data(data_file)
+    reference = data_util.load_data(reference_file, mask)
 
     for function, name, args1, args2 in plots:
         data_coppy = {k: np.copy(v) for k, v in data.items()}
