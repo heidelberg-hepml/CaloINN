@@ -1,6 +1,5 @@
 import math
 import torch
-from torch.distributions import Beta
 
 class MyDataLoader:
 
@@ -17,7 +16,8 @@ class MyDataLoader:
         self.drop_last = drop_last
         self.shuffle = shuffle
         self.width_noise  = width_noise
-        self.deta_distribution = Beta(torch.tensor([3.], device=data.device), torch.tensor([3.], device=data.device))
+        self.noise_distribution = torch.distributions.Uniform(torch.tensor(0., device=data.device), torch.tensor(1., device=data.device))
+        # self.noise_distribution = torch.distributions.Beta(torch.tensor(3., device=data.device), torch.tensor(3., device=data.device))
 
         if self.drop_last:
             self.max_batch = len(self.data) // self.batch_size
@@ -27,8 +27,8 @@ class MyDataLoader:
         self.initialize()
 
     def add_noise(self, input):
-        noise = self.deta_distribution.sample(input.shape)*self.width_noise
-        return input + noise[...,0]
+        noise = self.noise_distribution.sample(input.shape)*self.width_noise
+        return input + noise.reshape(input.shape)
 
     def __len__(self) -> int:
         return self.max_batch
