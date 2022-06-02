@@ -137,5 +137,6 @@ plots
 run
 *.ipynb
 src/search.py
-params
+params/*
 !params/example.yaml
+!params/example_bayesian.yaml
