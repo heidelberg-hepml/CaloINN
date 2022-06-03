@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Tuple, Iterator
 
 import torch
 
@@ -12,7 +12,7 @@ class MyDataLoader:
     shuffle: bool
 
     def __init__(self, data: torch.Tensor, cond: torch.Tensor, batch_size: int,
-                drop_last:bool=False, shuffle:bool=True, width_noise:float=1e-7):
+                drop_last:bool=False, shuffle:bool=True, width_noise:float=1e-7) -> None:
         """
             Initializes MyDataLoader class.
 
@@ -38,28 +38,25 @@ class MyDataLoader:
         else:
             self.max_batch = math.ceil(len(self.data) / self.batch_size)
 
-        self.initialize()
-
-    def add_noise(self, input):
+    def add_noise(self, input: torch.Tensor) -> torch.Tensor:
         noise = self.noise_distribution.sample(input.shape)*self.width_noise
         return input + noise.reshape(input.shape)
 
     def __len__(self) -> int:
         return self.max_batch
 
-    def __iter__(self):
-        return self
-
-    def initialize(self):
+    def __iter__(self) -> Iterator[torch.Tensor]:
+        # reset
         if self.shuffle:
             self.index = torch.randperm(len(self.data), device=self.data.device)
         else:
             self.index = torch.arange(len(self.data), device=self.data.device)
         self.batch = 0
 
+        return self
+
     def __next__(self) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.batch >= self.max_batch:
-            self.initialize()
             raise StopIteration
         first = self.batch*self.batch_size
         last = min(first+self.batch_size, len(self.data))
