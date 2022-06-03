@@ -1,7 +1,10 @@
 import math
+from typing import Tuple
+
 import torch
 
 class MyDataLoader:
+    """ A data loader that is way faster than the PyTorch data loader for data with a dimension of less than tausend. """
 
     data: torch.Tensor
     batch_size: int
@@ -10,6 +13,17 @@ class MyDataLoader:
 
     def __init__(self, data: torch.Tensor, cond: torch.Tensor, batch_size: int,
                 drop_last:bool=False, shuffle:bool=True, width_noise:float=1e-7):
+        """
+            Initializes MyDataLoader class.
+
+            Parameters:
+            data (tensor): Data
+            cond (tensor): Condition
+            batch_size (int): Batch size
+            drop_last (bool): If true the last batch is dropped if it is smaller as the given batch size
+            shuffle (bool): Weather or not to shuffle the data
+            width_noise (float): Width of the noise to add to the data
+        """
         self.data = data
         self.cond = cond
         self.batch_size = batch_size
@@ -43,7 +57,7 @@ class MyDataLoader:
             self.index = torch.arange(len(self.data), device=self.data.device)
         self.batch = 0
 
-    def __next__(self):
+    def __next__(self) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.batch >= self.max_batch:
             self.initialize()
             raise StopIteration

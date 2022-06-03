@@ -8,7 +8,17 @@ import plotting
 from plotter import Plotter
 
 class Trainer:
+    """ This class is responsible for training and testing the model.  """
+
     def __init__(self, params, device, doc):
+        """
+            Initializes train_loader, test_loader, model, optimizer and scheduler.
+
+            Parameters:
+            params: Dict containing the network and training parameter
+            device: Device to use for the training
+            doc: An instance of the documenter class responsible for documenting the run
+        """
 
         self.params = params
         self.device = device
@@ -33,7 +43,7 @@ class Trainer:
         data = torch.clone(train_loader.add_noise(train_loader.data))
         cond = torch.clone(train_loader.cond)
 
-        model = CINN(params, device, data, cond)
+        model = CINN(params, data, cond)
         self.model = model.to(device)
         self.set_optimizer(steps_per_epoch=len(train_loader))
 
@@ -42,6 +52,7 @@ class Trainer:
         self.learning_rates = []
 
     def train(self):
+        """ Trains the model. """
 
         if self.model.bayesian:
             self.model.enable_map()
@@ -229,6 +240,13 @@ class Trainer:
         self.model.to(self.device)
 
     def generate(self, num_samples, batch_size = 10000):
+        """
+            generate new data using the modle and storing them to a file in the run folder.
+
+            Parameters:
+            num_samples (int): Number of samples to generate
+            batch_size (int): Batch size for samlpling
+        """
         self.model.eval()
         with torch.no_grad():
             energies = 99.0*torch.rand((num_samples,1)) + 1.0
@@ -253,6 +271,12 @@ class Trainer:
         )
 
     def latent_samples(self, epoch=None):
+        """
+            Plot latent space distribution. 
+
+            Parameters:
+            epoch (int): current epoch
+        """
         self.model.eval()
         with torch.no_grad():
             samples = torch.zeros(self.train_loader.data.shape)
@@ -265,6 +289,15 @@ class Trainer:
         plotting.plot_latent(samples, self.doc.basedir, epoch)
 
     def plot_uncertaintys(self, plot_params, num_samples=100000, num_rand=30, batch_size = 10000):
+        """
+            Plot Bayesian uncertainties for given observables.
+
+            Parameters:
+            plot_params (dict): Parameters for the plots to make
+            num_samples (int): Number of samples to draw for each instance of the Bayesian parameters
+            num_rand (int): Number of random stats to use for the Bayesian parameters
+            batch_size (int): Batch size for samlpling
+        """
         l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
         data = data_util.load_data(
             data_file=self.params.get('data_path'),

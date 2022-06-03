@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 
+import data_util
 from calc_obs import *
 
 plt.rcParams['font.family'] = 'Times New Roman'
@@ -88,14 +89,7 @@ def plot_all_hist2d(data_file, plot_dir, eplus=False, mask=0):
         plots.append( (f'e_layer_{layer}_e_part.pdf', calc_e_parton, {}, calc_e_layer_normd, {'layer': layer},
             {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
 
-    data = load_data(data_file)
-
-    if mask==1:
-        data = apply_mask(data, calc_sparsity(data, layer=1) < 0.25)
-    elif mask==2:
-        data = apply_mask(data, calc_sparsity(data, layer=1) >= 0.25)
-    if mask:
-        print(len(data['energy']))
+    data = data_util.load_data(data_file, mask)
 
     for name, function1, args1, function2, args2, args_plot in plots:
         print(name)

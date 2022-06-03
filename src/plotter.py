@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import calc_obs
 
 plt.rcParams['font.family'] = 'Times New Roman'
-# plt.rcParams['font.size'] = 22
 plt.rcParams['mathtext.default'] = 'rm'
 plt.rcParams['text.usetex'] = True
 plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath}'

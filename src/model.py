@@ -9,15 +9,19 @@ from myBlocks import *
 from vblinear import VBLinear
 
 class Subnet(nn.Module):
-    """ This class constructs a subnet for the coupling blocks
-    size_in: input size of the subnet
-    size: output size of the subnet
-    internal_size: hidden size of the subnet. If None, set to 2*size
-    dropout: dropout chance of the subnet
-    """
+    """ This class constructs a subnet for the coupling blocks """
 
     def __init__(self, num_layers, size_in, size_out, internal_size=None, dropout=0.0,
                  layer_class=nn.Linear, layer_args={}):
+        """
+            Initializes subnet class.
+
+            Parameters:
+            size_in: input size of the subnet
+            size: output size of the subnet
+            internal_size: hidden size of the subnet. If None, set to 2*size
+            dropout: dropout chance of the subnet
+        """
         super().__init__()
         if internal_size is None:
             internal_size = size_out * 2
@@ -120,14 +124,18 @@ class NormTransformation(fm.InvertibleModule):
 
 
 class CINN(nn.Module):
-    """ Class to build, train and evaluate a cINN model """
+    """ cINN model """
 
-    def __init__(self, params, device, data, cond):
-        """ Initializes model class with run parameters and the torch device
-        instance. """
+    def __init__(self, params, data, cond):
+        """ Initializes model class.
+
+        Parameters:
+        params: Dict containing the network and training parameter
+        data: Training data to initialize the norm layer
+        cond: Conditions to the training data
+        """
         super(CINN, self).__init__()
         self.params = params
-        self.device = device
         self.num_dim = data.shape[1]
 
         self.norm_m = None
@@ -221,7 +229,7 @@ class CINN(nn.Module):
         return CouplingBlock, block_kwargs
 
     def initialize_normalization(self, data, cond):
-        """ Calculates the normalization transformation from the training data. """
+        """ Calculates the normalization transformation from the training data and stores it. """
         data = torch.clone(data)
         if self.use_norm:
             data /= cond
@@ -312,16 +320,39 @@ class CINN(nn.Module):
             layer.disenable_map()
 
     def reset_random(self):
+        """ samples a new random state for the Bayesian layers """
         for layer in self.bayesian_layers:
             layer.reset_random()
 
     def sample(self, num_pts, condition):
-        z = torch.normal(0, 1, size=(num_pts*condition.shape[0], self.in_dim), device=self.device)
+        """
+            sample from the learned distribution
+
+            Parameters:
+            num_pts (int): Number of samples to generate for each given condition
+            condition (tensor): Conditions
+
+            Returns:
+            tensor[len(condition), num_pts, dims]: Samples 
+        """
+        z = torch.normal(0, 1,
+            size=(num_pts*condition.shape[0], self.in_dim),
+            device=next(self.parameters()).device)
         c = condition.repeat(num_pts,1)
         x, _ = self.forward(z, c, rev=True)
         return x.reshape(num_pts, condition.shape[0], self.in_dim).permute(1,0,2)
 
     def log_prob(self, x, c):
+        """
+            evaluate conditional log-likelihoods for given samples and conditions
+
+            Parameters:
+            x (tensor): Samples
+            c (tensor): Conditions
+
+            Returns:
+            tensor: Log-likelihoods
+        """
         z, log_jac_det = self.forward(x, c, rev=False)
         log_prob = - 0.5*torch.sum(z**2, 1) + log_jac_det - z.shape[1]/2 * math.log(2*math.pi)
         return log_prob
