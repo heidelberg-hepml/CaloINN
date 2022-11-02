@@ -1,3 +1,4 @@
+from functools import partial
 import shutil
 import argparse
 import os
@@ -14,13 +15,30 @@ def main():
     parser.add_argument('-c', '--use_cuda', action='store_true', default=False,
         help='whether cuda should be used')
     parser.add_argument('-p', '--plot', action='store_true', default=False,
-        help='make only plots for traint modle')
+        help='make only plots for traint model')
     args = parser.parse_args()
 
     with open(args.param_file) as f:
         params = yaml.load(f, Loader=yaml.FullLoader)
     use_cuda = torch.cuda.is_available() and args.use_cuda
     device = 'cuda:0' if use_cuda else 'cpu'
+
+    # set default parameters for the file locations
+    if "data_path_train" not in params:
+        particle = params.get("particle_type", "piplus")
+        data_path_train = os.path.join("..", "Datasets", particle , "train_" + particle + ".hdf5")
+        params["data_path_train"] = data_path_train
+        
+    if "data_path_test" not in params:
+        particle = params.get("particle_type", "piplus")
+        data_path_test = os.path.join("..", "Datasets", particle , "test_" + particle + ".hdf5")
+        params["data_path_test"] = data_path_test
+
+    if "classification_set" not in params:
+        particle = params.get("particle_type", "piplus")
+        classification_set = os.path.join("..", "Datasets", particle , "cls_" + particle + ".hdf5")
+        params["classification_set"] = classification_set
+
 
     doc = Documenter(params['run_name'])
     shutil.copy(args.param_file, doc.get_file('params.yaml'))
@@ -36,11 +54,12 @@ def main():
         torch.set_default_dtype(torch.float32)
 
     plot_params = {}
+    # TODO: Use os.path.join!
     plot_configs = [
-        'plot_params/plot_layer_0.yaml',
-        'plot_params/plot_layer_1.yaml',
-        'plot_params/plot_layer_2.yaml',
-        'plot_params/plots.yaml'
+        '../plot_params/plot_layer_0.yaml',
+        '../plot_params/plot_layer_1.yaml',
+        '../plot_params/plot_layer_2.yaml',
+        '../plot_params/plots.yaml'
     ]
     calo_layer = params.get('calo_layer', None)
     if calo_layer is None:

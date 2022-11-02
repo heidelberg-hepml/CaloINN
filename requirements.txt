@@ -14,3 +14,4 @@ scipy==1.8.1
 six==1.16.0
 torch==1.11.0
 typing_extensions==4.2.0
+pandas

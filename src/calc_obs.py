@@ -71,6 +71,35 @@ def calc_spectrum(data, layer=0, threshold=1e-5):
     data = data[f'layer_{layer}']
     return data[data > threshold]
 
+def calc_depth_weighted_total_energy(data):
+    l_1 = data[f'layer_1']*1e3
+    l_2 = data[f'layer_2']*1e3
+    w_en = l_1.sum((1,2)) + 2*l_2.sum((1,2))
+    return w_en
+
+def calc_depth_weighted_total_energy_normed(data):
+    w_en_normd = calc_depth_weighted_total_energy(data)/(calc_e_detector(data)*1e3)
+    return w_en_normd
+
+def calc_depth_weighted_total_energy_std(data):
+    en_1 = data[f'layer_1'].sum((1,2))*1e3
+    en_2 = data[f'layer_2'].sum((1,2))*1e3
+    tot = calc_e_detector(data)*1e3
+    w_en_normd_std = layer_std(en_1, en_2, tot) 
+    return w_en_normd_std
+
+def calc_layer_brightest_ratio(data, layer=0):
+    brightest_1 = calc_brightest_voxel(data, layer=layer, N=1)
+    brightest_2 = calc_brightest_voxel(data, layer=layer, N=2)
+    ratio = (brightest_1 - brightest_2)/(brightest_1 + brightest_2)
+    return ratio
+
+def layer_std(layer1, layer2, total):
+    """ helper function for standard deviation of layer depth"""
+    term1 = (layer1 + 4.*layer2) / total
+    term2 = ((layer1 + 2.*layer2)/total)**2
+    return np.sqrt(term1-term2)
+
 def calc_coro(data, layer=0, threshold=1e-5):
     img = np.copy(data[f'layer_{layer}'])
     mask = img > threshold

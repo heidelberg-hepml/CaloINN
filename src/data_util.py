@@ -116,13 +116,17 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
 def add_extra_dim(data, energies):
     s = np.sum(data, axis=1, keepdims=True)
     factors = s/energies
-    data /= s
+    # Worked originally inplace
+    # data /= s
+    data = data / s
     return np.concatenate((data, factors), axis=1)
 
 def remove_extra_dim(data, energies):
     factors = data[:,[-1]]
     data = data[:,:-1]
-    data /= np.sum(data, axis=1, keepdims=True)
+    # Worked originally inplace
+    # data /= np.sum(data, axis=1, keepdims=True)
+    data = data / np.sum(data, axis=1, keepdims=True)
     return data*energies*factors
 
 def add_extra_dims(data, e_part):
@@ -132,7 +136,9 @@ def add_extra_dims(data, e_part):
     u1 = (e0+e1+e2)/e_part
     u2 = e0/(e0+e1+e2)
     u3 = e1/(e1+e2+1e-7)
-    data /= np.sum(data, axis=1, keepdims=True)
+    # Worked originally inplace
+    # data /= np.sum(data, axis=1, keepdims=True)
+    data = data / np.sum(data, axis=1, keepdims=True)
     return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
 
 def remove_extra_dims(data, e_part):
@@ -145,12 +151,20 @@ def remove_extra_dims(data, e_part):
     e2 = e_tot - e0 -e1
     data = data[:,:-3]
     data[data<0] = 0.
-    data[..., :288]    /= (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
-    data[..., 288:432] /= (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
-    data[..., 432:]    /= (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
-    data[..., :288]    *= e0
-    data[..., 288:432] *= e1
-    data[..., 432:]    *= e2
+    # TODO: Might happen in place -> bug?
+    # Worked originally inplace
+    # data[..., :288]    /= (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
+    # data[..., 288:432] /= (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
+    # data[..., 432:]    /= (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
+    # data[..., :288]    *= e0
+    # data[..., 288:432] *= e1
+    # data[..., 432:]    *= e2
+    data[..., :288]    = data[..., :288] / (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
+    data[..., 288:432] = data[..., 288:432] / (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
+    data[..., 432:]    = data[..., 432:] / (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
+    data[..., :288]    = data[..., :288] * e0
+    data[..., 288:432] = data[..., 288:432] * e1
+    data[..., 432:]    = data[..., 432:] * e2
     return data
 
 # def add_extra_dims(data, energies):
@@ -174,19 +188,33 @@ def remove_extra_dims(data, e_part):
 #     data[..., 432:]    *= energies*factors_2
 #     return data
 
-def get_loaders(data_file, batch_size, ratio=0.8, device='cpu',
+def get_loaders(data_file_train, data_file_test, batch_size, ratio=0.8, device='cpu',
         width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
-    data, cond = preprocess(load_data(data_file, mask),
+    data_train, cond_train = preprocess(load_data(data_file_train, mask),
         use_extra_dim, use_extra_dims, layer=layer)
-    postprocess(data, cond, use_extra_dim, use_extra_dims, layer)
-    data = torch.tensor(data, device=device, dtype=torch.get_default_dtype())
-    cond = torch.tensor(cond, device=device, dtype=torch.get_default_dtype())
-    index = torch.randperm(len(data), device=device)
-    split = int(ratio*len(data))
-    data_train = data[index[:split]]
-    data_test = data[index[split:]]
-    cond_train = cond[index[:split]]
-    cond_test = cond[index[split:]]
+
+
+    data_test, cond_test = preprocess(load_data(data_file_test, mask),
+        use_extra_dim, use_extra_dims, layer=layer)
+
+
+    # Just to check that the function is not returning an error
+    postprocess(data_train, cond_train, use_extra_dim, use_extra_dims, layer)
+    postprocess(data_test, cond_test, use_extra_dim, use_extra_dims, layer)
+
+    data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
+    cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
+
+    data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
+    cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
+
+    # index = torch.randperm(len(data), device=device)
+    # split = int(ratio*len(data))
+    # data_train = data[index[:split]]
+    # data_test = data[index[split:]]
+    # cond_train = cond[index[:split]]
+    # cond_test = cond[index[split:]]
+
     loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
     loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
     return loader_train, loader_test

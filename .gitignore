@@ -140,3 +140,6 @@ src/search.py
 params/*
 !params/example.yaml
 !params/example_bayesian.yaml
+Datasets
+queuing_system
+notebooks
