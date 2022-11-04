@@ -133,7 +133,7 @@ class CaloDataset(Dataset):
         return sample
 
 
-# TODO: Added the data_path_val parameter
+# NOTE: Added the data_path_val parameter
 def get_dataloader(data_path_train, data_path_test, device, data_path_val=None,
                    batch_size=32, apply_logit=True, with_noise=False, normed=False,
                    normed_layer=False, return_label=False):

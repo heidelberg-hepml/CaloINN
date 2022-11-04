@@ -182,7 +182,6 @@ class Trainer:
 
                 self.latent_samples(epoch)
 
-                # TODO: Check again (uses the test data for plotting)
                 plotting.plot_all_hist(
                     self.doc.basedir,
                     self.params['data_path_test'],
@@ -316,7 +315,6 @@ class Trainer:
             batch_size (int): Batch size for samlpling
         """
         l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
-        # TODO: Check again (uses the test data for plotting)
         data = data_util.load_data(
             data_file=self.params.get('data_path_test'),
             mask=self.params.get("mask", 0))
@@ -350,7 +348,6 @@ class Trainer:
         # Just use the 100000 data points generated anyway
         # self.generate(100000)
         
-        # TODO: use train or test set here?
         train_path, val_path, test_path = prepare_classifier_datasets(
                                     original_dataset=self.params["classification_set"],
                                     generated_dataset=self.doc.get_file('samples.hdf5'),
