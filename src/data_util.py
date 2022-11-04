@@ -151,7 +151,6 @@ def remove_extra_dims(data, e_part):
     e2 = e_tot - e0 -e1
     data = data[:,:-3]
     data[data<0] = 0.
-    # TODO: Might happen in place -> bug?
     # Worked originally inplace
     # data[..., :288]    /= (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
     # data[..., 288:432] /= (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)

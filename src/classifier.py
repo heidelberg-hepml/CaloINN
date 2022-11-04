@@ -9,7 +9,6 @@ from sklearn.calibration import calibration_curve
 from sklearn.isotonic import IsotonicRegression
 # torch.set_default_dtype(torch.float64)
 
-# TODO: Look again at the input dimension
 class DNN(torch.nn.Module):
     """ NN for vanilla classifier """
     def __init__(self, input_dim, num_layer=2, num_hidden=512, dropout_probability=0.,
@@ -36,7 +35,6 @@ class DNN(torch.nn.Module):
         x = self.layers(x)
         return x
 
-# TODO: Not changed!
 class CNN(torch.nn.Module):
     """ CNN for improved classification """
     def __init__(self, is_classifier=True):
@@ -100,7 +98,7 @@ class CNN(torch.nn.Module):
         ret = self.linear_layers(all_together)
         return ret
 
-def preprocess(dataloader, arguments):
+def preprocess(data, arguments):
     """ takes dataloader and returns tensor of
         layer0, layer1, layer2, log10 energy
     """
@@ -120,13 +118,13 @@ def preprocess(dataloader, arguments):
     normalize = arguments["normalize"]
     use_logit = arguments["use_logit"]
 
-    layer0 = dataloader['layer_0']
-    layer1 = dataloader['layer_1']
-    layer2 = dataloader['layer_2']
-    energy = torch.log10(dataloader['energy']*10.).to(device)
-    E0 = dataloader['layer_0_E']
-    E1 = dataloader['layer_1_E']
-    E2 = dataloader['layer_2_E']
+    layer0 = data['layer_0']
+    layer1 = data['layer_1']
+    layer2 = data['layer_2']
+    energy = torch.log10(data['energy']*10.).to(device)
+    E0 = data['layer_0_E']
+    E1 = data['layer_1_E']
+    E2 = data['layer_2_E']
 
     if threshold:
         layer0 = torch.where(layer0 < 1e-7, torch.zeros_like(layer0), layer0)
@@ -143,7 +141,7 @@ def preprocess(dataloader, arguments):
     E2 = (torch.log10(E2.unsqueeze(-1)+1e-8) + 2.).to(device)
 
     # ground truth for the training
-    target = dataloader['label'].to(device)
+    target = data['label'].to(device)
 
     layer0 = layer0.view(layer0.shape[0], -1).to(device)
     layer1 = layer1.view(layer1.shape[0], -1).to(device)
@@ -415,8 +413,7 @@ def classifier_test(input_dim, device, data_path_train, data_path_val, data_path
                                                 sigmoid_in_BCE=sigmoid_in_BCE, arguments=arguments,
                                                 final=True)
         
-            # TODO: Better make a deepcopy!
-            calibration_data = dataloader_val
+            calibration_data = torch.clone(dataloader_val)
 
             prob_true, prob_pred = calibration_curve(result_true, result_pred, n_bins=10)
             print("unrescaled calibration curve:", prob_true, prob_pred)
