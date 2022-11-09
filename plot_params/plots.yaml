@@ -59,7 +59,7 @@ depth_weighted_tot_e_normd.pdf:
     n_bins: 99
     range: [0.4, 2.]
 
-depth_weighted_tot_e_normd.pdf:
+depth_weighted_tot_e_normd_std.pdf:
     label: 'shower depth width \(\sigma_{s_d}\)'
     func: calc_depth_weighted_total_energy_std
     n_bins: 99
