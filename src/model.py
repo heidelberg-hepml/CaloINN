@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -168,6 +169,8 @@ class CINN(nn.Module):
             layer_args["prior_prec"] = params["prior_prec"]
         if "std_init" in params:
             layer_args["std_init"] = params["std_init"]
+        if "sigma_fixed" in params:
+            layer_args["sigma_fixed"] = params["sigma_fixed"]
         def func(x_in, x_out):
             subnet = Subnet(
                     params.get("layers_per_block", 3),
@@ -318,6 +321,25 @@ class CINN(nn.Module):
     def disenable_map(self):
         for layer in self.bayesian_layers:
             layer.disenable_map()
+            
+    def fix_sigma(self):
+        for layer in self.bayesian_layers:
+            layer.fix_sigma()
+            
+        self.params_trainable = list(filter(
+                lambda p: p.requires_grad, self.model.parameters()))
+        
+    def unfix_sigma(self):
+        for layer in self.bayesian_layers:
+            layer.unfix_sigma()
+            
+        self.params_trainable = list(filter(
+                lambda p: p.requires_grad, self.model.parameters()))
+        
+    def reset_sigma(self):
+        for layer in self.bayesian_layers:
+            layer.unfix_sigma()
+            layer.reset_sigma(self.params.get("std_init", -9))
 
     def reset_random(self):
         """ samples a new random state for the Bayesian layers """
@@ -356,3 +378,48 @@ class CINN(nn.Module):
         z, log_jac_det = self.forward(x, c, rev=False)
         log_prob = - 0.5*torch.sum(z**2, 1) + log_jac_det - z.shape[1]/2 * math.log(2*math.pi)
         return log_prob
+
+
+class DNN(torch.nn.Module):
+    """ NN for vanilla classifier """
+    def __init__(self, input_dim, num_layer=2, num_hidden=512, dropout_probability=0.,
+                 is_classifier=True):
+        super(DNN, self).__init__()
+
+        self.dpo = dropout_probability
+
+        self.inputlayer = torch.nn.Linear(input_dim, num_hidden)
+        self.outputlayer = torch.nn.Linear(num_hidden, 1)
+
+        all_layers = [self.inputlayer, torch.nn.LeakyReLU(), torch.nn.Dropout(self.dpo)]
+        for _ in range(num_layer):
+            all_layers.append(torch.nn.Linear(num_hidden, num_hidden))
+            all_layers.append(torch.nn.LeakyReLU())
+            all_layers.append(torch.nn.Dropout(self.dpo))
+
+        all_layers.append(self.outputlayer)
+        if is_classifier:
+            all_layers.append(torch.nn.Sigmoid())
+        self.layers = torch.nn.Sequential(*all_layers)
+
+        self.sigmoid_in_BCE = not is_classifier
+        
+        if self.sigmoid_in_BCE:
+            self.loss_fct = torch.nn.BCEWithLogitsLoss()
+        else:
+            self.loss_fct = torch.nn.BCELoss()
+            
+        self.params_trainable = list(filter(
+                lambda p: p.requires_grad, self.parameters()))
+
+        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
+        n_trainable = sum([np.prod(p.size()) for p in model_parameters])
+        
+        print(f"number of parameters (classifier): {n_trainable}", flush=True)
+    
+    def forward(self, x):
+        x = self.layers(x)
+        return x
+    
+    def loss(self, *args, **kwargs):
+        return self.loss_fct(*args, **kwargs)

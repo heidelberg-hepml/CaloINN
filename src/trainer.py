@@ -6,18 +6,25 @@ import numpy as np
 import torch
 
 import data_util
-from model import CINN
+from model import CINN, DNN
 import plotting
 from plotter import Plotter
 from classifier import classifier_test
 from hdf5_helper import prepare_classifier_datasets
 
-class Trainer:
-    """ This class is responsible for training and testing the model.  """
+from classifer_data import get_dataloader
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import roc_auc_score
+from sklearn.isotonic import IsotonicRegression
+from sklearn.calibration import calibration_curve
 
-    def __init__(self, params, device, doc):
+
+class INNTrainer:
+    """ This class is responsible for training and testing the inn.  """
+
+    def __init__(self, params, device, doc, pretraining=False):
         """
-            Initializes train_loader, test_loader, model, optimizer and scheduler.
+            Initializes train_loader, test_loader, inn, optimizer and scheduler.
 
             Parameters:
             params: Dict containing the network and training parameter
@@ -28,6 +35,13 @@ class Trainer:
         self.params = params
         self.device = device
         self.doc = doc
+        
+        self.pretraining = pretraining
+        
+        if not self.pretraining:
+            self.epoch_offset = params.get("n_pretrain", 0)
+        else:
+            self.epoch_offset = 0
 
         # Actually split is now without function!
         train_loader, test_loader = data_util.get_loaders(
@@ -53,6 +67,9 @@ class Trainer:
         model = CINN(params, data, cond)
         self.model = model.to(device)
         self.set_optimizer(steps_per_epoch=len(train_loader))
+        
+        if self.pretraining:
+            self.model.fix_sigma()
 
         self.losses_train = {'inn': [], 'kl': [], 'total': []}
         self.losses_test = {'inn': [], 'kl': [], 'total': []}
@@ -146,7 +163,7 @@ class Trainer:
                         max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
 
             print('')
-            print(f'=== epoch {epoch} ===')
+            print(f'=== epoch {epoch+self.epoch_offset} ===')
             print(f'inn loss (train): {train_inn_loss}')
             if self.model.bayesian:
                 print(f'kl loss (train): {train_kl_loss}')
@@ -173,29 +190,29 @@ class Trainer:
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
                 self.save()
-                if not epoch == self.params['n_epochs']:
+                if (not epoch == self.params['n_epochs']) or self.pretraining:
                     final_plots = False
                     self.generate(10000)
                 else:
                     final_plots = True
                     self.generate(100000)
 
-                self.latent_samples(epoch)
+                self.latent_samples(epoch+self.epoch_offset)
 
                 plotting.plot_all_hist(
                     self.doc.basedir,
                     self.params['data_path_test'],
                     mask=self.params.get("mask", 0),
                     calo_layer=self.params.get("calo_layer", None),
-                    epoch=epoch,
+                    epoch=epoch+self.epoch_offset,
                     p_ref=self.params.get("particle_type", "piplus"),
                     in_one_file=final_plots)
-
-            # Classifier test
-            # TODO: Better implement in the documenter class
-            if (epoch == self.params['n_epochs']) and self.params.get('do_classifier_test', False):
-                self.start_classifier_test()
-
+                
+            # # Classifier test
+            # # TODO: Better implement in the documenter class
+            # if (epoch == self.params['n_epochs']) and self.params.get('do_classifier_test', False):
+            #     self.start_classifier_test()
+                
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
         if params is None:
@@ -343,54 +360,470 @@ class Trainer:
             l_plotter.update(data)
         l_plotter.plot()
         
-    def start_classifier_test(self):
+    # def start_classifier_test(self):
         
-        # Just use the 100000 data points generated anyway
-        # self.generate(100000)
+    #     # Just use the 100000 data points generated anyway
+    #     # self.generate(100000)
+        
+    #     train_path, val_path, test_path = prepare_classifier_datasets(
+    #                                 original_dataset=self.params["classification_set"],
+    #                                 generated_dataset=self.doc.get_file('samples.hdf5'),
+    #                                 save_dir=self.doc.basedir)
+        
+    #     save_dir = os.path.join(self.doc.basedir, "classifier_test", "old_version")
+        
+        
+    #     # TODO: Input dimension is hard coded
+    #     number_of_runs = self.params["classifier_runs"]
+    #     for run_number in range(number_of_runs):
+    #         classifier_test(input_dim=508,
+    #                         device=self.device,
+    #                         data_path_train=train_path,
+    #                         data_path_val=val_path,
+    #                         data_path_test=test_path,
+    #                         save_dir=save_dir,
+    #                         threshold=self.params["classifier_threshold"],
+    #                         normalize=self.params["classifier_normalize"],
+    #                         use_logit=self.params["classifier_use_logit"],
+    #                         sigmoid_in_BCE=self.params.get("sigmoid_in_BCE", True),
+    #                         lr=self.params.get("classifier_lr", 2e-4),
+    #                         n_epochs=self.params.get("classifier_n_epochs", 30),
+    #                         batch_size=self.params.get("classifier_batch_size", 1000),
+    #                         load=False,
+    #                         num_layer=self.params.get("DNN_hidden_layers", 2),
+    #                         num_hidden=self.params.get("DNN_hidden_neurons", 512),
+    #                         dropout_probability=self.params.get("DNN_dropout", 0.),
+    #                         run_number=run_number,
+    #                         modes=self.params.get("modes", ["DNN", "CNN"]))
+        
+    #     load = False
+    #     for mode in self.params.get("modes", ["DNN", "CNN"]):
+    #         filename = 'summary_'+('loaded_' if load else '')+mode+'.npy'
+    #         res = np.load(os.path.join(save_dir, filename), allow_pickle=True)            
+            
+    #         # Save the averages as txt.file
+    #         filename_average = 'averaged_'+('loaded_' if load else '')+mode+'.txt'
+    #         averaged = np.array([np.mean(res, axis=0), np.std(res, axis=0)])
+    #         np.savetxt(os.path.join(save_dir, filename_average), averaged)
+            
+    #         # Also save it neatly formatted as pdf
+    #         table_filename = os.path.join(save_dir, mode + "_classifier_results.pdf")
+    #         plotting.plot_average_table(res, table_filename)
+
+
+class DNNTrainer:
+    """ This class is responsible for training and testing the DNN.  """
+
+    def __init__(self, params, device, doc):
+        """
+            Initializes train_loader, test_loader, DNN, optimizer and scheduler.
+            Parameters:
+            params: Dict containing the network and training parameter
+            device: Device to use for the training
+            doc: An instance of the documenter class responsible for documenting the run
+        """
+        
+        # TODO: Very ugly
+        self.old_default_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float64)
+        
+        # Save some important parameters
+        self.run = 0
+        
+        self.params = params
+        self.device = device
+        self.doc = doc
+        self.sigmoid_in_BCE = self.params.get("sigmoid_in_BCE", True)
+        self.epochs = self.params.get("classifier_n_epochs", 30)
+        
+        # Generate the test set for the classifier training
         
         train_path, val_path, test_path = prepare_classifier_datasets(
                                     original_dataset=self.params["classification_set"],
                                     generated_dataset=self.doc.get_file('samples.hdf5'),
                                     save_dir=self.doc.basedir)
+
         
-        save_dir = os.path.join(self.doc.basedir, "classifier_test")
+        # TODO: Better use the data_util implementation!
+        dataloader_train, dataloader_val, dataloader_test = get_dataloader(
+                                                            data_path_train=train_path,
+                                                            data_path_test=test_path,
+                                                            data_path_val=val_path,
+                                                            apply_logit=False,
+                                                            device=device,
+                                                            batch_size=self.params.get("classifier_batch_size", 1000),
+                                                            with_noise=False,
+                                                            normed=False,
+                                                            normed_layer=False,
+                                                            return_label=True)
+                
+        self.train_loader = dataloader_train
+        self.val_loader = dataloader_val
+        self.test_loader = dataloader_test
         
+        # TODO: Read from data
+        self.num_dim = 508
+
+
+        model = DNN(input_dim=self.num_dim,
+                    num_layer=self.params.get("DNN_hidden_layers", 2), 
+                    num_hidden=self.params.get("DNN_hidden_neurons", 512), 
+                    dropout_probability=self.params.get("DNN_dropout", 0.), 
+                    is_classifier=(not self.sigmoid_in_BCE) )
         
-        # TODO: Input dimension is hard coded
-        number_of_runs = self.params["classifier_runs"]
-        for run_number in range(number_of_runs):
-            classifier_test(input_dim=508,
-                            device=self.device,
-                            data_path_train=train_path,
-                            data_path_val=val_path,
-                            data_path_test=test_path,
-                            save_dir=save_dir,
-                            threshold=self.params["classifier_threshold"],
-                            normalize=self.params["classifier_normalize"],
-                            use_logit=self.params["classifier_use_logit"],
-                            sigmoid_in_BCE=self.params.get("sigmoid_in_BCE", True),
-                            lr=self.params.get("classifier_lr", 2e-4),
-                            n_epochs=self.params.get("classifier_n_epochs", 30),
-                            batch_size=self.params.get("classifier_batch_size", 1000),
-                            load=False,
-                            num_layer=self.params.get("DNN_hidden_layers", 2),
-                            num_hidden=self.params.get("DNN_hidden_neurons", 512),
-                            dropout_probability=self.params.get("DNN_dropout", 0.),
-                            run_number=run_number,
-                            modes=self.params.get("modes", ["DNN", "CNN"]))
+        self.model = model.to(device)
         
-        load = False
-        for mode in self.params.get("modes", ["DNN", "CNN"]):
-            filename = 'summary_'+('loaded_' if load else '')+mode+'.npy'
-            res = np.load(os.path.join(save_dir, filename), allow_pickle=True)            
+        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("classifier_lr", 2e-4))
+
+        self.losses_train = []
+        self.losses_test = []
+        self.losses_val = []
+        self.learning_rates = []
+
+    def train(self):
+        """ Trains the model. """
+        
+        print("Start training the model")
+        print(f"cuda is used: {next(self.model.parameters()).is_cuda}")
+        
+        self.run += 1
+        
+        # TODO: Consider the dtype bug here!
+
+        best_eval_acc = float('-inf')
+
+        for epoch in range(1, self.epochs + 1):
+            self.epoch = epoch
             
-            # Save the averages as txt.file
-            filename_average = 'averaged_'+('loaded_' if load else '')+mode+'.txt'
-            averaged = np.array([np.mean(res, axis=0), np.std(res, axis=0)])
-            np.savetxt(os.path.join(save_dir, filename_average), averaged)
-            
-            # Also save it neatly formatted as pdf
-            table_filename = os.path.join(save_dir, mode + "_classifier_results.pdf")
-            plotting.plot_average_table(res, table_filename)
+            # Initialize the losses
+            train_loss = 0
+            val_loss = 0
+            max_grad = 0.0
+
+            # Train for one epoch
+            self.model.train()
+            for batch, batch_data in enumerate(self.train_loader):
+                
+                # Prepare the data of the current batch
+                input_vector, target_vector = self.__preprocess(batch_data)
+                output_vector = self.model(input_vector)
+                
+                # Do the gradient updates
+                self.optim.zero_grad()
+                loss = self.model.loss(output_vector, target_vector.unsqueeze(1))
+                loss.backward()
+                # TODO: Gradient clipping?
+                self.optim.step()
+
+                # Used for plotting
+                self.losses_train.append(loss.item())
+                
+                # Used for printing
+                train_loss += loss.item()*len(batch_data)
+                
+                # TODO: Maybe use a scheduler?
+
+                # Used for printing 
+                for param in self.model.params_trainable:
+                    max_grad = max(max_grad, torch.max(torch.abs(param.grad)).item())
+                    
+                    
+                # Store the accuracy on the training set
+                if self.sigmoid_in_BCE:
+                    pred = torch.round(torch.sigmoid(output_vector.detach()))
+                else:
+                    pred = torch.round(output_vector.detach())
+                target = torch.round(target_vector.detach())
+                
+                if batch == 0:
+                    res_true = target
+                    res_pred = pred
+                else:
+                    res_true = torch.cat((res_true, target), 0)
+                    res_pred = torch.cat((res_pred, pred), 0)
+
+            # Check the differences on the validation dataset
+            # and save the model with the best val score
+            self.model.eval()
+            with torch.no_grad():
+                for batch, batch_data in enumerate(self.val_loader):
+                    
+                    input_vector, target_vector = self.__preprocess(batch_data)
+                    output_vector = self.model(input_vector)
+                    
+                    # TODO: Origin of the dtype bug?
+                    pred = output_vector.reshape(-1)
+                    target = target_vector.double()
+                    
+                    # Store the model predictions
+                    if batch == 0:
+                        result_true = target
+                        result_pred = pred
+                    else:
+                        result_true = torch.cat((result_true, target), 0)
+                        result_pred = torch.cat((result_pred, pred), 0)
+                    
+
+                # Compute the loss vectorized for all batches of the current epoch
+                # TODO, NOTE: .CPU Changed
+                loss = self.model.loss(result_pred, result_true).cpu().numpy()
+                
+                # Apply the sigmoid to the prediction, if necessary
+                if self.sigmoid_in_BCE:
+                    result_pred = torch.sigmoid(result_pred).cpu().numpy()
+                else:
+                    result_pred = result_pred.cpu().numpy()
+                                        
+                result_true = result_true.cpu().numpy()
+                
+                # Compute the accuaracy over the training set
+                eval_acc = accuracy_score(result_true, np.round(result_pred))
+                eval_auc = roc_auc_score(result_true, result_pred)
+                JSD = - loss + np.log(2.)
+  
+                
+            # Save the model with the best validation loss
+            if eval_acc > best_eval_acc:
+                self.best_epoch = epoch + 1
+                self.save()
+                best_eval_acc = eval_acc
+      
+            # Saved for printing
+            val_loss = loss # Must not be normalized, since it is computed over the whole epoch!
+            # Normalize (computed per-batch)
+            # TODO: Replace .dataset with .data when using other dataloader
+            train_loss /= len(self.train_loader.dataset)
+            # Saved for plotting
+            self.losses_val.append(val_loss)
+
+            # Print the losses of this epoch
+            print('')
+            print(f'=== epoch {epoch} ===')
+            print(f'loss (train): {train_loss}')
+            print(f'loss (validation): {val_loss}')
+            print(f'maximum gradient: {max_grad}')
+            # Print statements from the old classifier file
+            print("Accuracy on training set is", accuracy_score(res_true.cpu(), res_pred.cpu()))
+            print("Accuracy on validation set is", eval_acc)
+            print("AUC on validation set is", eval_auc)
+            print(f"BCE loss of validation set is {loss}, JSD of the two dists is {JSD/np.log(2.)}")
+            sys.stdout.flush()
 
             
+            # Plot the monitoring data
+            if epoch >= 1:
+                sub_path = os.path.join("classifier_test", f"loss_{self.run}.png")
+                plotting.plot_loss(self.doc.get_file(sub_path), self.losses_train, self.losses_val, skip_epochs=False)
+                    
+            # Stop training if classifier is already perfect on validation set
+            if eval_acc == 1:
+                break
+
+    def __preprocess(self, data):
+        """ takes dataloader and returns tensor of
+            layer0, layer1, layer2, log10 energy
+        """
+
+        # Called for batches in order to prevent ram overflow
+        ALPHA = 1e-6
+
+        def logit(x):
+            return torch.log(x / (1.0 - x))
+
+        def logit_trafo(x):
+            local_x = ALPHA + (1. - 2.*ALPHA) * x
+            return logit(local_x)
+
+        device = self.device
+        threshold=self.params["classifier_threshold"]
+        normalize=self.params["classifier_normalize"]
+        use_logit=self.params["classifier_use_logit"]
+
+        layer0 = data['layer_0']
+        layer1 = data['layer_1']
+        layer2 = data['layer_2']
+        
+        energy = torch.log10(data['energy']*10.).to(device)
+        
+        E0 = data['layer_0_E']
+        E1 = data['layer_1_E']
+        E2 = data['layer_2_E']
+
+        if threshold:
+            layer0 = torch.where(layer0 < 1e-7, torch.zeros_like(layer0), layer0)
+            layer1 = torch.where(layer1 < 1e-7, torch.zeros_like(layer1), layer1)
+            layer2 = torch.where(layer2 < 1e-7, torch.zeros_like(layer2), layer2)
+
+        if normalize:
+            layer0 /= (E0.reshape(-1, 1, 1) +1e-16)
+            layer1 /= (E1.reshape(-1, 1, 1) +1e-16)
+            layer2 /= (E2.reshape(-1, 1, 1) +1e-16)
+
+        E0 = (torch.log10(E0.unsqueeze(-1)+1e-8) + 2.).to(device)
+        E1 = (torch.log10(E1.unsqueeze(-1)+1e-8) + 2.).to(device)
+        E2 = (torch.log10(E2.unsqueeze(-1)+1e-8) + 2.).to(device)
+
+        # ground truth for the training
+        target = data['label'].to(device)
+
+        layer0 = layer0.view(layer0.shape[0], -1).to(device)
+        layer1 = layer1.view(layer1.shape[0], -1).to(device)
+        layer2 = layer2.view(layer2.shape[0], -1).to(device)
+
+        if use_logit:
+            layer0 = logit_trafo(layer0)/10.
+            layer1 = logit_trafo(layer1)/10.
+            layer2 = logit_trafo(layer2)/10.
+
+        return torch.cat((layer0, layer1, layer2, energy, E0, E1, E2), 1), target
+       
+    def __calibrate_classifier(self, calibration_data):
+        """ reads in calibration data and performs a calibration with isotonic regression"""
+        self.model.eval()
+        assert calibration_data is not None, ("Need calibration data for calibration!")
+        for batch, data_batch in enumerate(calibration_data):
+            input_vector, target_vector = self.__preprocess(data_batch)
+            output_vector = self.model(input_vector)
+            if self.sigmoid_in_BCE:
+                pred = torch.sigmoid(output_vector).reshape(-1)
+            else:
+                pred = output_vector.reshape(-1)
+            # TODO: Another hard-coded dtype!
+            target = target_vector.to(torch.float64)
+            if batch == 0:
+                result_true = target
+                result_pred = pred
+            else:
+                result_true = torch.cat((result_true, target), 0)
+                result_pred = torch.cat((result_pred, pred), 0)
+        result_true = result_true.cpu().numpy()
+        result_pred = result_pred.cpu().numpy()
+        iso_reg = IsotonicRegression(out_of_bounds='clip', y_min=1e-6, y_max=1.-1e-6).fit(result_pred,
+                                                                                        result_true)
+        return iso_reg       
+    
+    def do_classifier_test(self, do_calibration=True):
+        # Use the model that worked best on the val set
+        self.load()
+        
+        with torch.no_grad():
+            for batch, batch_data in enumerate(self.test_loader):
+                    
+                input_vector, target_vector = self.__preprocess(batch_data)
+                output_vector = self.model(input_vector)
+                
+                # TODO: Origin of the dtype bug?
+                pred = output_vector.reshape(-1)
+                target = target_vector.double()
+                
+                # Store the model predictions
+                if batch == 0:
+                    result_true = target
+                    result_pred = pred
+                else:
+                    result_true = torch.cat((result_true, target), 0)
+                    result_pred = torch.cat((result_pred, pred), 0)
+                    
+            # TODO: Remove, if everything works
+            # # Compute the loss vectorized for all batches of the current epoch
+            # loss = self.model.loss(result_pred, result_true)
+            
+            # Apply the sigmoid to the prediction, if necessary
+            if self.sigmoid_in_BCE:
+                result_pred = torch.sigmoid(result_pred).cpu().numpy()
+            else:
+                result_pred = result_pred.cpu().numpy()
+                                    
+            result_true = result_true.cpu().numpy()
+            
+            if do_calibration:
+                # Isotonic calibration
+                calibrator = self.__calibrate_classifier(self.val_loader)
+                rescaled_pred = calibrator.predict(result_pred)
+            else:
+                # TODO:
+                # Never reached so far.
+                # Not tested so far
+                rescaled_pred = result_pred
+                
+            eval_acc = accuracy_score(result_true, np.round(rescaled_pred))
+            print("Rescaled accuracy is", eval_acc)
+            eval_auc = roc_auc_score(result_true, rescaled_pred)
+            print("rescaled AUC of dataset is", eval_auc)
+            prob_true, prob_pred = calibration_curve(result_true, rescaled_pred, n_bins=10)
+            print("rescaled calibration curve:", prob_true, prob_pred)
+        
+            # Save the test results
+            BCE = torch.nn.BCELoss()(torch.tensor(rescaled_pred), torch.tensor(result_true))
+            JSD = - BCE.cpu().numpy() + np.log(2.)
+            results = np.array([[eval_acc, eval_auc, JSD/np.log(2.), self.best_epoch]])
+            filename = 'summary_DNN.npy'
+            sub_path = os.path.join("classifier_test", filename)
+            if self.run == 1:
+                    np.save(self.doc.get_file(sub_path), results)
+            else:
+                prev_res = np.load(self.doc.get_file(sub_path),
+                                    allow_pickle=True)
+                new_res = np.concatenate([prev_res, results])
+                np.save(self.doc.get_file(sub_path), new_res)  
+            
+    def clean_up(self):
+        filename = 'summary_DNN.npy'
+        sub_path = os.path.join("classifier_test", filename)
+        res = np.load(self.doc.get_file(sub_path), allow_pickle=True)        
+        
+        # Save the averages as txt.file
+        filename_average = 'averaged_DNN.txt'
+        averaged = np.array([np.mean(res, axis=0), np.std(res, axis=0)])
+        sub_path = os.path.join("classifier_test", filename_average)
+        np.savetxt(self.doc.get_file(sub_path), averaged)
+        
+        # Also save it neatly formatted as pdf
+        table_filename = "DNN_classifier_results.pdf"
+        sub_path = os.path.join("classifier_test", table_filename)
+        plotting.plot_average_table(res, self.doc.get_file(sub_path))
+        
+        torch.set_default_dtype(self.old_default_dtype)
+      
+    def reset_model(self):
+        
+        model = DNN(input_dim=self.num_dim,
+                    num_layer=self.params.get("DNN_hidden_layers", 2), 
+                    num_hidden=self.params.get("DNN_hidden_neurons", 512), 
+                    dropout_probability=self.params.get("DNN_dropout", 0.), 
+                    is_classifier= (not self.sigmoid_in_BCE) )
+        self.model = model.to(self.device)
+        
+        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("classifier_lr", 2e-4))
+
+        self.losses_train = []
+        self.losses_test = []
+        self.losses_val = []
+        self.learning_rates = []
+      
+    def save(self):
+        """ Save the model, its optimizer, losses, learning rates and the epoch """
+        
+        sub_path = os.path.join("classifier_test",f"DNN_{self.run}.pt")
+        
+        torch.save({"opt": self.optim.state_dict(),
+                    "net": self.model.state_dict(),
+                    "losses": self.losses_val,
+                    "learning_rates": self.learning_rates,
+                    "epoch": self.epoch},
+                    self.doc.get_file(sub_path))
+
+    def load(self):
+        """ Load the model, its optimizer, losses, learning rates and the epoch """
+        
+        sub_path = os.path.join("classifier_test",f"DNN_{self.run}.pt")
+        
+        state_dicts = torch.load(self.doc.get_file(sub_path), map_location=self.device)
+        self.model.load_state_dict(state_dicts["net"])
+
+
+        self.losses_val = state_dicts.get("losses", {})
+        self.learning_rates = state_dicts.get("learning_rates", [])
+        self.epoch = state_dicts.get("epoch", 0)
+        self.optim.load_state_dict(state_dicts["opt"])
+        self.model.to(self.device)

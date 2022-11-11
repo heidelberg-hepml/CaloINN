@@ -49,7 +49,14 @@ class Documenter:
         if add_run_name:
             name_base, name_ext = os.path.splitext(name)
             name = f"{name_base}_{self.run_name}{name_ext}"
-        return os.path.join(self.basedir,name)
+            
+        full_path = os.path.join(self.basedir,name)
+        
+        if os.path.exists(os.path.dirname(full_path)):
+            return full_path
+        else:
+            os.makedirs(os.path.dirname(full_path), exist_ok=False)
+            return full_path
 
     def close(self):
         """ Ends redirection of stdout and changes the file permissions of the output folder

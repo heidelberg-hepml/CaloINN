@@ -28,7 +28,7 @@ eta_diff_0_2.pdf:
 eta_diff_1_2.pdf:
     label: '\(\left<\eta_2\right>-\left<\eta_1\right>\)'
     func: calc_layer_diff
-    args: {'layer1': 1, 'dir': 'eta'}
+    args: {'layer1': 1, 'layer2': 2, 'dir': 'eta'}
 
 phi_diff_0_1.pdf:
     label: '\(\left<\phi_1\right>-\left<\phi_0\right>\)'
@@ -43,7 +43,7 @@ phi_diff_0_2.pdf:
 phi_diff_1_2.pdf:
     label: '\(\left<\phi_2\right>-\left<\phi_1\right>\)'
     func: calc_layer_diff
-    args: {'layer1': 1, 'dir': 'phi'}
+    args: {'layer1': 1, 'layer2': 2, 'dir': 'phi'}
 
 depth_weighted_tot_e.pdf:
     label: 'lateral depth \(l_d\)'
