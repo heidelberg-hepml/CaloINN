@@ -2,12 +2,14 @@ from functools import partial
 import shutil
 import argparse
 import os
-
+import sys
 import yaml
 import torch
 
 from documenter import Documenter
-from trainer import Trainer
+from trainer import INNTrainer, DNNTrainer
+
+from copy import deepcopy
 
 def main():
     parser = argparse.ArgumentParser(description='train network')
@@ -70,10 +72,48 @@ def main():
         with open(plot_configs[calo_layer]) as f:
             plot_params.update(yaml.load(f, Loader=yaml.FullLoader))
 
-    trainer = Trainer(params, device, doc)
-    trainer.train()
+    n_pretrain = params.get("n_pretrain", 0)
+    
+    if n_pretrain > 0:
+        pretrain_params = deepcopy(params)
+        pretrain_params["n_epochs"] = n_pretrain
+        pretrain_params["std_init"] = params.get("pretrain_std", -25)
+        pretrain_params["max_lr"] = params.get("pretrain_max_lr", params["max_lr"])
+        
+        params["n_epochs"] = params["n_epochs"] - n_pretrain
+
+        # Pretrain the model with a fixed std and train the model afterwards normaly with
+        # improved initial parameters
+        inn_pretrainer = INNTrainer(pretrain_params, device, doc, pretraining=True)
+        inn_pretrainer.train()
+        
+        inn_trainer = INNTrainer(params, device, doc)
+        inn_trainer.load()
+        inn_trainer.model.reset_sigma()
+        inn_trainer.train()
+        
+    else:
+        inn_trainer = INNTrainer(params, device, doc)
+        inn_trainer.train()
+    # TODO: Better pass the path to the sampled data here as string
+    
+    # Do the classifier test if required
+    # TODO: Could also run over different "modes" here...
+    print("starting classifier test")
+    sys.stdout.flush()
+    if params.get('do_classifier_test', False):
+        dnn_trainer = DNNTrainer(params, device, doc)
+        for _ in range(params["classifier_runs"]):
+            dnn_trainer.train()
+            # TODO: Pass as params parameter
+            dnn_trainer.do_classifier_test(do_calibration=True)
+            dnn_trainer.reset_model()
+            
+        # Needed for final table and to fix dtype bug!
+        dnn_trainer.clean_up()
+    
     if 'bayesian' in params and params['bayesian']:
-        trainer.plot_uncertaintys(plot_params)
+        inn_trainer.plot_uncertaintys(plot_params)
 
 if __name__=='__main__':
     main()

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class VBLinear(nn.Module):
-    def __init__(self, in_features, out_features, prior_prec=1.0, _map=False, std_init=-9):
+    def __init__(self, in_features, out_features, prior_prec=1.0, _map=False, std_init=-9, sigma_fixed=False):
         super(VBLinear, self).__init__()
         self.n_in = in_features
         self.n_out = out_features
@@ -16,6 +16,10 @@ class VBLinear(nn.Module):
         self.mu_w = nn.Parameter(torch.Tensor(out_features, in_features))
         self.logsig2_w = nn.Parameter(torch.Tensor(out_features, in_features))
         self.std_init = std_init
+                
+        if sigma_fixed:
+            self.logsig2_w.requires_grad = False
+        
         self.reset_parameters()
 
     def enable_map(self):
@@ -23,7 +27,17 @@ class VBLinear(nn.Module):
 
     def disenable_map(self):
         self.map = False
-
+        
+    def fix_sigma(self):
+        self.logsig2_w.requires_grad = False
+        
+    def unfix_sigma(self):
+        self.logsig2_w.requires_grad = True
+        
+    def reset_sigma(self, std_init):
+        self.std_init = std_init
+        self.logsig2_w.data.zero_().normal_(self.std_init, 0.001)
+        
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.mu_w.size(1))
         self.mu_w.data.normal_(0, stdv)

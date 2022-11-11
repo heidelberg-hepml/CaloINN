@@ -173,7 +173,8 @@ def plot_hist(
 def plot_loss(
         file_name,
         loss_train,
-        loss_test):
+        loss_test,
+        skip_epochs=True):
     fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
 
     c = len(loss_test)/len(loss_train)
@@ -184,7 +185,7 @@ def plot_loss(
     ax.set_xlim([0,len(loss_test)])
     # nested np.mins needed for the case of different length
     # print(len(loss_test))
-    if len(loss_test) <= 10:
+    if len(loss_test) <= 10 or (not skip_epochs):
         y_min = np.min(np.min(np.array([loss_train, loss_test], dtype=object)))
         y_max = np.max(np.max(np.array([loss_train, loss_test], dtype=object)))
     elif len(loss_test) <= 20:
@@ -198,7 +199,7 @@ def plot_loss(
         y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
         
     # print(y_min, y_max)
-    ax.set_ylim([y_min - 50, y_max + 50])
+    ax.set_ylim([y_min*0.9, y_max*1.1])
     ax.set_xlabel('epoch', fontproperties=axislabelfont)
     ax.set_ylabel('loss', fontproperties=axislabelfont)
 
@@ -331,6 +332,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
         reference_coppy = {k: np.copy(v) for k, v in reference.items()}
 
         iteration = 0
+        # TODO: Swap iterations over j and i
         for j in range(6):
             for i in range(rows*3):
                 if iteration == number_of_plots:

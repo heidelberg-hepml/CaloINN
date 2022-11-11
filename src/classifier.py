@@ -413,7 +413,7 @@ def classifier_test(input_dim, device, data_path_train, data_path_val, data_path
                                                 sigmoid_in_BCE=sigmoid_in_BCE, arguments=arguments,
                                                 final=True)
         
-            calibration_data = torch.clone(dataloader_val)
+            calibration_data = dataloader_val
 
             prob_true, prob_pred = calibration_curve(result_true, result_pred, n_bins=10)
             print("unrescaled calibration curve:", prob_true, prob_pred)
