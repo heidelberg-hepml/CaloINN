@@ -1,6 +1,7 @@
 import numpy as np
 import h5py
 import torch
+from copy import deepcopy
 
 from myDataLoader import MyDataLoader
 
@@ -87,6 +88,9 @@ def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, 
     return x, c
 
 def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5):
+    
+    samples = deepcopy(samples)
+    
     assert len(energy) == len(samples)
 
     if use_extra_dims:
@@ -142,6 +146,7 @@ def add_extra_dims(data, e_part):
     return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
 
 def remove_extra_dims(data, e_part):
+    data = deepcopy(data)
     u1 = data[:,[-3]]/(1+data[:,[-3]])
     u2 = data[:,[-2]]/(1+data[:,[-2]])
     u3 = data[:,[-1]]/(1+data[:,[-1]])
@@ -159,7 +164,9 @@ def remove_extra_dims(data, e_part):
     # data[..., 288:432] *= e1
     # data[..., 432:]    *= e2
     data[..., :288]    = data[..., :288] / (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
+    # print((np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7))
     data[..., 288:432] = data[..., 288:432] / (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
+    # print((np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7))
     data[..., 432:]    = data[..., 432:] / (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
     data[..., :288]    = data[..., :288] * e0
     data[..., 288:432] = data[..., 288:432] * e1
