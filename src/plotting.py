@@ -56,7 +56,7 @@ def plot_average_table(data, save_file):
     ax.axis('off')
     ax.axis('tight')
 
-    ax.table(cellText=df.values.round(2), colLabels=df.columns, rowLabels=row_labels,
+    ax.table(cellText=df.values.round(4), colLabels=df.columns, rowLabels=row_labels,
             loc='center', cellLoc="left",colWidths = [0.1]*len(df.columns),
             colLoc="center", rowLoc="center")
     fig.tight_layout()
