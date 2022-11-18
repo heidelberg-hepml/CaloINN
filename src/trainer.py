@@ -70,6 +70,9 @@ class INNTrainer:
         self.losses_train = {'inn': [], 'kl': [], 'total': []}
         self.losses_test = {'inn': [], 'kl': [], 'total': []}
         self.learning_rates = []
+        
+        self.max_grad = []
+        self.max_grad_norm = []
 
     def train(self):
         """ Trains the model. """
@@ -117,6 +120,17 @@ class INNTrainer:
 
                 for param in self.model.params_trainable:
                     max_grad = max(max_grad, torch.max(torch.abs(param.grad)).item())
+                    # print(param.grad.shape)
+                self.max_grad.append(max_grad)
+                
+                if self.params.get("store_grad_norm", False):
+                    # Use a code similar to pytorchs clip_grad_norm_:
+                    grads = [p.grad for p in self.model.params_trainable if p.grad is not None] 
+                    norm_type = float(2) # L2 norm
+                    total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(self.device) for g in grads]), norm_type)
+                    print(total_norm)
+                    self.max_grad_norm.append(total_norm.item())
+                    
 
             self.model.eval()
             with torch.no_grad():
@@ -180,12 +194,16 @@ class INNTrainer:
             sys.stdout.flush()
 
             if epoch >= 1:
-                plotting.plot_loss(self.doc.get_file('loss.png'), self.losses_train['total'], self.losses_test['total'])
+                plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
                 if self.model.bayesian:
-                    plotting.plot_loss(self.doc.get_file('loss_inn.png'), self.losses_train['inn'], self.losses_test['inn'])
-                    plotting.plot_loss(self.doc.get_file('loss_kl.png'), self.losses_train['kl'], self.losses_test['kl'])
+                    plotting.plot_loss(self.doc.get_file('loss_inn.pdf'), self.losses_train['inn'], self.losses_test['inn'])
+                    plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
                 if self.scheduler is not None:
-                    plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
+                    plotting.plot_lr(self.doc.get_file('learning_rate.pdf'), self.learning_rates, len(self.train_loader))
+                
+                plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
+                if self.params.get("store_grad_norm", False):
+                    plotting.plot_grad(self.doc.get_file('maximum_gradient_norm.pdf'), self.max_grad_norm, len(self.train_loader))
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
                 if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
@@ -262,6 +280,7 @@ class INNTrainer:
                     "losses_test": self.losses_test,
                     "losses_train": self.losses_train,
                     "learning_rates": self.learning_rates,
+                    "grads": self.max_grad,
                     "epoch": self.epoch}, self.doc.get_file(f"model{epoch}.pt"))
 
     def load(self, epoch="", update_offset=False):
@@ -278,6 +297,7 @@ class INNTrainer:
             self.losses_train = state_dicts.get("losses_train", {})
         self.learning_rates = state_dicts.get("learning_rates", [])
         self.epoch = state_dicts.get("epoch", 0)
+        self.max_grad = state_dicts.get("grads", [])
         if update_offset:
             self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
@@ -629,7 +649,7 @@ class DNNTrainer:
             
             # Plot the monitoring data
             if epoch >= 1:
-                sub_path = os.path.join("classifier_test", f"loss_{self.run}.png")
+                sub_path = os.path.join("classifier_test", f"loss_{self.run}.pdf")
                 plotting.plot_loss(self.doc.get_file(sub_path), self.losses_train, self.losses_val, skip_epochs=False)
                     
             # Stop training if classifier is already perfect on validation set

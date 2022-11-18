@@ -230,7 +230,28 @@ def plot_lr(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
+    
+def plot_grad(
+        file_name,
+        gradients,
+        batches_per_epoch=1):
+    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
 
+    ax.plot(np.arange(1,len(gradients)+1)/batches_per_epoch, gradients, color='red', label='gradient')
+
+    ax.set_xlim([0,len(gradients)/batches_per_epoch])
+    ax.set_xlabel('epoch', fontproperties=axislabelfont)
+    ax.set_ylabel('gradient', fontproperties=axislabelfont)
+    ax.set_yscale("log")
+
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
+
+    fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
+    
 def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_layer=None, epoch=None, in_one_file=False, p_ref="e_plus"):
     data_file = os.path.join(results_dir, 'samples.hdf5')
     if epoch:
