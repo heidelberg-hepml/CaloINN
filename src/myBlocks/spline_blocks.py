@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import FrEIA.modules as fm
 
+import matplotlib.pyplot as plt
+import numpy as np
 
 class CubicSplineBlock(fm.InvertibleModule):
 
@@ -419,9 +421,13 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
             for i, j in enumerate(np.random.permutation(channels)):
                 w[i, j] = 1.
 
-        self.w_perm = nn.Parameter(torch.FloatTensor(w).view(channels, channels, *([1] * self.input_rank)),
+        # self.w_perm = nn.Parameter(torch.FloatTensor(w).view(channels, channels, *([1] * self.input_rank)),
+        #                            requires_grad=False)
+        # self.w_perm_inv = nn.Parameter(torch.FloatTensor(w.T).view(channels, channels, *([1] * self.input_rank)),
+        #                                requires_grad=False)
+        self.w_perm = nn.Parameter(torch.Tensor(w).view(channels, channels, *([1] * self.input_rank)),
                                    requires_grad=False)
-        self.w_perm_inv = nn.Parameter(torch.FloatTensor(w.T).view(channels, channels, *([1] * self.input_rank)),
+        self.w_perm_inv = nn.Parameter(torch.Tensor(w.T).view(channels, channels, *([1] * self.input_rank)),
                                        requires_grad=False)
 
         if subnet_constructor is None:
@@ -527,6 +533,22 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
             c = - input_delta * (inputs - input_cumheights)
 
             discriminant = b.pow(2) - 4 * a * c
+            
+            ######################################################################
+            # Mini-Debug terminal
+            if not (discriminant >= 0).all():
+                print(f"{discriminant=}, \n {a=}, \n {b=}, \n {c=}, \n {theta=}")
+                while True:
+                    inp = input()
+                    print(inp)
+                    if inp=="break":
+                        break
+                    try:
+                        print(eval(inp), flush=True)
+                    except:
+                        print("Cannot do this", flush=True)
+            #######################################################################
+            
             assert (discriminant >= 0).all()
 
             root = (2 * c) / (-b - torch.sqrt(discriminant))
@@ -584,6 +606,11 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
     def forward(self, x, c=[], rev=False, jac=True):
         '''See base class docstring'''
         self.bounds = self.bounds.to(x[0].device)
+        
+        # For debugging
+        # print(np.exp(c[0].cpu().numpy()))
+        self.cond = torch.exp(c[0])
+        self.data = x[0]
 
         if rev:
             x, global_scaling_jac = self._permute(x[0], rev=True)
