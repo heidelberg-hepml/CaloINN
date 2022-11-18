@@ -221,28 +221,6 @@ class Plotter:
                 plt.xlim(tuple(np.exp(np.array(self.range))))
             else:
                 plt.xlim(tuple(self.range))
-            # print(os.path.basename(self.plot_name))
-            # interesting_names = ["eta_diff_1_2.pdf", "eta_diff_0_2.pdf",
-            #                      "phi_diff_1_2.pdf", "phi_diff_0_2.pdf"]
-            # sys.stdout.flush()
-            # if os.path.basename(self.plot_name) in interesting_names:
-            #     print("--------------------------------------")
-            #     print(os.path.basename(self.plot_name))
-            #     print("--------------------------------------")
-            #     print("train hist")
-            #     print(self.train_hist)
-            #     print("--------------------------------------")
-            #     print("train hist std")
-            #     print(self.train_hist_std)
-            #     print("--------------------------------------")
-            #     print("INN hist")
-            #     print(self.get_mean())
-            #     print("--------------------------------------")
-            #     print("INN std")
-            #     print(self.get_std())
-            #     print("--------------------------------------")
-            #     sys.stdout.flush()
-
             fig.savefig(self.plot_name, bbox_inches='tight', format='pdf', pad_inches=0.05)
             plt.close()
 
