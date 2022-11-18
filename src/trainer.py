@@ -37,11 +37,7 @@ class INNTrainer:
         self.doc = doc
         
         self.pretraining = pretraining
-        
-        if not self.pretraining:
-            self.epoch_offset = params.get("n_pretrain", 0)
-        else:
-            self.epoch_offset = 0
+        self.epoch_offset = 0
 
         # Actually split is now without function!
         train_loader, test_loader = data_util.get_loaders(
@@ -84,7 +80,7 @@ class INNTrainer:
         self.latent_samples(0)
         N = len(self.train_loader.data)
 
-        for epoch in range(1,self.params['n_epochs']+1):
+        for epoch in range(self.epoch_offset+1,self.params['n_epochs']+1):
             self.epoch = epoch
             train_loss = 0
             test_loss = 0
@@ -115,8 +111,9 @@ class INNTrainer:
                 self.losses_train['total'].append(loss.item())
                 train_inn_loss += inn_loss.item()*len(x)
                 train_loss += loss.item()*len(x)
-                self.scheduler.step()
-                self.learning_rates.append(self.scheduler.get_last_lr()[0])
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                    self.learning_rates.append(self.scheduler.get_last_lr()[0])
 
                 for param in self.model.params_trainable:
                     max_grad = max(max_grad, torch.max(torch.abs(param.grad)).item())
@@ -163,7 +160,7 @@ class INNTrainer:
                         max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
 
             print('')
-            print(f'=== epoch {epoch+self.epoch_offset} ===')
+            print(f'=== epoch {epoch} ===')
             print(f'inn loss (train): {train_inn_loss}')
             if self.model.bayesian:
                 print(f'kl loss (train): {train_kl_loss}')
@@ -172,7 +169,8 @@ class INNTrainer:
             if self.model.bayesian:
                 print(f'kl loss (test): {test_kl_loss}')
                 print(f'total loss (test): {test_loss}')
-            print(f'lr: {self.scheduler.get_last_lr()[0]}')
+            if self.scheduler is not None:
+                print(f'lr: {self.scheduler.get_last_lr()[0]}')
             if self.model.bayesian:
                 print(f'maximum bias: {max_bias}')
                 print(f'maximum mu_w: {max_mu_w}')
@@ -186,9 +184,12 @@ class INNTrainer:
                 if self.model.bayesian:
                     plotting.plot_loss(self.doc.get_file('loss_inn.png'), self.losses_train['inn'], self.losses_test['inn'])
                     plotting.plot_loss(self.doc.get_file('loss_kl.png'), self.losses_train['kl'], self.losses_test['kl'])
-                plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
+                if self.scheduler is not None:
+                    plotting.plot_lr(self.doc.get_file('learning_rate.png'), self.learning_rates, len(self.train_loader))
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
+                if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
+                    self.save(epoch=epoch)
                 self.save()
                 if (not epoch == self.params['n_epochs']) or self.pretraining:
                     final_plots = False
@@ -197,14 +198,14 @@ class INNTrainer:
                     final_plots = True
                     self.generate(100000)
 
-                self.latent_samples(epoch+self.epoch_offset)
+                self.latent_samples(epoch)
 
                 plotting.plot_all_hist(
                     self.doc.basedir,
                     self.params['data_path_test'],
                     mask=self.params.get("mask", 0),
                     calo_layer=self.params.get("calo_layer", None),
-                    epoch=epoch+self.epoch_offset,
+                    epoch=epoch,
                     p_ref=self.params.get("particle_type", "piplus"),
                     in_one_file=final_plots)
                 
@@ -251,28 +252,38 @@ class INNTrainer:
                 params.get("max_lr", params["lr"]*10),
                 epochs = params.get("opt_epochs") or params["n_epochs"],
                 steps_per_epoch=steps_per_epoch)
+        elif self.lr_sched_mode == "no_scheduling":
+            self.scheduler = None
 
     def save(self, epoch=""):
         """ Save the model, its optimizer, losses, learning rates and the epoch """
         torch.save({"opt": self.optim.state_dict(),
                     "net": self.model.state_dict(),
-                    "losses": self.losses_test,
+                    "losses_test": self.losses_test,
+                    "losses_train": self.losses_train,
                     "learning_rates": self.learning_rates,
                     "epoch": self.epoch}, self.doc.get_file(f"model{epoch}.pt"))
 
-    def load(self, epoch=""):
+    def load(self, epoch="", update_offset=False):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
         name = self.doc.get_file(f"model{epoch}.pt")
         state_dicts = torch.load(name, map_location=self.device)
         self.model.load_state_dict(state_dicts["net"])
 
-        self.losses_test = state_dicts.get("losses", {})
+        if "losses" in state_dicts:
+            self.losses_test = state_dicts.get("losses", {})
+        elif "losses_test" in state_dicts:
+            self.losses_test = state_dicts.get("losses_test", {})
+        if "losses_train" in state_dicts:
+            self.losses_train = state_dicts.get("losses_train", {})
         self.learning_rates = state_dicts.get("learning_rates", [])
         self.epoch = state_dicts.get("epoch", 0)
+        if update_offset:
+            self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
 
-    def generate(self, num_samples, batch_size = 10000):
+    def generate(self, num_samples, batch_size = 10000, return_data=False, save_data=True):
         """
             generate new data using the modle and storing them to a file in the run folder.
 
@@ -292,16 +303,22 @@ class INNTrainer:
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
         samples -= self.params.get("width_noise", 1e-7)
-        data_util.save_data(
-            data = data_util.postprocess(
-                samples,
-                energies,
-                use_extra_dim=self.params.get("use_extra_dim", False),
-                use_extra_dims=self.params.get("use_extra_dims", False),
-                layer=self.params.get("calo_layer", None)
-            ),
-            data_file = self.doc.get_file('samples.hdf5')
-        )
+        
+        data = data_util.postprocess(
+                    samples,
+                    energies,
+                    use_extra_dim=self.params.get("use_extra_dim", False),
+                    use_extra_dims=self.params.get("use_extra_dims", False),
+                    layer=self.params.get("calo_layer", None)
+                )
+        
+        if save_data:
+            data_util.save_data(
+                data = data,
+                data_file = self.doc.get_file('samples.hdf5')
+            )
+        if return_data:
+            return data
 
     def latent_samples(self, epoch=None):
         """
