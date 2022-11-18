@@ -79,8 +79,6 @@ def main():
         pretrain_params["n_epochs"] = n_pretrain
         pretrain_params["std_init"] = params.get("pretrain_std", -25)
         pretrain_params["max_lr"] = params.get("pretrain_max_lr", params["max_lr"])
-        
-        params["n_epochs"] = params["n_epochs"] - n_pretrain
 
         # Pretrain the model with a fixed std and train the model afterwards normaly with
         # improved initial parameters
@@ -88,7 +86,7 @@ def main():
         inn_pretrainer.train()
         
         inn_trainer = INNTrainer(params, device, doc)
-        inn_trainer.load()
+        inn_trainer.load(update_offset=True)
         inn_trainer.model.reset_sigma()
         inn_trainer.train()
         
