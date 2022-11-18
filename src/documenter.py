@@ -8,7 +8,7 @@ class Documenter:
     """ Class that makes network runs self-documenting. All output data including the saved
     model, log file, parameter file and plots are saved into an output folder. """
 
-    def __init__(self, run_name, existing_run=None, read_only=False):
+    def __init__(self, run_name, existing_run=None, read_only=False, basedir=None, log_name="log.txt"):
         """ If existing_run is None, a new output folder named as run_name prefixed by date
         and time is created. stdout and stderr are redirected into a log file. The method
         close is registered to be automatically called when the program exits. """
@@ -25,10 +25,14 @@ class Documenter:
                 except FileExistsError:
                     now += timedelta(seconds=1)
         else:
-            self.basedir = os.path.join(script_dir, "../results", existing_run)
+            if basedir is not None:
+                self.basedir = basedir
+            else:
+                self.basedir = os.path.join(script_dir, "../results", existing_run)
+            print(f"Using the directory: {self.basedir}")
 
         if not read_only:
-            self.tee = Tee(self.add_file("log.txt", False))
+            self.tee = Tee(self.add_file(log_name, False))
             atexit.register(self.close)
 
     def add_file(self, name, add_run_name=True):
