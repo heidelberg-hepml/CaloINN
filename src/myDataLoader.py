@@ -41,6 +41,9 @@ class MyDataLoader:
     def add_noise(self, input: torch.Tensor) -> torch.Tensor:
         noise = self.noise_distribution.sample(input.shape)*self.width_noise
         return input + noise.reshape(input.shape)
+    
+    def drop_last_batch(self):
+        self.max_batch = len(self.data) // self.batch_size
 
     def __len__(self) -> int:
         return self.max_batch
