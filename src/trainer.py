@@ -54,6 +54,10 @@ class INNTrainer:
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
+        
+        if self.params.get("drop_last", False):
+            self.train_loader.drop_last_batch()
+            self.test_loader.drop_last_batch()
 
         self.num_dim = train_loader.data.shape[1]
 
@@ -72,7 +76,7 @@ class INNTrainer:
         self.learning_rates = []
         
         self.max_grad = []
-        self.max_grad_norm = []
+        self.grad_norm = []
 
     def train(self):
         """ Trains the model. """
@@ -96,18 +100,23 @@ class INNTrainer:
 
             self.model.train()
             for x, c in self.train_loader:
+                max_grad_batch = 0.0
                 self.optim.zero_grad()
                 inn_loss = - torch.mean(self.model.log_prob(x,c))
                 if self.model.bayesian:
                     kl_loss = self.model.get_kl() / N
-                    loss = inn_loss + kl_loss
+                    # TODO: Maybe remove later again (also below)
+                    # loss = inn_loss + kl_loss
+                    
+                    loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
                     self.losses_train['kl'].append(kl_loss.item())
                     train_kl_loss += kl_loss.item()*len(x)
                 else:
                     loss = inn_loss
                 loss.backward()
                 if 'grad_clip' in self.params:
-                    torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], float('inf'))
+                    # torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], float('inf'))
+                    torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], 2)
                 self.optim.step()
 
                 self.losses_train['inn'].append(inn_loss.item())
@@ -119,17 +128,17 @@ class INNTrainer:
                     self.learning_rates.append(self.scheduler.get_last_lr()[0])
 
                 for param in self.model.params_trainable:
-                    max_grad = max(max_grad, torch.max(torch.abs(param.grad)).item())
-                    # print(param.grad.shape)
-                self.max_grad.append(max_grad)
+                    if param.grad is not None:
+                        max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
+                max_grad = max(max_grad_batch, max_grad)
+                self.max_grad.append(max_grad_batch)
                 
                 if self.params.get("store_grad_norm", False):
                     # Use a code similar to pytorchs clip_grad_norm_:
                     grads = [p.grad for p in self.model.params_trainable if p.grad is not None] 
                     norm_type = float(2) # L2 norm
                     total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(self.device) for g in grads]), norm_type)
-                    print(total_norm)
-                    self.max_grad_norm.append(total_norm.item())
+                    self.grad_norm.append(total_norm.item())
                     
 
             self.model.eval()
@@ -138,7 +147,9 @@ class INNTrainer:
                     inn_loss = - torch.mean(self.model.log_prob(x,c))
                     if self.model.bayesian:
                         kl_loss = self.model.get_kl() / N
-                        loss = inn_loss + kl_loss
+                        # TODO: Maybe remove later again
+                        # loss = inn_loss + kl_loss
+                        loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
                         test_kl_loss += kl_loss.item()*len(x)
                     else:
                         loss = inn_loss
@@ -203,7 +214,7 @@ class INNTrainer:
                 
                 plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
                 if self.params.get("store_grad_norm", False):
-                    plotting.plot_grad(self.doc.get_file('maximum_gradient_norm.pdf'), self.max_grad_norm, len(self.train_loader))
+                    plotting.plot_grad(self.doc.get_file('gradient_norm.pdf'), self.grad_norm, len(self.train_loader))
 
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
                 if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
