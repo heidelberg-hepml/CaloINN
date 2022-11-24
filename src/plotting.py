@@ -79,7 +79,8 @@ def plot_hist(
         ymax=None,
         ax=None,
         panel_ax=None,
-        panel_scale="log"):
+        panel_scale="log",
+        density=True):
     data = data[np.isfinite(data)]
     reference = reference[np.isfinite(reference)]
 
@@ -116,10 +117,10 @@ def plot_hist(
         fig, ax = plt.subplots(1,1,figsize=(6,6))
 
     ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
-        alpha=1, color=color, density='True', label='CaloINN')
+        alpha=1, color=color, density=density, label='CaloINN')
 
     ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
-            alpha=0.5, color=color, density='True', label='GEANT')
+            alpha=0.5, color=color, density=density, label='GEANT')
 
     if panel_ax is not None:
         assert len(bins_0) == len(bins_1)
@@ -167,8 +168,9 @@ def plot_hist(
     if create_fig:
         fig.tight_layout()
         fig.savefig(file_name, bbox_inches='tight')
-
-    plt.close()
+        
+    if panel_ax is None:
+        plt.close()
     
 def plot_loss(
         file_name,
