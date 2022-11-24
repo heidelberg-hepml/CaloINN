@@ -39,6 +39,8 @@ class INNTrainer:
         
         # Pretraining implies a fixed sigma
         self.pretraining = pretraining
+        if self.pretraining:
+            self.model.fix_sigma()
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
@@ -55,42 +57,56 @@ class INNTrainer:
             mask=params.get("mask", 0),
             layer=params.get("calo_layer", None)
         )
+        
+        # Save the dataloaders ("test" should rather be called validation...)
         self.train_loader = train_loader
         self.test_loader = test_loader
         
+        # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
             self.train_loader.drop_last_batch()
             self.test_loader.drop_last_batch()
-
+            
+        # Save the input dimention of the model
+        # (for all layers and 3 extra dims: 504 + 3 = 507)
         self.num_dim = train_loader.data.shape[1]
 
+        # Initialize the model with the full data to get the dimensions right
         data = torch.clone(train_loader.add_noise(train_loader.data))
         cond = torch.clone(train_loader.cond)
-
         model = CINN(params, data, cond)
         self.model = model.to(device)
-        self.set_optimizer(steps_per_epoch=len(train_loader))
         
-        if self.pretraining:
-            self.model.fix_sigma()
+        # Initialize the optimizer and the learning rate scheduler
+        # Default: Adam & reduce on plateau
+        self.set_optimizer(steps_per_epoch=len(train_loader))
 
+        # Create some empty containers for the losses and gradients.
+        # Needed for documentation (printing & plotting)
         self.losses_train = {'inn': [], 'kl': [], 'total': []}
         self.losses_test = {'inn': [], 'kl': [], 'total': []}
         self.learning_rates = []
-        
         self.max_grad = []
         self.grad_norm = []
 
     def train(self):
         """ Trains the model. """
 
+        # TODO: Still active for the uncertainty plots? Bug?
         if self.model.bayesian:
             self.model.enable_map()
 
+        # Plot some images of the latent space
+        # Want to check that it converges to a gaussian.
         self.latent_samples(0)
+        
+        # Length of the training set. Needed to normalize the KL term.
         N = len(self.train_loader.data)
 
+        # Start the actual training
         for epoch in range(self.epoch_offset+1,self.params['n_epochs']+1):
+            
+            # Reset the documentation values for the losses and gradients
             self.epoch = epoch
             train_loss = 0
             test_loss = 0
@@ -101,47 +117,69 @@ class INNTrainer:
                 test_kl_loss = 0
             max_grad = 0.0
 
+            # Set model to training mode
             self.model.train()
+            
+            # Iterate over all batches
+            # x=data, c=condition
             for x, c in self.train_loader:
                 max_grad_batch = 0.0
                 self.optim.zero_grad()
+                
+                # Get the log likelihood loss
                 inn_loss = - torch.mean(self.model.log_prob(x,c))
+                
+                # For a bayesian setup add the properly normalized kl loss term
+                # Otherwise only use the inn_loss
                 if self.model.bayesian:
                     kl_loss = self.model.get_kl() / N
-                    
                     loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
+                    
+                    # Save the loss for documentation
                     self.losses_train['kl'].append(kl_loss.item())
                     train_kl_loss += kl_loss.item()*len(x)
                 else:
                     loss = inn_loss
+                    
+                # Calculate the gradients
                 loss.backward()
+                
+                # Use gradient clipping if requested
+                # TODO: Might try out other norm types (luigi once used infinity norm instead of L2)
+                # Maybe add to params file
                 if 'grad_clip' in self.params:
-                    # torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], float('inf'))
                     torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], 2)
+                    
+                # Update the parameters
                 self.optim.step()
 
+                # Save the losses for documentation
                 self.losses_train['inn'].append(inn_loss.item())
                 self.losses_train['total'].append(loss.item())
                 train_inn_loss += inn_loss.item()*len(x)
                 train_loss += loss.item()*len(x)
+                
+                # Save the LR if a scheduler is used
                 if self.scheduler is not None:
                     self.scheduler.step()
                     self.learning_rates.append(self.scheduler.get_last_lr()[0])
 
+                # Save the maximum gradient for documentation
                 for param in self.model.params_trainable:
                     if param.grad is not None:
                         max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
                 max_grad = max(max_grad_batch, max_grad)
                 self.max_grad.append(max_grad_batch)
                 
+                # Save the gradient value corresponding to the one used in the grad clip function
+                # TODO: Might set default to True. Not very expensive
                 if self.params.get("store_grad_norm", False):
-                    # Use a code similar to pytorchs clip_grad_norm_:
                     grads = [p.grad for p in self.model.params_trainable if p.grad is not None] 
                     norm_type = float(2) # L2 norm
                     total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(self.device) for g in grads]), norm_type)
                     self.grad_norm.append(total_norm.item())
                     
-
+            # Evaluate the model on the test dataset and save the losses
             self.model.eval()
             with torch.no_grad():
                 for x, c in self.test_loader:
@@ -154,13 +192,13 @@ class INNTrainer:
                         loss = inn_loss
                     test_inn_loss += inn_loss.item()*len(x)
                     test_loss += loss.item()*len(x)
-
+            
+            # Normalize the losses
             test_inn_loss /= len(self.test_loader.data)
             test_loss /= len(self.test_loader.data)
-
             train_inn_loss /= len(self.train_loader.data)
             train_loss /= len(self.train_loader.data)
-
+            
             self.losses_test['inn'].append(test_inn_loss)
             self.losses_test['total'].append(test_loss)
 
@@ -169,9 +207,11 @@ class INNTrainer:
                 train_kl_loss /= len(self.train_loader.data)
                 self.losses_test['kl'].append(test_kl_loss)
 
+            # Save some parameter values for documentation
             if self.model.bayesian:
                 max_bias = 0.0
                 max_mu_w = 0.0
+                # TODO: Better to use +- float("inf")
                 min_logsig2_w = 100.0
                 max_logsig2_w = -100.0
                 for name, param in self.model.named_parameters():
@@ -182,7 +222,8 @@ class INNTrainer:
                     if 'logsig2_w' in name:
                         min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
                         max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
-
+            
+            # Print the data saved for documentation
             print('')
             print(f'=== epoch {epoch} ===')
             print(f'inn loss (train): {train_inn_loss}')
@@ -203,6 +244,7 @@ class INNTrainer:
             print(f'maximum gradient: {max_grad}')
             sys.stdout.flush()
 
+            # Plot the data saved for documentation
             if epoch >= 1:
                 plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
                 if self.model.bayesian:
@@ -215,6 +257,8 @@ class INNTrainer:
                 if self.params.get("store_grad_norm", False):
                     plotting.plot_grad(self.doc.get_file('gradient_norm.pdf'), self.grad_norm, len(self.train_loader))
 
+            # If we reach the save interval, create all histograms for the observables,
+            # plot the latent distribution and save the model
             if epoch%self.params.get("save_interval", 20) == 0 or epoch == self.params['n_epochs']:
                 if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
                     self.save(epoch=epoch)
@@ -223,6 +267,7 @@ class INNTrainer:
                     final_plots = False
                     self.generate(10000)
                 else:
+                    # In the final epoch more samples are used
                     final_plots = True
                     self.generate(100000)
 
@@ -318,17 +363,29 @@ class INNTrainer:
         """
         self.model.eval()
         with torch.no_grad():
+            # Creates the condition energies uniformly between 1 and 100
             energies = 99.0*torch.rand((num_samples,1)) + 1.0
+            
+            # Prepares an "empty" container for the samples
             samples = torch.zeros((num_samples,1,self.num_dim))
+            
+            # Generate the data in batches according to batch_size
             for batch in range((num_samples+batch_size-1)//batch_size):
                     start = batch_size*batch
                     stop = min(batch_size*(batch+1), num_samples)
                     energies_l = energies[start:stop].to(self.device)
                     samples[start:stop] = self.model.sample(1, energies_l).cpu()
+            
+            # Convert to numpy arrays
             samples = samples[:,0,...].cpu().numpy()
             energies = energies.cpu().numpy()
+            
+        # Subract the noise
+        # TODO: Why are we doing this?
         samples -= self.params.get("width_noise", 1e-7)
         
+        # Postrocessing
+        # Remove the extra dimensions and reshape to original version
         data = data_util.postprocess(
                     samples,
                     energies,
@@ -337,11 +394,14 @@ class INNTrainer:
                     layer=self.params.get("calo_layer", None)
                 )
         
+        # Save the sampled data if requested
         if save_data:
             data_util.save_data(
                 data = data,
                 data_file = self.doc.get_file('samples.hdf5')
             )
+            
+        # return the sampled data if requested
         if return_data:
             return data
 
@@ -373,11 +433,20 @@ class INNTrainer:
             num_rand (int): Number of random stats to use for the Bayesian parameters
             batch_size (int): Batch size for samlpling
         """
+        # Create the plotting class
         l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
+        
+        # Load the test dataset for comparison
         data = data_util.load_data(
             data_file=self.params.get('data_path_test'),
             mask=self.params.get("mask", 0))
+        
+        # Update the plotter with the test dataset
         l_plotter.bin_train_data(data)
+        
+        # Generate "num_rand" times a sample with the BINN and update the plotter
+        # (Internally it calculates mu and std from the passed data)
+        # TODO: Might be more elegant to use the generate function
         self.model.eval()
         for i in range(num_rand):
             self.model.reset_random()
@@ -400,6 +469,8 @@ class INNTrainer:
                     layer=self.params.get("calo_layer", None)
                 )
             l_plotter.update(data)
+            
+        # Plot the uncertainty plots
         l_plotter.plot()
 
 class DNNTrainer:
