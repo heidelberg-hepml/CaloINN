@@ -361,6 +361,8 @@ class INNTrainer:
             num_samples (int): Number of samples to generate
             batch_size (int): Batch size for samlpling
         """
+        # TODO: Maybe add possibility to call "model.reset_random()"
+        
         self.model.eval()
         with torch.no_grad():
             # Creates the condition energies uniformly between 1 and 100
@@ -446,9 +448,10 @@ class INNTrainer:
         
         # Generate "num_rand" times a sample with the BINN and update the plotter
         # (Internally it calculates mu and std from the passed data)
-        # TODO: Might be more elegant to use the generate function
+        # TODO: Might be more elegant to use the generate function -> Watch out for reset random
         self.model.eval()
         for i in range(num_rand):
+            # Reset random disables the map, which makes the net deterministic during evaluation
             self.model.reset_random()
             with torch.no_grad():
                 energies = 99.0*torch.rand((num_samples,1)) + 1.0
@@ -660,7 +663,7 @@ class DNNTrainer:
 
             # Print the losses of this epoch
             print('')
-            print(f'=== epoch {epoch} ===')
+            print(f'=== run {self.run}, epoch {epoch} ===')
             print(f'loss (train): {train_loss}')
             print(f'loss (validation): {val_loss}')
             print(f'maximum gradient: {max_grad}')
