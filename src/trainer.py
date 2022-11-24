@@ -105,8 +105,6 @@ class INNTrainer:
                 inn_loss = - torch.mean(self.model.log_prob(x,c))
                 if self.model.bayesian:
                     kl_loss = self.model.get_kl() / N
-                    # TODO: Maybe remove later again (also below)
-                    # loss = inn_loss + kl_loss
                     
                     loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
                     self.losses_train['kl'].append(kl_loss.item())
@@ -147,8 +145,6 @@ class INNTrainer:
                     inn_loss = - torch.mean(self.model.log_prob(x,c))
                     if self.model.bayesian:
                         kl_loss = self.model.get_kl() / N
-                        # TODO: Maybe remove later again
-                        # loss = inn_loss + kl_loss
                         loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
                         test_kl_loss += kl_loss.item()*len(x)
                     else:
@@ -237,11 +233,6 @@ class INNTrainer:
                     epoch=epoch,
                     p_ref=self.params.get("particle_type", "piplus"),
                     in_one_file=final_plots)
-                
-            # # Classifier test
-            # # TODO: Better implement in the documenter class
-            # if (epoch == self.params['n_epochs']) and self.params.get('do_classifier_test', False):
-            #     self.start_classifier_test()
                 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
@@ -407,57 +398,6 @@ class INNTrainer:
                 )
             l_plotter.update(data)
         l_plotter.plot()
-        
-    # def start_classifier_test(self):
-        
-    #     # Just use the 100000 data points generated anyway
-    #     # self.generate(100000)
-        
-    #     train_path, val_path, test_path = prepare_classifier_datasets(
-    #                                 original_dataset=self.params["classification_set"],
-    #                                 generated_dataset=self.doc.get_file('samples.hdf5'),
-    #                                 save_dir=self.doc.basedir)
-        
-    #     save_dir = os.path.join(self.doc.basedir, "classifier_test", "old_version")
-        
-        
-    #     # TODO: Input dimension is hard coded
-    #     number_of_runs = self.params["classifier_runs"]
-    #     for run_number in range(number_of_runs):
-    #         classifier_test(input_dim=508,
-    #                         device=self.device,
-    #                         data_path_train=train_path,
-    #                         data_path_val=val_path,
-    #                         data_path_test=test_path,
-    #                         save_dir=save_dir,
-    #                         threshold=self.params["classifier_threshold"],
-    #                         normalize=self.params["classifier_normalize"],
-    #                         use_logit=self.params["classifier_use_logit"],
-    #                         sigmoid_in_BCE=self.params.get("sigmoid_in_BCE", True),
-    #                         lr=self.params.get("classifier_lr", 2e-4),
-    #                         n_epochs=self.params.get("classifier_n_epochs", 30),
-    #                         batch_size=self.params.get("classifier_batch_size", 1000),
-    #                         load=False,
-    #                         num_layer=self.params.get("DNN_hidden_layers", 2),
-    #                         num_hidden=self.params.get("DNN_hidden_neurons", 512),
-    #                         dropout_probability=self.params.get("DNN_dropout", 0.),
-    #                         run_number=run_number,
-    #                         modes=self.params.get("modes", ["DNN", "CNN"]))
-        
-    #     load = False
-    #     for mode in self.params.get("modes", ["DNN", "CNN"]):
-    #         filename = 'summary_'+('loaded_' if load else '')+mode+'.npy'
-    #         res = np.load(os.path.join(save_dir, filename), allow_pickle=True)            
-            
-    #         # Save the averages as txt.file
-    #         filename_average = 'averaged_'+('loaded_' if load else '')+mode+'.txt'
-    #         averaged = np.array([np.mean(res, axis=0), np.std(res, axis=0)])
-    #         np.savetxt(os.path.join(save_dir, filename_average), averaged)
-            
-    #         # Also save it neatly formatted as pdf
-    #         table_filename = os.path.join(save_dir, mode + "_classifier_results.pdf")
-    #         plotting.plot_average_table(res, table_filename)
-
 
 class DNNTrainer:
     """ This class is responsible for training and testing the DNN.  """
