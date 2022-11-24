@@ -158,7 +158,7 @@ def remove_extra_dims(data, e_part):
     data[..., 432:]    = data[..., 432:] * e2
     return data
 
-def get_loaders(data_file_train, data_file_test, batch_size, ratio=0.8, device='cpu',
+def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
         width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
     data_train, cond_train = preprocess(load_data(data_file_train, mask),
         use_extra_dim, use_extra_dims, layer=layer)
@@ -177,13 +177,6 @@ def get_loaders(data_file_train, data_file_test, batch_size, ratio=0.8, device='
 
     data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
     cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-
-    # index = torch.randperm(len(data), device=device)
-    # split = int(ratio*len(data))
-    # data_train = data[index[:split]]
-    # data_test = data[index[split:]]
-    # cond_train = cond[index[:split]]
-    # cond_test = cond[index[split:]]
 
     loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
     loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
