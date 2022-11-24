@@ -32,25 +32,28 @@ class INNTrainer:
             doc: An instance of the documenter class responsible for documenting the run
         """
 
+        # Save some important paramters
         self.params = params
         self.device = device
         self.doc = doc
         
+        # Pretraining implies a fixed sigma
         self.pretraining = pretraining
+        
+        # Nedded for printing if the model was loaded
         self.epoch_offset = 0
 
-        # Actually split is now without function!
+        # Load the dataloaders
         train_loader, test_loader = data_util.get_loaders(
-            params.get('data_path_train'),
-            params.get('data_path_test'),
-            params.get('batch_size'),
-            params.get('train_split', 0.8),
-            device,
-            params.get("width_noise", 1e-7),
-            params.get("use_extra_dim", False),
-            params.get("use_extra_dims", False),
-            params.get("mask", 0),
-            params.get("calo_layer", None)
+            data_file_train=params.get('data_path_train'),
+            data_file_test=params.get('data_path_test'),
+            batch_size=params.get('batch_size'),
+            device=device,
+            width_noise=params.get("width_noise", 1e-7),
+            use_extra_dim=params.get("use_extra_dim", False),
+            use_extra_dims=params.get("use_extra_dims", False),
+            mask=params.get("mask", 0),
+            layer=params.get("calo_layer", None)
         )
         self.train_loader = train_loader
         self.test_loader = test_loader
