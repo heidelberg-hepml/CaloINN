@@ -407,7 +407,18 @@ def plot_latent(samples, results_dir, epoch=None):
     else:
         plot_dir = os.path.join(results_dir, 'latent')
     os.makedirs(plot_dir, exist_ok=True)
-    for idx in (1, 150, 300, 400, 500, 504, 505, 506):
+    
+    max_dims = samples.shape[1]
+    
+    # previously:
+    # latent_dims = [1, 150, 300, 400, 500, 504, 505, 506]
+    np.linspace(0, max_dims-4, 5)
+    
+    # Cover the space equally and look at the extra dims dimensions
+    latent_dims = list(np.linspace(0, max_dims-4, 5).astype(int)) + [max_dims-3, max_dims-2, max_dims-1]
+        
+    
+    for idx in latent_dims:
         min_v = -3
         max_v = 3
         bins = np.linspace(min_v, max_v, 51)

@@ -9,10 +9,8 @@ import data_util
 from model import CINN, DNN
 import plotting
 from plotter import Plotter
-from classifier import classifier_test
-from hdf5_helper import prepare_classifier_datasets
 
-from classifer_data import get_dataloader
+
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import roc_auc_score
 from sklearn.isotonic import IsotonicRegression
@@ -70,6 +68,7 @@ class INNTrainer:
         # Save the input dimention of the model
         # (for all layers and 3 extra dims: 504 + 3 = 507)
         self.num_dim = train_loader.data.shape[1]
+        print(f"Input dimension: {self.num_dim}")
 
         # Initialize the model with the full data to get the dimensions right
         data = torch.clone(train_loader.add_noise(train_loader.data))
@@ -92,7 +91,7 @@ class INNTrainer:
     def train(self):
         """ Trains the model. """
 
-        # TODO: Still active for the uncertainty plots? Bug?
+        # Deactivated with reset randow -> Not active for plot uncertainties
         if self.model.bayesian:
             self.model.enable_map()
 
@@ -383,7 +382,7 @@ class INNTrainer:
             energies = energies.cpu().numpy()
             
         # Subract the noise
-        # TODO: Why are we doing this?
+        # (Noise is uniformly added and everything below 0 becomes 0 later)
         samples -= self.params.get("width_noise", 1e-7)
         
         # Postrocessing
@@ -422,6 +421,7 @@ class INNTrainer:
                 start = stop
                 stop += len(x)
                 samples[start:stop] = self.model(x,c)[0].cpu()
+                # print(samples)
             samples = samples.numpy()
         plotting.plot_latent(samples, self.doc.basedir, epoch)
 
@@ -488,10 +488,6 @@ class DNNTrainer:
             doc: An instance of the documenter class responsible for documenting the run
         """
         
-        # TODO: Very ugly
-        self.old_default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(torch.float64)
-        
         # Save some important parameters
         self.run = 0
         
@@ -501,33 +497,25 @@ class DNNTrainer:
         self.sigmoid_in_BCE = self.params.get("sigmoid_in_BCE", True)
         self.epochs = self.params.get("classifier_n_epochs", 30)
         
-        # Generate the test set for the classifier training
+        # Select the needed layers:
+        layer_index = self.params.get("calo_layer", None) 
+        layer_names = ["layer_0", "layer_1", "layer_2"]  # Hardcoded layer names
         
-        train_path, val_path, test_path = prepare_classifier_datasets(
-                                    original_dataset=self.params["classification_set"],
-                                    generated_dataset=self.doc.get_file('samples.hdf5'),
-                                    save_dir=self.doc.basedir)
-
+        if layer_index is not None:
+            del layer_names[layer_index]
+        else:
+            layer_names = None
         
-        # TODO: Better use the data_util implementation!
-        dataloader_train, dataloader_val, dataloader_test = get_dataloader(
-                                                            data_path_train=train_path,
-                                                            data_path_test=test_path,
-                                                            data_path_val=val_path,
-                                                            apply_logit=False,
-                                                            device=device,
-                                                            batch_size=self.params.get("classifier_batch_size", 1000),
-                                                            with_noise=False,
-                                                            normed=False,
-                                                            normed_layer=False,
-                                                            return_label=True)
-                
+        # Load the dataloaders
+        dataloader_train, dataloader_val, dataloader_test = data_util.get_classifier_loaders(params, doc, device, drop_layers=layer_names) 
         self.train_loader = dataloader_train
         self.val_loader = dataloader_val
         self.test_loader = dataloader_test
         
-        # TODO: Read from data
-        self.num_dim = 508
+        # Read the dimensionality from the dataset
+        batch_data = next(iter(dataloader_train))
+        preprocessed_batch_data, _ = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
+        self.num_dim = preprocessed_batch_data.shape[1]
 
 
         model = DNN(input_dim=self.num_dim,
@@ -570,14 +558,13 @@ class DNNTrainer:
             for batch, batch_data in enumerate(self.train_loader):
                 
                 # Prepare the data of the current batch
-                input_vector, target_vector = self.__preprocess(batch_data)
+                input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
                 output_vector = self.model(input_vector)
                 
                 # Do the gradient updates
                 self.optim.zero_grad()
                 loss = self.model.loss(output_vector, target_vector.unsqueeze(1))
                 loss.backward()
-                # TODO: Gradient clipping?
                 self.optim.step()
 
                 # Used for plotting
@@ -613,12 +600,11 @@ class DNNTrainer:
             with torch.no_grad():
                 for batch, batch_data in enumerate(self.val_loader):
                     
-                    input_vector, target_vector = self.__preprocess(batch_data)
+                    input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
                     output_vector = self.model(input_vector)
                     
-                    # TODO: Origin of the dtype bug?
                     pred = output_vector.reshape(-1)
-                    target = target_vector.double()
+                    target = target_vector.type(torch.get_default_dtype())
                     
                     # Store the model predictions
                     if batch == 0:
@@ -630,7 +616,6 @@ class DNNTrainer:
                     
 
                 # Compute the loss vectorized for all batches of the current epoch
-                # TODO, NOTE: .CPU Changed
                 loss = self.model.loss(result_pred, result_true).cpu().numpy()
                 
                 # Apply the sigmoid to the prediction, if necessary
@@ -656,7 +641,6 @@ class DNNTrainer:
             # Saved for printing
             val_loss = loss # Must not be normalized, since it is computed over the whole epoch!
             # Normalize (computed per-batch)
-            # TODO: Replace .dataset with .data when using other dataloader
             train_loss /= len(self.train_loader.dataset)
             # Saved for plotting
             self.losses_val.append(val_loss)
@@ -684,7 +668,7 @@ class DNNTrainer:
             if eval_acc == 1:
                 break
 
-    def __preprocess(self, data):
+    def __preprocess(self, data, dtype=torch.get_default_dtype()):
         """ takes dataloader and returns tensor of
             layer0, layer1, layer2, log10 energy
         """
@@ -704,57 +688,74 @@ class DNNTrainer:
         normalize=self.params["classifier_normalize"]
         use_logit=self.params["classifier_use_logit"]
 
-        layer0 = data['layer_0']
-        layer1 = data['layer_1']
-        layer2 = data['layer_2']
+        layer_names = list(data.keys())
+        
+        # Remove all layers from layer names, that do not correspond
+        # to an actual calorimeter layer
+        non_calo_layers = ["energy", "overflow", "label"]
+        for layer in layer_names:
+            # Use naming convention for energies
+            if "_E" in layer:
+                non_calo_layers.append(layer)
+                
+        for layer in non_calo_layers:
+            layer_names.remove(layer)
+        
+        layer_data = []
+        layer_energy = []
+        for layer in layer_names:
+            layer_data.append(data[layer])
+            layer_energy.append(data[layer + "_E"])
         
         energy = torch.log10(data['energy']*10.).to(device)
         
-        E0 = data['layer_0_E']
-        E1 = data['layer_1_E']
-        E2 = data['layer_2_E']
-
+        # Can be used to remove noise effects
         if threshold:
-            layer0 = torch.where(layer0 < 1e-7, torch.zeros_like(layer0), layer0)
-            layer1 = torch.where(layer1 < 1e-7, torch.zeros_like(layer1), layer1)
-            layer2 = torch.where(layer2 < 1e-7, torch.zeros_like(layer2), layer2)
+            for i, layer in enumerate(layer_names):
+                layer_data[i] = torch.where(layer_data[i] < 1e-7, torch.zeros_like(layer_data[i]), layer_data[i])
 
+        # Normalize each layer to its total energy
         if normalize:
-            layer0 /= (E0.reshape(-1, 1, 1) +1e-16)
-            layer1 /= (E1.reshape(-1, 1, 1) +1e-16)
-            layer2 /= (E2.reshape(-1, 1, 1) +1e-16)
-
-        E0 = (torch.log10(E0.unsqueeze(-1)+1e-8) + 2.).to(device)
-        E1 = (torch.log10(E1.unsqueeze(-1)+1e-8) + 2.).to(device)
-        E2 = (torch.log10(E2.unsqueeze(-1)+1e-8) + 2.).to(device)
+            for i, layer in enumerate(layer_names):
+                layer_data[i] /= (layer_energy[i].reshape(-1, 1, 1) +1e-16)
+        
+        # Reshape and send to device
+        for i, layer in enumerate(layer_names):
+            layer_energy[i] = (torch.log10(layer_energy[i].unsqueeze(-1)+1e-8) + 2.).to(device)
+            layer_data[i] = layer_data[i].view(layer_data[i].shape[0], -1).to(device)
 
         # ground truth for the training
         target = data['label'].to(device)
-
-        layer0 = layer0.view(layer0.shape[0], -1).to(device)
-        layer1 = layer1.view(layer1.shape[0], -1).to(device)
-        layer2 = layer2.view(layer2.shape[0], -1).to(device)
+        
 
         if use_logit:
-            layer0 = logit_trafo(layer0)/10.
-            layer1 = logit_trafo(layer1)/10.
-            layer2 = logit_trafo(layer2)/10.
+            for i, layer in enumerate(layer_names):
+                layer_data[i] = logit_trafo(layer_data[i]) / 10.
+                
+                
+        # Collect all the tensors and concatenate them afterwards
+        final_tensors = []
+        for elem in layer_data:
+            final_tensors.append(elem)
+        final_tensors.append(energy)
+        for elem in layer_energy:
+            final_tensors.append(elem)
 
-        return torch.cat((layer0, layer1, layer2, energy, E0, E1, E2), 1), target
+        return torch.cat(final_tensors, 1, ).type(dtype), target
        
     def __calibrate_classifier(self, calibration_data):
         """ reads in calibration data and performs a calibration with isotonic regression"""
         self.model.eval()
         assert calibration_data is not None, ("Need calibration data for calibration!")
         for batch, data_batch in enumerate(calibration_data):
-            input_vector, target_vector = self.__preprocess(data_batch)
+            input_vector, target_vector = self.__preprocess(data_batch, dtype=torch.get_default_dtype())
             output_vector = self.model(input_vector)
             if self.sigmoid_in_BCE:
                 pred = torch.sigmoid(output_vector).reshape(-1)
             else:
                 pred = output_vector.reshape(-1)
             # TODO: Another hard-coded dtype!
-            target = target_vector.to(torch.float64)
+            target = target_vector.type(torch.get_default_dtype())
             if batch == 0:
                 result_true = target
                 result_pred = pred
@@ -774,12 +775,11 @@ class DNNTrainer:
         with torch.no_grad():
             for batch, batch_data in enumerate(self.test_loader):
                     
-                input_vector, target_vector = self.__preprocess(batch_data)
+                input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
                 output_vector = self.model(input_vector)
                 
-                # TODO: Origin of the dtype bug?
                 pred = output_vector.reshape(-1)
-                target = target_vector.double()
+                target = target_vector.type(torch.get_default_dtype())
                 
                 # Store the model predictions
                 if batch == 0:
@@ -789,10 +789,6 @@ class DNNTrainer:
                     result_true = torch.cat((result_true, target), 0)
                     result_pred = torch.cat((result_pred, pred), 0)
                     
-            # TODO: Remove, if everything works
-            # # Compute the loss vectorized for all batches of the current epoch
-            # loss = self.model.loss(result_pred, result_true)
-            
             # Apply the sigmoid to the prediction, if necessary
             if self.sigmoid_in_BCE:
                 result_pred = torch.sigmoid(result_pred).cpu().numpy()
@@ -847,8 +843,6 @@ class DNNTrainer:
         table_filename = "DNN_classifier_results.pdf"
         sub_path = os.path.join("classifier_test", table_filename)
         plotting.plot_average_table(res, self.doc.get_file(sub_path))
-        
-        torch.set_default_dtype(self.old_default_dtype)
       
     def reset_model(self):
         
