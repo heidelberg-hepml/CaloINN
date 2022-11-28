@@ -5,6 +5,7 @@ from copy import deepcopy
 from myDataLoader import MyDataLoader
 from torch.utils.data import Dataset, DataLoader
 import os
+import warnings
 
 def load_data(data_file, mask=None, threshold=1e-5):
     full_file = h5py.File(data_file, 'r')
@@ -94,8 +95,12 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
     
     assert len(energy) == len(samples)
 
+    if use_extra_dims and (layer is not None):
+        warnings.warn("Extradims function uses the energies per layer and does not work with only one used layer!")
+        
     if use_extra_dims:
         samples = remove_extra_dims(samples, energy)
+    
     elif use_extra_dim:
         samples = remove_extra_dim(samples, energy)
 
@@ -315,13 +320,19 @@ class CaloDataset(Dataset):
             sample[layer] = layer_data
             
             # Save the layer energies
-            # TODO: Do I really need them?
+            # Do I really need them? -> Yes they are used!
             sample[layer + "_E"] = layer_energies.squeeze()
                     
 
         if not self.return_label:
             #TODO: Maybe make the pass of "label" optional. Edit here if doing so !!!
             sample.pop("label", None)
+        else:
+            sample["label"] = sample["label"][idx]
+            
+        
+        sample["energy"] = sample["energy"][idx]
+        sample["overflow"] = sample["overflow"][idx]
 
 
         return sample
@@ -469,13 +480,16 @@ def split_dataset(input_dataset, val_fraction=0.2, test_fraction=0.2, save_dir=N
         
     return train_dataset, val_dataset, test_dataset
 
-def get_classifier_loaders(params, doc, device, reduce_to_sample_keys=False):
+def get_classifier_loaders(params, doc, device, drop_layers=None):
+
     """Returns the dataloaders for the classifier test
 
     Args:
         params (dict): params dictionary from the training (origin: yaml file)
         doc (documeter): An instance of the documenter class responsible for documenting the run
         device (str): device used for pytorch calculations
+        drop_layers (list of strings, optional): A container wrapping the names of the layers that should be dropped.
+            Defaults to None.
 
     Returns:
         torch.utils.data.DataLoader: Training dataloader
@@ -492,17 +506,13 @@ def get_classifier_loaders(params, doc, device, reduce_to_sample_keys=False):
     sample_file.close()
     
     # Drop the layers that are not needed, if requested
-    if reduce_to_sample_keys:
-        removal_keys = []
-        
-        for key in original.keys():
-            removal_keys.append(key)
+    if drop_layers is not None:
+
+        for layer in drop_layers:
+            original.pop(layer, None)
             
-        for key in sample.keys():
-            removal_keys.remove(key)
-        
-        for key in removal_keys:
-            original.pop(key, None)
+        for layer in drop_layers:
+            sample.pop(layer, None)
     
     # Load the data files
     train_file, validation_file, test_file = split_dataset(merge_datasets(sample=sample, original=original))

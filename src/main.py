@@ -111,11 +111,16 @@ def main():
         # Just train the model
         inn_trainer = INNTrainer(params, device, doc)
         inn_trainer.train()
-    # TODO: Better pass the path to the sampled data here as string, or pass the data directly
     
     # Do the classifier test if required
+    
+    # Want a higher precision for the test
+    old_default_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float64)
+    
+    # TODO: Maybe pass the samples as file
     # TODO: Could also run over different "modes" here...
-    print("starting classifier test")
+    print("\n\nstarting classifier test")
     sys.stdout.flush()
     if params.get('do_classifier_test', False):
         dnn_trainer = DNNTrainer(params, device, doc)
@@ -124,9 +129,12 @@ def main():
             # TODO: Pass as params parameter
             dnn_trainer.do_classifier_test(do_calibration=True)
             dnn_trainer.reset_model()
-            
-        # Needed for final table and to fix dtype bug!
+        
+        # Return the results
         dnn_trainer.clean_up()
+        
+    # Revert to the previous precision
+    torch.set_default_dtype(old_default_dtype)
     
     # Create some uncertainty plots
     if 'bayesian' in params and params['bayesian']:
