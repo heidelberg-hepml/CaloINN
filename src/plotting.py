@@ -340,7 +340,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
             reference=function(reference_coppy, **args1),
             **args2
         )
-    axis_label = ""
+
     if in_one_file:
     # if True:
         number_of_plots = len(plots)
@@ -355,18 +355,26 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
         reference_coppy = {k: np.copy(v) for k, v in reference.items()}
 
         iteration = 0
-        # TODO: Swap iterations over j and i
-        for j in range(6):
-            for i in range(rows*3):
-                if iteration == number_of_plots:
-                    break
+        for i in range(rows*3):
+            if i%3 == 1:
+                iteration -= 6
+            for j in range(6):
+
+                if iteration >= number_of_plots:
+                        # Plots are empty remove them
+                        axs[i,j].set_visible(False)
+                        continue
+                
                 if i % 3 == 2:
                     # Add one (small) invisible plot as whitespace
                     axs[i,j].set_visible(False)
-                    
-                    # Go to the next plot...
-                    iteration += 1
                     continue
+                
+                elif iteration >= number_of_plots:
+                        # Plots are empty remove them
+                        axs[i,j].set_visible(False)
+                        iteration += 1
+                        continue
                 
                 
                 # Select the correct plot input for this axis
@@ -389,14 +397,15 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
                     # Hide the first tick label
                     plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
                     
-                    axis_label = args2.get("axis_label", "")
+                    iteration += 1
 
                 if i % 3 == 1:
                     fig.canvas.draw()
-                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)             
+                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
+                    iteration += 1             
 
         fig.subplots_adjust(hspace=0)
-        fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
         # Dont use tight_layout!
         plt.close()
         
