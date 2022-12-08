@@ -56,6 +56,12 @@ class INNTrainer:
             layer=params.get("calo_layer", None)
         )
         
+        # Fix the noise of the dataloader if requested.
+        # Otherwise it will be sampled for each batch again!
+        if params.get("fixed_noise", False):
+            train_loader.fix_noise()
+            test_loader.fix_noise()
+        
         # Save the dataloaders ("test" should rather be called validation...)
         self.train_loader = train_loader
         self.test_loader = test_loader
@@ -87,6 +93,10 @@ class INNTrainer:
         self.learning_rates = []
         self.max_grad = []
         self.grad_norm = []
+        self.min_logsig = []
+        self.max_logsig = []
+        self.mean_logsig = []
+        self.median_logsig = []
 
     def train(self):
         """ Trains the model. """
@@ -206,6 +216,9 @@ class INNTrainer:
                 train_kl_loss /= len(self.train_loader.data)
                 self.losses_test['kl'].append(test_kl_loss)
 
+            # logsigs = []
+            logsigs = np.array([])
+            
             # Save some parameter values for documentation
             if self.model.bayesian:
                 max_bias = 0.0
@@ -221,6 +234,13 @@ class INNTrainer:
                     if 'logsig2_w' in name:
                         min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
                         max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
+                        # logsigs.append(torch.max(param).item())
+                        logsigs = np.append(logsigs, param.flatten().cpu().detach().numpy())
+                
+                self.max_logsig.append(max_logsig2_w)
+                self.min_logsig.append(min_logsig2_w)
+                self.mean_logsig.append(np.mean(logsigs))
+                self.median_logsig.append(np.median(logsigs))
             
             # Print the data saved for documentation
             print('')
@@ -249,6 +269,8 @@ class INNTrainer:
                 if self.model.bayesian:
                     plotting.plot_loss(self.doc.get_file('loss_inn.pdf'), self.losses_train['inn'], self.losses_test['inn'])
                     plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
+                    plotting.plot_logsig(self.doc.get_file('logsig_2.pdf'),
+                                         [self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig])
                 if self.scheduler is not None:
                     plotting.plot_lr(self.doc.get_file('learning_rate.pdf'), self.learning_rates, len(self.train_loader))
                 
@@ -886,3 +908,4 @@ class DNNTrainer:
         self.epoch = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
+        
