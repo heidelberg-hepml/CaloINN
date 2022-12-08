@@ -8,6 +8,7 @@ import FrEIA.modules as fm
 
 from myBlocks import *
 from vblinear import VBLinear
+from splines.rational_quadratic import RationalQuadraticSpline
 
 class Subnet(nn.Module):
     """ This class constructs a subnet for the coupling blocks """
@@ -216,6 +217,12 @@ class CINN(nn.Module):
                             "bounds_init":  params.get("bounds_init", 10),
                             "permute_soft" : permute_soft
                            }
+        elif coupling_type == "rational_quadratic_freia":
+            CouplingBlock = RationalQuadraticSpline
+            block_kwargs = {
+                            "bins": params.get("num_bins", 10),
+                            "subnet_constructor": constructor_fct,
+                           }
         elif coupling_type == "MADE":
             CouplingBlock = MADE
             block_kwargs = {
@@ -236,7 +243,8 @@ class CINN(nn.Module):
         data = torch.clone(data)
         if self.use_norm:
             data /= cond
-        data = torch.log(data + self.alpha)
+        if self.params.get("log_transformation", True):
+            data = torch.log(data + self.alpha)
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
         self.norm_m = torch.diag(1 / std)
@@ -259,6 +267,7 @@ class CINN(nn.Module):
         nodes = [ff.InputNode(in_dim, name="inp")]
         cond_node = ff.ConditionNode(1, name="cond")
 
+        # Add some preprocessing nodes
         if self.use_norm:
                 nodes.append(ff.Node(
                 [nodes[-1].out0],
@@ -267,12 +276,13 @@ class CINN(nn.Module):
                 conditions = cond_node,
                 name = "norm"
             ))
-        nodes.append(ff.Node(
-            [nodes[-1].out0],
-            LogTransformation,
-            { "alpha": self.alpha },
-            name = "inp_log"
-        ))
+        if self.params.get("log_transformation", True):
+            nodes.append(ff.Node(
+                [nodes[-1].out0],
+                LogTransformation,
+                { "alpha": self.alpha },
+                name = "inp_log"
+            ))
         nodes.append(ff.Node(
             [nodes[-1].out0],
             fm.FixedLinearTransform,
@@ -280,17 +290,43 @@ class CINN(nn.Module):
             name = "inp_norm"
         ))
 
+        # Add the coupling blocks determined by the params file
         CouplingBlock, block_kwargs = self.get_coupling_block(self.params)
-        for i in range(self.params.get("n_blocks", 10)):
-            nodes.append(
-                ff.Node(
-                    [nodes[-1].out0],
-                    CouplingBlock,
-                    block_kwargs,
-                    conditions = cond_node,
-                    name = f"block_{i}"
+        
+        if self.params.get("coupling_type", "affine") != "rational_quadratic_freia":
+            
+            for i in range(self.params.get("n_blocks", 10)):
+                nodes.append(
+                    ff.Node(
+                        [nodes[-1].out0],
+                        CouplingBlock,
+                        block_kwargs,
+                        conditions = cond_node,
+                        name = f"block_{i}"
+                    )
                 )
-            )
+                
+        # Freia uses a double pass. Each block runs the transformation on both splits. So we need only half of the blocks.
+        # Furthermore, we have to add a random permutation block manually.
+        else:
+            for i in range(self.params.get("n_blocks", 10) // 2):
+                nodes.append(
+                    ff.Node(
+                        [nodes[-1].out0],
+                        CouplingBlock,
+                        block_kwargs,
+                        conditions = cond_node,
+                        name = f"block_{i}"
+                    )
+                )
+                nodes.append(
+                    ff.Node(
+                        [nodes[-1].out0],
+                        fm.PermuteRandom,
+                        {"seed": None},
+                        name = f"permutation_block_{i}"
+                    )
+                )
 
         nodes.append(ff.OutputNode([nodes[-1].out0], name='out'))
         nodes.append(cond_node)
@@ -346,7 +382,7 @@ class CINN(nn.Module):
         for layer in self.bayesian_layers:
             layer.reset_random()
 
-    def sample(self, num_pts, condition):
+    def sample(self, num_pts, condition, z=None):
         """
             sample from the learned distribution
 
@@ -357,9 +393,10 @@ class CINN(nn.Module):
             Returns:
             tensor[len(condition), num_pts, dims]: Samples 
         """
-        z = torch.normal(0, 1,
-            size=(num_pts*condition.shape[0], self.in_dim),
-            device=next(self.parameters()).device)
+        if z is None:
+            z = torch.normal(0, 1,
+                size=(num_pts*condition.shape[0], self.in_dim),
+                device=next(self.parameters()).device)
         c = condition.repeat(num_pts,1)
         x, _ = self.forward(z, c, rev=True)
         return x.reshape(num_pts, condition.shape[0], self.in_dim).permute(1,0,2)
