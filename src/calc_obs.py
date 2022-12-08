@@ -1,5 +1,9 @@
 import numpy as np
 
+def return_voxel(data_dict, voxel_index=0):
+    data = data_dict["data"]
+    return data[:, voxel_index]
+
 def calc_e_layer(data, layer=0):
     return np.sum(data[f'layer_{layer}'],axis=(1,2))
 

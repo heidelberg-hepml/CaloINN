@@ -10,11 +10,15 @@ from model import CINN, DNN
 import plotting
 from plotter import Plotter
 
+import matplotlib.pyplot as plt
+from matplotlib import cm
 
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import roc_auc_score
 from sklearn.isotonic import IsotonicRegression
 from sklearn.calibration import calibration_curve
+
+from copy import deepcopy
 
 
 class INNTrainer:
@@ -55,6 +59,11 @@ class INNTrainer:
             mask=params.get("mask", 0),
             layer=params.get("calo_layer", None)
         )
+        
+        # voxels = params["voxels"]
+        # self.voxels = voxels
+        # train_loader.data = train_loader.data[:, voxels]
+        # test_loader.data = test_loader.data[:, voxels]
         
         # Fix the noise of the dataloader if requested.
         # Otherwise it will be sampled for each batch again!
@@ -284,24 +293,85 @@ class INNTrainer:
                 if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
                     self.save(epoch=epoch)
                 self.save()
-                if (not epoch == self.params['n_epochs']) or self.pretraining:
-                    final_plots = False
-                    self.generate(10000)
-                else:
-                    # In the final epoch more samples are used
-                    final_plots = True
-                    self.generate(100000)
 
+
+                # Bridge the old plotting functions in order to be able to use only some voxels
+                # Honestly, VERY ugly...
                 self.latent_samples(epoch)
+                colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
+                generated = self.generate(10000, return_data=True, save_data=False, postprocessing=False)
+                n_bins = 100
 
-                plotting.plot_all_hist(
-                    self.doc.basedir,
-                    self.params['data_path_test'],
-                    mask=self.params.get("mask", 0),
-                    calo_layer=self.params.get("calo_layer", None),
-                    epoch=epoch,
-                    p_ref=self.params.get("particle_type", "piplus"),
-                    in_one_file=final_plots)
+                fig, axs = plt.subplots(2,3, figsize=(6*3, 6*3))
+                for i, ax in enumerate(axs.flatten()):
+                    if i < 3:
+                        data_gen = np.copy(generated[:,i][np.argwhere(np.isfinite(generated[:,i]))])
+                        data_tst = np.copy(self.test_loader.data[:,i].cpu())
+                        v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
+                        v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
+                        bins = np.linspace(v_min, v_max, n_bins)
+                        ax.hist(data_gen, bins=bins, density=True, color=colors[2],histtype="step", linewidth=2)
+                        ax.hist(data_tst, bins=bins, color=colors[2], density=True, alpha=0.5)
+                        ax.set_title(f"Distribution of voxel {i+1}")
+                    
+                    else:
+                        data_gen = np.copy(generated[:,i-3][np.argwhere(np.isfinite(generated[:,i-3]))])
+                        data_tst = np.copy(self.test_loader.data[:,i-3].cpu())
+                        data_gen = data_gen[data_gen>1.e-7]
+                        data_tst = data_tst[data_tst>1.e-7]
+                        v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
+                        v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
+                        bins = np.logspace(np.log10(v_min), np.log10(v_max), n_bins)
+                        ax.hist(data_gen, bins=bins, density=True, color=colors[2],histtype="step", linewidth=2)
+                        ax.hist(data_tst, bins=bins, color=colors[2], density=True, alpha=0.5)
+                        ax.set_title(f"Distribution of voxel {i-2} (loglog)")
+                        ax.loglog()
+
+                fig.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "all_voxels_no_errors.pdf")))
+                plt.show()
+                
+                
+                plot_params = {}
+                for voxel, voxel_data in enumerate(self.train_loader.data.T):
+                    for log in [True, False]:
+                        plot = f"voxel_{voxel}" + ("_log" if log else "") + ".pdf"
+                        plot_params[plot] = {}
+                        plot_params[plot]["label"] = plot
+                        plot_params[plot]["x_log"] = log
+                        plot_params[plot]["y_log"] = log
+                        plot_params[plot]["func"] = "return_voxel"
+                        plot_params[plot]["args"] = {"voxel_index": voxel}
+
+                num_samples=10000
+                num_rand=2
+                batch_size = 10000
+
+                l_plotter = Plotter(plot_params, self.doc.get_file(f'plots/epoch_{epoch:03d}'))
+                test_data = {"data": self.train_loader.data.cpu().numpy()}
+                l_plotter.bin_train_data(test_data)
+                # Generate "num_rand" times a sample with the BINN and update the plotter
+                # (Internally it calculates mu and std from the passed data)
+                self.model.eval()
+                for i in range(num_rand):
+                    # Reset random disables the map, which makes the net deterministic during evaluation
+                    self.model.reset_random()
+                    with torch.no_grad():
+                        energies = 99.0*torch.rand((num_samples,1)) + 1.0
+                        samples = torch.zeros((num_samples,1,self.num_dim))
+                        for batch in range((num_samples+batch_size-1)//batch_size):
+                                start = batch_size*batch
+                                stop = min(batch_size*(batch+1), num_samples)
+                                energies_l = energies[start:stop].to(self.device)
+                                samples[start:stop] = self.model.sample(1, energies_l).cpu()
+                        samples = samples[:,0,...].cpu().numpy()
+                        energies = energies.cpu().numpy()
+                    samples -= self.params.get("width_noise", 1e-7)
+                    train_data = {"data": deepcopy(samples)}
+                    l_plotter.update(train_data)
+                    
+                # Plot the uncertainty plots
+                l_plotter.plot()
+                
                 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
@@ -374,7 +444,7 @@ class INNTrainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
 
-    def generate(self, num_samples, batch_size = 10000, return_data=False, save_data=True):
+    def generate(self, num_samples, batch_size = 10000, return_data=False, save_data=True, postprocessing=True):
         """
             generate new data using the modle and storing them to a file in the run folder.
 
@@ -407,15 +477,19 @@ class INNTrainer:
         # (Noise is uniformly added and everything below 0 becomes 0 later)
         samples -= self.params.get("width_noise", 1e-7)
         
-        # Postrocessing
-        # Remove the extra dimensions and reshape to original version
-        data = data_util.postprocess(
-                    samples,
-                    energies,
-                    use_extra_dim=self.params.get("use_extra_dim", False),
-                    use_extra_dims=self.params.get("use_extra_dims", False),
-                    layer=self.params.get("calo_layer", None)
-                )
+        if not postprocessing:
+            data = samples
+        
+        else:
+            # Postrocessing
+            # Remove the extra dimensions and reshape to original version
+            data = data_util.postprocess(
+                        samples,
+                        energies,
+                        use_extra_dim=self.params.get("use_extra_dim", False),
+                        use_extra_dims=self.params.get("use_extra_dims", False),
+                        layer=self.params.get("calo_layer", None)
+                    )
         
         # Save the sampled data if requested
         if save_data:
