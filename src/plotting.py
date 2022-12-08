@@ -201,7 +201,17 @@ def plot_loss(
         y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
         
     # print(y_min, y_max)
-    ax.set_ylim([y_min*0.9, y_max*1.1])
+    if y_min > 0:
+        if y_max > 0:
+            ax.set_ylim([y_min*0.9, y_max*1.1])
+        else:
+            ax.set_ylim([y_min*0.9, y_max*0.9])
+    else:
+        if y_max > 0:
+            ax.set_ylim([y_min*1.1, y_max*1.1])
+        else:
+            ax.set_ylim([y_min*1.1, y_max*0.9])
+            
     ax.set_xlabel('epoch', fontproperties=axislabelfont)
     ax.set_ylabel('loss', fontproperties=axislabelfont)
 
@@ -250,6 +260,31 @@ def plot_grad(
     plt.yticks(fontproperties=tickfont)
 
     fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
+    
+def plot_logsig(
+        file_name,
+        logsigs):
+    
+    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
+
+    colors = ["red", "blue", "green", "orange"]
+    labels = ["max", "min", "mean", "median"]
+    for logsig, label, color in zip(logsigs, labels, colors):
+        
+        ax.plot(logsig, label=label, color=color)
+
+        ax.set_xlim([0,len(logsig)])
+        ax.set_xlabel('epoch', fontproperties=axislabelfont)
+        ax.set_ylabel('$log(\\sigma^2)$', fontproperties=axislabelfont)
+
+
+    ax.legend()
+    fig.tight_layout()
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
@@ -356,14 +391,11 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
 
         iteration = 0
         for i in range(rows*3):
+            
             if i%3 == 1:
                 iteration -= 6
+                
             for j in range(6):
-
-                if iteration >= number_of_plots:
-                        # Plots are empty remove them
-                        axs[i,j].set_visible(False)
-                        continue
                 
                 if i % 3 == 2:
                     # Add one (small) invisible plot as whitespace
@@ -396,7 +428,6 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
                     
                     # Hide the first tick label
                     plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
-                    
                     iteration += 1
 
                 if i % 3 == 1:
@@ -409,7 +440,6 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
         # Dont use tight_layout!
         plt.close()
         
-
 def plot_latent(samples, results_dir, epoch=None):
     if epoch is not None:
         plot_dir = os.path.join(results_dir, 'latent', f'epoch_{epoch:03d}')
