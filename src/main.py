@@ -29,17 +29,17 @@ def main():
     # set default parameters for the file locations using the particle type parameter
     if "data_path_train" not in params:
         particle = params.get("particle_type", "piplus")
-        data_path_train = os.path.join("..", "Datasets", particle , "train_" + particle + ".hdf5")
+        data_path_train = os.path.join("..", "..", "..", "Datasets", particle , "train_" + particle + ".hdf5")
         params["data_path_train"] = data_path_train
         
     if "data_path_test" not in params:
         particle = params.get("particle_type", "piplus")
-        data_path_test = os.path.join("..", "Datasets", particle , "test_" + particle + ".hdf5")
+        data_path_test = os.path.join("..", "..", "..", "Datasets", particle , "test_" + particle + ".hdf5")
         params["data_path_test"] = data_path_test
 
     if "classification_set" not in params:
         particle = params.get("particle_type", "piplus")
-        classification_set = os.path.join("..", "Datasets", particle , "cls_" + particle + ".hdf5")
+        classification_set = os.path.join("..", "..", "..", "Datasets", particle , "cls_" + particle + ".hdf5")
         params["classification_set"] = classification_set
 
     # Initialize the documenter class
