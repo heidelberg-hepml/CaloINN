@@ -144,7 +144,7 @@ class BinnedSpline(_BaseCouplingBlock):
         else:
             y = x
             # TODO: Here is a typo, i guess
-            inside = (knot_y[..., 0] < y) & (y <= knot_x[..., -1])
+            inside = (knot_y[..., 0] < y) & (y <= knot_y[..., -1])
 
         knot_x = knot_x[inside]
         knot_y = knot_y[inside]
