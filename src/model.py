@@ -55,29 +55,30 @@ class Subnet(nn.Module):
         return self.layers(x)
 
 
-class LogTransformation(fm.InvertibleModule):
-    def __init__(self, dims_in, dims_c=None, alpha = 0.):
-        super().__init__(dims_in, dims_c)
-        self.alpha = alpha
+# class LogTransformation(fm.InvertibleModule):
+#     def __init__(self, dims_in, dims_c=None, alpha = 0.):
+#         super().__init__(dims_in, dims_c)
+#         self.alpha = alpha
 
-    def forward(self, x, c=None, rev=False, jac=True):
-        x, = x
-        if rev:
-            z = torch.exp(x) - self.alpha
-            jac = torch.sum( x, dim=1)
-        else:
-            z = torch.log(x + self.alpha)
-            jac = - torch.sum( z, dim=1)
-        return (z, ), torch.tensor([0.], device=x.device) # jac
+#     def forward(self, x, c=None, rev=False, jac=True):
+#         x, = x
+#         if rev:
+#             z = torch.exp(x) - self.alpha
+#             jac = torch.sum( x, dim=1)
+#         else:
+#             z = torch.log(x + self.alpha)
+#             jac = - torch.sum( z, dim=1)
+#         return (z, ), torch.tensor([0.], device=x.device) # jac
 
-    def output_dims(self, input_dims):
-        return input_dims
+#     def output_dims(self, input_dims):
+#         return input_dims
 
 
 class LogitTransformation(fm.InvertibleModule):
     def __init__(self, dims_in, dims_c=None, alpha = 0.):
         super().__init__(dims_in, dims_c)
         self.alpha = alpha
+        # print(alpha)
 
     def forward(self, x, c=None, rev=False, jac=True):
         x, = x
@@ -85,8 +86,8 @@ class LogitTransformation(fm.InvertibleModule):
             x = x*(1-2*self.alpha) + self.alpha
             z = torch.logit(x)
         else:
-            if not self.training:
-                x[:,:-1] = self.norm_logit(x[:,:-1])
+            # if not self.training:
+            #     x[:,:-1] = self.norm_logit(x[:,:-1])
             z = torch.sigmoid(x)
             z = (z - self.alpha)/(1-2*self.alpha)
         return (z, ), torch.tensor([0.], device=x.device) # jac
@@ -244,7 +245,9 @@ class CINN(nn.Module):
         if self.use_norm:
             data /= cond
         if self.params.get("log_transformation", True):
-            data = torch.log(data + self.alpha)
+            # data = torch.log(data + self.alpha)
+            data = data*(1-2*self.alpha) + self.alpha
+            data = torch.logit(data)
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
         self.norm_m = torch.diag(1 / std)
@@ -279,7 +282,7 @@ class CINN(nn.Module):
         if self.params.get("log_transformation", True):
             nodes.append(ff.Node(
                 [nodes[-1].out0],
-                LogTransformation,
+                LogitTransformation,
                 { "alpha": self.alpha },
                 name = "inp_log"
             ))

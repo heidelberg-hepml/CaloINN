@@ -60,10 +60,10 @@ class INNTrainer:
             layer=params.get("calo_layer", None)
         )
         
-        # voxels = params["voxels"]
-        # self.voxels = voxels
-        # train_loader.data = train_loader.data[:, voxels]
-        # test_loader.data = test_loader.data[:, voxels]
+        voxels = params["voxels"]
+        self.voxels = voxels
+        train_loader.data = train_loader.data[:, voxels]
+        test_loader.data = test_loader.data[:, voxels]
         
         # Fix the noise of the dataloader if requested.
         # Otherwise it will be sampled for each batch again!
@@ -86,7 +86,10 @@ class INNTrainer:
         print(f"Input dimension: {self.num_dim}")
 
         # Initialize the model with the full data to get the dimensions right
-        data = torch.clone(train_loader.add_noise(train_loader.data))
+        if params.get("fixed_noise", False):
+            data = torch.clone(train_loader.data)
+        else:
+            data = torch.clone(train_loader.add_noise(train_loader.data))
         cond = torch.clone(train_loader.cond)
         model = CINN(params, data, cond)
         self.model = model.to(device)
@@ -330,48 +333,49 @@ class INNTrainer:
                 fig.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "all_voxels_no_errors.pdf")))
                 plt.show()
                 
-                
-                plot_params = {}
-                for voxel, voxel_data in enumerate(self.train_loader.data.T):
-                    for log in [True, False]:
-                        plot = f"voxel_{voxel}" + ("_log" if log else "") + ".pdf"
-                        plot_params[plot] = {}
-                        plot_params[plot]["label"] = plot
-                        plot_params[plot]["x_log"] = log
-                        plot_params[plot]["y_log"] = log
-                        plot_params[plot]["func"] = "return_voxel"
-                        plot_params[plot]["args"] = {"voxel_index": voxel}
-
-                num_samples=10000
-                num_rand=2
-                batch_size = 10000
-
-                l_plotter = Plotter(plot_params, self.doc.get_file(f'plots/epoch_{epoch:03d}'))
-                test_data = {"data": self.train_loader.data.cpu().numpy()}
-                l_plotter.bin_train_data(test_data)
-                # Generate "num_rand" times a sample with the BINN and update the plotter
-                # (Internally it calculates mu and std from the passed data)
-                self.model.eval()
-                for i in range(num_rand):
-                    # Reset random disables the map, which makes the net deterministic during evaluation
-                    self.model.reset_random()
-                    with torch.no_grad():
-                        energies = 99.0*torch.rand((num_samples,1)) + 1.0
-                        samples = torch.zeros((num_samples,1,self.num_dim))
-                        for batch in range((num_samples+batch_size-1)//batch_size):
-                                start = batch_size*batch
-                                stop = min(batch_size*(batch+1), num_samples)
-                                energies_l = energies[start:stop].to(self.device)
-                                samples[start:stop] = self.model.sample(1, energies_l).cpu()
-                        samples = samples[:,0,...].cpu().numpy()
-                        energies = energies.cpu().numpy()
-                    samples -= self.params.get("width_noise", 1e-7)
-                    train_data = {"data": deepcopy(samples)}
-                    l_plotter.update(train_data)
+                if self.model.bayesian:
                     
-                # Plot the uncertainty plots
-                l_plotter.plot()
-                
+                    plot_params = {}
+                    for voxel, voxel_data in enumerate(self.train_loader.data.T):
+                        for log in [True, False]:
+                            plot = f"voxel_{voxel}" + ("_log" if log else "") + ".pdf"
+                            plot_params[plot] = {}
+                            plot_params[plot]["label"] = plot
+                            plot_params[plot]["x_log"] = log
+                            plot_params[plot]["y_log"] = log
+                            plot_params[plot]["func"] = "return_voxel"
+                            plot_params[plot]["args"] = {"voxel_index": voxel}
+
+                    num_samples=10000
+                    num_rand=30
+                    batch_size = 10000
+
+                    l_plotter = Plotter(plot_params, self.doc.get_file(f'plots/epoch_{epoch:03d}'))
+                    test_data = {"data": self.train_loader.data.cpu().numpy()}
+                    l_plotter.bin_train_data(test_data)
+                    # Generate "num_rand" times a sample with the BINN and update the plotter
+                    # (Internally it calculates mu and std from the passed data)
+                    self.model.eval()
+                    for i in range(num_rand):
+                        # Reset random disables the map, which makes the net deterministic during evaluation
+                        self.model.reset_random()
+                        with torch.no_grad():
+                            energies = 99.0*torch.rand((num_samples,1)) + 1.0
+                            samples = torch.zeros((num_samples,1,self.num_dim))
+                            for batch in range((num_samples+batch_size-1)//batch_size):
+                                    start = batch_size*batch
+                                    stop = min(batch_size*(batch+1), num_samples)
+                                    energies_l = energies[start:stop].to(self.device)
+                                    samples[start:stop] = self.model.sample(1, energies_l).cpu()
+                            samples = samples[:,0,...].cpu().numpy()
+                            energies = energies.cpu().numpy()
+                        samples -= self.params.get("width_noise", 1e-7)
+                        train_data = {"data": deepcopy(samples)}
+                        l_plotter.update(train_data)
+                        
+                    # Plot the uncertainty plots
+                    l_plotter.plot()
+                    
                 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """

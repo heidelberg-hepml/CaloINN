@@ -86,7 +86,8 @@ def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, 
     if use_extra_dims:
         x = add_extra_dims(x, c)
     elif use_extra_dim:
-        x = add_extra_dim(x, c)
+        # x = add_extra_dim(x, c)
+        assert 0 == 1
     return x, c
 
 def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5):
@@ -102,7 +103,8 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
         samples = remove_extra_dims(samples, energy)
     
     elif use_extra_dim:
-        samples = remove_extra_dim(samples, energy)
+        assert 0 == 1
+    #     samples = remove_extra_dim(samples, energy)
 
     samples[samples < threshold] = 0.
 
@@ -123,17 +125,17 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
         'energy': energy
     }
 
-def add_extra_dim(data, energies):
-    s = np.sum(data, axis=1, keepdims=True)
-    factors = s/energies
-    data = data / s
-    return np.concatenate((data, factors), axis=1)
+# def add_extra_dim(data, energies):
+#     s = np.sum(data, axis=1, keepdims=True)
+#     factors = s/energies
+#     data = data / s
+#     return np.concatenate((data, factors), axis=1)
 
-def remove_extra_dim(data, energies):
-    factors = data[:,[-1]]
-    data = data[:,:-1]
-    data = data / np.sum(data, axis=1, keepdims=True)
-    return data*energies*factors
+# def remove_extra_dim(data, energies):
+#     factors = data[:,[-1]]
+#     data = data[:,:-1]
+#     data = data / np.sum(data, axis=1, keepdims=True)
+#     return data*energies*factors
 
 def add_extra_dims(data, e_part):
     e0 = np.sum(data[..., :288], axis=1, keepdims=True)
@@ -142,14 +144,16 @@ def add_extra_dims(data, e_part):
     u1 = (e0+e1+e2)/e_part
     u2 = e0/(e0+e1+e2)
     u3 = e1/(e1+e2+1e-7)
-    data = data / np.sum(data, axis=1, keepdims=True)
-    return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
+    data[..., :288] = data[..., :288] / e0
+    data[..., 288:432] = data[..., 288:432] / (e1 + 1e-7)
+    data[..., 432:] = data[..., 432:] / (e2 + 1e-7)
+    return np.concatenate((data, u1, u2, u3), axis=1)
 
 def remove_extra_dims(data, e_part):
     data = deepcopy(data)
-    u1 = data[:,[-3]]/(1+data[:,[-3]])
-    u2 = data[:,[-2]]/(1+data[:,[-2]])
-    u3 = data[:,[-1]]/(1+data[:,[-1]])
+    u1 = data[:,[-3]]
+    u2 = data[:,[-2]]
+    u3 = data[:,[-1]]
     e_tot = u1*e_part
     e0 = u2*e_tot
     e1 = u3*(e_tot-e0)
@@ -166,6 +170,7 @@ def remove_extra_dims(data, e_part):
 
 def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
         width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
+    
     data_train, cond_train = preprocess(load_data(data_file_train, mask),
         use_extra_dim, use_extra_dims, layer=layer)
 
