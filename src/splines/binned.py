@@ -143,16 +143,13 @@ class BinnedSpline(_BaseCouplingBlock):
             inside = (knot_x[..., 0] < x) & (x <= knot_x[..., -1])
         else:
             y = x
-            # TODO: Here is a typo, i guess
-            inside = (knot_y[..., 0] < y) & (y <= knot_x[..., -1])
+            inside = (knot_y[..., 0] < y) & (y <= knot_y[..., -1])
 
         knot_x = knot_x[inside]
         knot_y = knot_y[inside]
 
         x_in = x[inside]
         x_out = x[~inside]
-        
-        print(x_in.shape, x_out.shape)
 
         scale = torch.sum(parameters["heights"], dim=-1, keepdim=True) / torch.sum(parameters["widths"], dim=-1, keepdim=True)
         shift = parameters["bottom"] - scale * parameters["left"]
