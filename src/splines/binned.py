@@ -152,7 +152,7 @@ class BinnedSpline(_BaseCouplingBlock):
         x_in = x[inside]
         x_out = x[~inside]
         
-        print(x_in.shape, x_out.shape)
+        # print(x_in.shape, x_out.shape)
 
         scale = torch.sum(parameters["heights"], dim=-1, keepdim=True) / torch.sum(parameters["widths"], dim=-1, keepdim=True)
         shift = parameters["bottom"] - scale * parameters["left"]
