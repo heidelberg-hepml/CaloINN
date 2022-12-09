@@ -51,7 +51,7 @@ class MyDataLoader:
             print("Noise already fixed")
             return 
         else:
-            self.fix_noise = True
+            self.fixed_noise = True
             self.data = self.add_noise(self.data)
     
     def drop_last_batch(self):
