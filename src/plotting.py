@@ -436,7 +436,7 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
                     iteration += 1             
 
         fig.subplots_adjust(hspace=0)
-        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
         # Dont use tight_layout!
         plt.close()
         
