@@ -233,6 +233,7 @@ class Plotter:
         os.makedirs(directory, exist_ok=True)
         for plot in plots.keys():
             plot_param = plots[plot]
+            plot_param = deepcopy(plot_param)
             plot_param['func'] = getattr(calc_obs, plot_param['func'])
             plot_param['plot_name'] = os.path.join(directory, plot)
             self.histograms.append(self.Histogram(**plot_param))
