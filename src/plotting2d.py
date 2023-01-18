@@ -72,7 +72,7 @@ def plot_hist2d(
 
     plt.close()
 
-def plot_all_hist2d(data_file, plot_dir, eplus=False, mask=0):
+def plot_all_hist2d(data_file, plot_dir, eplus=False):
     os.makedirs(plot_dir, exist_ok=True)
 
     e_ratio_e_part_args = {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': r'\(E_{tot}/E_{part}\)'}
@@ -89,7 +89,7 @@ def plot_all_hist2d(data_file, plot_dir, eplus=False, mask=0):
         plots.append( (f'e_layer_{layer}_e_part.pdf', calc_e_parton, {}, calc_e_layer_normd, {'layer': layer},
             {'xaxis_label': r'\(E_{part}\)', 'yaxis_label': f'\\(E_{layer}/E_{{tot}}\\)'}) )
 
-    data = data_util.load_data(data_file, mask)
+    data = data_util.load_data(data_file)
 
     for name, function1, args1, function2, args2, args_plot in plots:
         print(name)
@@ -104,10 +104,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--file', help='Where to find the data')
     parser.add_argument('--plot_dir', help='Where to save the plots')
-    parser.add_argument('--mask', default=0, type=int)
     args = parser.parse_args()
 
-    plot_all_hist2d(args.file, args.plot_dir, 'eplus' in args.file, args.mask)
+    plot_all_hist2d(args.file, args.plot_dir, 'eplus' in args.file)
 
 if __name__=='__main__':
     main()

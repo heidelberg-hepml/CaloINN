@@ -19,12 +19,13 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.calibration import calibration_curve
 
 from copy import deepcopy
+import atexit
 
 
 class INNTrainer:
     """ This class is responsible for training and testing the inn.  """
 
-    def __init__(self, params, device, doc, pretraining=False):
+    def __init__(self, params, device, doc, pretraining=False, plot_params=None):
         """
             Initializes train_loader, test_loader, inn, optimizer and scheduler.
 
@@ -36,6 +37,7 @@ class INNTrainer:
 
         # Save some important paramters
         self.params = params
+        self.plot_params = plot_params
         self.device = device
         self.doc = doc
         
@@ -56,24 +58,48 @@ class INNTrainer:
             width_noise=params.get("width_noise", 1e-7),
             use_extra_dim=params.get("use_extra_dim", False),
             use_extra_dims=params.get("use_extra_dims", False),
-            mask=params.get("mask", 0),
             layer=params.get("calo_layer", None)
         )
         
-        voxels = params["voxels"]
+        voxels = params.get("voxels", None)
         self.voxels = voxels
-        train_loader.data = train_loader.data[:, voxels]
-        test_loader.data = test_loader.data[:, voxels]
         
-        # Fix the noise of the dataloader if requested.
-        # Otherwise it will be sampled for each batch again!
-        if params.get("fixed_noise", False):
-            train_loader.fix_noise()
-            test_loader.fix_noise()
+        # Reduce the dataset but save the index of the used voxels
+        self.full_dimensionality = train_loader.data.shape[1]
+        
+        full_voxels = []
+        for voxel_index in np.arange(1, self.full_dimensionality+1):
+            full_voxels.append(f"voxel {voxel_index:03d}")
+        
+        if params.get("use_extra_dim", False):
+            full_voxels[-1] = "Energy of the calorimeter"
+            
+        # TODO: Find better names
+        if params.get("use_extra_dims", False):
+            full_voxels[-3] = "Extra Dim 1"
+            full_voxels[-2] = "Extra Dim 2"
+            full_voxels[-1] = "Extra Dim 3"
+        
+        full_voxels = np.array(full_voxels)
+        
+        if self.voxels is not None:
+            self.voxels_list = full_voxels[voxels]
+            
+            train_loader.data = train_loader.data[:, voxels]
+            test_loader.data = test_loader.data[:, voxels]
+            
+        else:
+            self.voxels_list = full_voxels
         
         # Save the dataloaders ("test" should rather be called validation...)
         self.train_loader = train_loader
         self.test_loader = test_loader
+        
+        # Fix the noise of the dataloader if requested.
+        # Otherwise it will be sampled for each batch again!
+        if params.get("fixed_noise", False):
+            self.train_loader.fix_noise()
+            self.test_loader.fix_noise()
         
         # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
@@ -82,21 +108,21 @@ class INNTrainer:
             
         # Save the input dimention of the model
         # (for all layers and 3 extra dims: 504 + 3 = 507)
-        self.num_dim = train_loader.data.shape[1]
+        self.num_dim = self.train_loader.data.shape[1]
         print(f"Input dimension: {self.num_dim}")
 
         # Initialize the model with the full data to get the dimensions right
         if params.get("fixed_noise", False):
-            data = torch.clone(train_loader.data)
+            data = torch.clone(self.train_loader.data)
         else:
-            data = torch.clone(train_loader.add_noise(train_loader.data))
-        cond = torch.clone(train_loader.cond)
+            data = torch.clone(self.train_loader.add_noise(self.train_loader.data))
+        cond = torch.clone(self.train_loader.cond)
         model = CINN(params, data, cond)
         self.model = model.to(device)
         
         # Initialize the optimizer and the learning rate scheduler
         # Default: Adam & reduce on plateau
-        self.set_optimizer(steps_per_epoch=len(train_loader))
+        self.set_optimizer(steps_per_epoch=len(self.train_loader))
 
         # Create some empty containers for the losses and gradients.
         # Needed for documentation (printing & plotting)
@@ -109,151 +135,38 @@ class INNTrainer:
         self.max_logsig = []
         self.mean_logsig = []
         self.median_logsig = []
-
+        self.close_to_prior = []
+        
+        # save the prior as logsig2 value for later usage
+        if self.model.bayesian:
+            self.logsig2_prior = - np.log(params.get("prior_prec", 1))
+            
     def train(self):
         """ Trains the model. """
 
-        # Deactivated with reset randow -> Not active for plot uncertainties
+        # Deactivated with reset random -> Not active for plot uncertainties
         if self.model.bayesian:
             self.model.enable_map()
 
         # Plot some images of the latent space
         # Want to check that it converges to a gaussian.
         self.latent_samples(0)
-        
-        # Length of the training set. Needed to normalize the KL term.
-        N = len(self.train_loader.data)
 
         # Start the actual training
         for epoch in range(self.epoch_offset+1,self.params['n_epochs']+1):
             
-            # Reset the documentation values for the losses and gradients
+            # Save the latest epoch of the training (just the number)
             self.epoch = epoch
-            train_loss = 0
-            test_loss = 0
-            train_inn_loss = 0
-            test_inn_loss = 0
+            
+            # Do training and validation for the current epoch
             if self.model.bayesian:
-                train_kl_loss = 0
-                test_kl_loss = 0
-            max_grad = 0.0
-
-            # Set model to training mode
-            self.model.train()
-            
-            # Iterate over all batches
-            # x=data, c=condition
-            for x, c in self.train_loader:
-                max_grad_batch = 0.0
-                self.optim.zero_grad()
+                max_grad, train_loss, train_inn_loss, train_kl_loss = self.__train_one_epoch()
+                test_loss, test_inn_loss, test_kl_loss = self.__do_validation()
+                max_bias, max_mu_w, min_logsig2_w, max_logsig2_w = self.__analyze_logsigs()
+            else:       
+                max_grad, train_loss, train_inn_loss = self.__train_one_epoch()
+                test_loss, test_inn_loss = self.__do_validation()
                 
-                # Get the log likelihood loss
-                inn_loss = - torch.mean(self.model.log_prob(x,c))
-                
-                # For a bayesian setup add the properly normalized kl loss term
-                # Otherwise only use the inn_loss
-                if self.model.bayesian:
-                    kl_loss = self.model.get_kl() / N
-                    loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
-                    
-                    # Save the loss for documentation
-                    self.losses_train['kl'].append(kl_loss.item())
-                    train_kl_loss += kl_loss.item()*len(x)
-                else:
-                    loss = inn_loss
-                    
-                # Calculate the gradients
-                loss.backward()
-                
-                # Use gradient clipping if requested
-                # TODO: Might try out other norm types (luigi once used infinity norm instead of L2)
-                # Maybe add to params file
-                if 'grad_clip' in self.params:
-                    torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], 2)
-                    
-                # Update the parameters
-                self.optim.step()
-
-                # Save the losses for documentation
-                self.losses_train['inn'].append(inn_loss.item())
-                self.losses_train['total'].append(loss.item())
-                train_inn_loss += inn_loss.item()*len(x)
-                train_loss += loss.item()*len(x)
-                
-                # Save the LR if a scheduler is used
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                    self.learning_rates.append(self.scheduler.get_last_lr()[0])
-
-                # Save the maximum gradient for documentation
-                for param in self.model.params_trainable:
-                    if param.grad is not None:
-                        max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
-                max_grad = max(max_grad_batch, max_grad)
-                self.max_grad.append(max_grad_batch)
-                
-                # Save the gradient value corresponding to the one used in the grad clip function
-                # TODO: Might set default to True. Not very expensive
-                if self.params.get("store_grad_norm", False):
-                    grads = [p.grad for p in self.model.params_trainable if p.grad is not None] 
-                    norm_type = float(2) # L2 norm
-                    total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(self.device) for g in grads]), norm_type)
-                    self.grad_norm.append(total_norm.item())
-                    
-            # Evaluate the model on the test dataset and save the losses
-            self.model.eval()
-            with torch.no_grad():
-                for x, c in self.test_loader:
-                    inn_loss = - torch.mean(self.model.log_prob(x,c))
-                    if self.model.bayesian:
-                        kl_loss = self.model.get_kl() / N
-                        loss = inn_loss + self.params.get("kl_weight", 1) * kl_loss
-                        test_kl_loss += kl_loss.item()*len(x)
-                    else:
-                        loss = inn_loss
-                    test_inn_loss += inn_loss.item()*len(x)
-                    test_loss += loss.item()*len(x)
-            
-            # Normalize the losses
-            test_inn_loss /= len(self.test_loader.data)
-            test_loss /= len(self.test_loader.data)
-            train_inn_loss /= len(self.train_loader.data)
-            train_loss /= len(self.train_loader.data)
-            
-            self.losses_test['inn'].append(test_inn_loss)
-            self.losses_test['total'].append(test_loss)
-
-            if self.model.bayesian:
-                test_kl_loss /= len(self.test_loader.data)
-                train_kl_loss /= len(self.train_loader.data)
-                self.losses_test['kl'].append(test_kl_loss)
-
-            # logsigs = []
-            logsigs = np.array([])
-            
-            # Save some parameter values for documentation
-            if self.model.bayesian:
-                max_bias = 0.0
-                max_mu_w = 0.0
-                # TODO: Better to use +- float("inf")
-                min_logsig2_w = 100.0
-                max_logsig2_w = -100.0
-                for name, param in self.model.named_parameters():
-                    if 'bias' in name:
-                        max_bias = max(max_bias, torch.max(torch.abs(param)).item())
-                    if 'mu_w' in name:
-                        max_mu_w = max(max_mu_w, torch.max(torch.abs(param)).item())
-                    if 'logsig2_w' in name:
-                        min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
-                        max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
-                        # logsigs.append(torch.max(param).item())
-                        logsigs = np.append(logsigs, param.flatten().cpu().detach().numpy())
-                
-                self.max_logsig.append(max_logsig2_w)
-                self.min_logsig.append(min_logsig2_w)
-                self.mean_logsig.append(np.mean(logsigs))
-                self.median_logsig.append(np.median(logsigs))
-            
             # Print the data saved for documentation
             print('')
             print(f'=== epoch {epoch} ===')
@@ -274,20 +187,25 @@ class INNTrainer:
                 print(f'maximum logsig2_w: {max_logsig2_w}')
             print(f'maximum gradient: {max_grad}')
             sys.stdout.flush()
-
+            
+            
             # Plot the data saved for documentation
             if epoch >= 1:
+                # Plot the losses
                 plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
                 if self.model.bayesian:
                     plotting.plot_loss(self.doc.get_file('loss_inn.pdf'), self.losses_train['inn'], self.losses_test['inn'])
                     plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
                     plotting.plot_logsig(self.doc.get_file('logsig_2.pdf'),
                                          [self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig])
+                    
+                # Plot the learning rate (if we use a scheduler)
                 if self.scheduler is not None:
                     plotting.plot_lr(self.doc.get_file('learning_rate.pdf'), self.learning_rates, len(self.train_loader))
                 
+                # Plot the gradients
                 plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
-                if self.params.get("store_grad_norm", False):
+                if self.params.get("store_grad_norm", True):
                     plotting.plot_grad(self.doc.get_file('gradient_norm.pdf'), self.grad_norm, len(self.train_loader))
 
             # If we reach the save interval, create all histograms for the observables,
@@ -296,87 +214,251 @@ class INNTrainer:
                 if epoch % self.params.get("keep_models", self.params["n_epochs"]+1) == 0:
                     self.save(epoch=epoch)
                 self.save()
-
-
-                # Bridge the old plotting functions in order to be able to use only some voxels
-                # Honestly, VERY ugly...
+                
                 self.latent_samples(epoch)
-                colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
-                generated = self.generate(10000, return_data=True, save_data=False, postprocessing=False)
-                n_bins = 100
+                self.plot_results(epoch)
+     
+    def __train_one_epoch(self):
+        """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
+        """
+        # Initialize the loss values for the documentation
+        train_loss = 0
+        train_inn_loss = 0
+        if self.model.bayesian:
+            train_kl_loss = 0
+        max_grad = 0.0
 
-                fig, axs = plt.subplots(2,3, figsize=(6*3, 6*3))
-                for i, ax in enumerate(axs.flatten()):
-                    if i < 3:
-                        data_gen = np.copy(generated[:,i][np.argwhere(np.isfinite(generated[:,i]))])
-                        data_tst = np.copy(self.test_loader.data[:,i].cpu())
-                        v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
-                        v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
-                        bins = np.linspace(v_min, v_max, n_bins)
-                        ax.hist(data_gen, bins=bins, density=True, color=colors[2],histtype="step", linewidth=2)
-                        ax.hist(data_tst, bins=bins, color=colors[2], density=True, alpha=0.5)
-                        ax.set_title(f"Distribution of voxel {i+1}")
-                    
-                    else:
-                        data_gen = np.copy(generated[:,i-3][np.argwhere(np.isfinite(generated[:,i-3]))])
-                        data_tst = np.copy(self.test_loader.data[:,i-3].cpu())
-                        data_gen = data_gen[data_gen>1.e-7]
-                        data_tst = data_tst[data_tst>1.e-7]
-                        v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
-                        v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
-                        bins = np.logspace(np.log10(v_min), np.log10(v_max), n_bins)
-                        ax.hist(data_gen, bins=bins, density=True, color=colors[2],histtype="step", linewidth=2)
-                        ax.hist(data_tst, bins=bins, color=colors[2], density=True, alpha=0.5)
-                        ax.set_title(f"Distribution of voxel {i-2} (loglog)")
-                        ax.loglog()
-
-                fig.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "all_voxels_no_errors.pdf")))
-                plt.show()
+        # Set model to training mode
+        self.model.train()
+        
+        # Iterate over all batches
+        # x=data, c=condition
+        for x, c in self.train_loader:
+            
+            # Initialize the gradient value for the documentation
+            max_grad_batch = 0.0
+            
+            # Reset the optimizer
+            self.optim.zero_grad()
+            
+            # Get the log likelihood loss
+            inn_loss = - torch.mean(self.model.log_prob(x,c))
+            
+            # For a bayesian setup add the properly normalized kl loss term
+            # Otherwise only use the inn_loss
+            if self.model.bayesian:
+                kl_loss = self.model.get_kl() / len(self.train_loader.data) # must normalize for consistency
+                loss = inn_loss + kl_loss
                 
+                # Save the loss for documentation
+                self.losses_train['kl'].append(kl_loss.item())
+                train_kl_loss += kl_loss.item()*len(x)
+            else:
+                loss = inn_loss
+                
+            # Calculate the gradients
+            loss.backward()
+            
+            # TODO: Commented out. Delete with next update
+            # Use gradient clipping if requested
+            # Maybe add to params file
+            # if 'grad_clip' in self.params:
+            #     torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], 2)
+                
+            # Update the parameters
+            self.optim.step()
+
+            # Save the losses for documentation
+            self.losses_train['inn'].append(inn_loss.item())
+            self.losses_train['total'].append(loss.item())
+            train_inn_loss += inn_loss.item()*len(x)
+            train_loss += loss.item()*len(x)
+            
+            # Save the LR if a scheduler is used
+            if self.scheduler is not None:
+                self.scheduler.step()
+                self.learning_rates.append(self.scheduler.get_last_lr()[0])
+
+            # Save the maximum gradient for documentation
+            for param in self.model.params_trainable:
+                if param.grad is not None:
+                    max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
+            max_grad = max(max_grad_batch, max_grad)
+            self.max_grad.append(max_grad_batch)
+            
+            # Save the gradient value corresponding to the L2 norm
+            if self.params.get("store_grad_norm", True):
+                grads = [p.grad for p in self.model.params_trainable if p.grad is not None] 
+                norm_type = float(2) # L2 norm
+                total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type).to(self.device) for g in grads]), norm_type)
+                self.grad_norm.append(total_norm.item())
+                
+        # Normalize the losses to the dataset length and return them.
+        # We need a different normalization here compared to the plotting because we summed over the whole epoch!
+        train_inn_loss /= len(self.train_loader.data)
+        train_loss /= len(self.train_loader.data)                
+            
+        if self.model.bayesian:
+            train_kl_loss /= len(self.train_loader.data)
+            return max_grad, train_loss, train_inn_loss, train_kl_loss
+                
+        return max_grad, train_loss, train_inn_loss
+                
+    def __do_validation(self):
+        """Evaluates the model on the test set.
+        Saves the losses inplace for plotting and returns the losses that are needed for printing.
+        """
+        # Initialize the loss values for the documentation
+        test_loss = 0
+        test_inn_loss = 0
+        if self.model.bayesian:
+            test_kl_loss = 0
+        
+        # Evaluate the model on the test dataset and save the losses
+        self.model.eval()
+        with torch.no_grad():
+            for x, c in self.test_loader:
+                inn_loss = - torch.mean(self.model.log_prob(x,c))
                 if self.model.bayesian:
-                    
-                    plot_params = {}
-                    for voxel, voxel_data in enumerate(self.train_loader.data.T):
-                        for log in [True, False]:
-                            plot = f"voxel_{voxel}" + ("_log" if log else "") + ".pdf"
-                            plot_params[plot] = {}
-                            plot_params[plot]["label"] = plot
-                            plot_params[plot]["x_log"] = log
-                            plot_params[plot]["y_log"] = log
-                            plot_params[plot]["func"] = "return_voxel"
-                            plot_params[plot]["args"] = {"voxel_index": voxel}
+                    kl_loss = self.model.get_kl() / len(self.train_loader.data) # must normalize for consistency
+                    loss = inn_loss + kl_loss
+                    test_kl_loss += kl_loss.item()*len(x)
+                else:
+                    loss = inn_loss
+                test_inn_loss += inn_loss.item()*len(x)
+                test_loss += loss.item()*len(x)
+        
+        # Normalize the losses for printing and plotting and store them also in the corresponding dict
+        test_inn_loss /= len(self.test_loader.data)
+        test_loss /= len(self.test_loader.data)
+               
+        self.losses_test['inn'].append(test_inn_loss)
+        self.losses_test['total'].append(test_loss)
 
-                    num_samples=10000
-                    num_rand=30
-                    batch_size = 10000
-
-                    l_plotter = Plotter(plot_params, self.doc.get_file(f'plots/epoch_{epoch:03d}'))
-                    test_data = {"data": self.train_loader.data.cpu().numpy()}
-                    l_plotter.bin_train_data(test_data)
-                    # Generate "num_rand" times a sample with the BINN and update the plotter
-                    # (Internally it calculates mu and std from the passed data)
-                    self.model.eval()
-                    for i in range(num_rand):
-                        # Reset random disables the map, which makes the net deterministic during evaluation
-                        self.model.reset_random()
-                        with torch.no_grad():
-                            energies = 99.0*torch.rand((num_samples,1)) + 1.0
-                            samples = torch.zeros((num_samples,1,self.num_dim))
-                            for batch in range((num_samples+batch_size-1)//batch_size):
-                                    start = batch_size*batch
-                                    stop = min(batch_size*(batch+1), num_samples)
-                                    energies_l = energies[start:stop].to(self.device)
-                                    samples[start:stop] = self.model.sample(1, energies_l).cpu()
-                            samples = samples[:,0,...].cpu().numpy()
-                            energies = energies.cpu().numpy()
-                        samples -= self.params.get("width_noise", 1e-7)
-                        train_data = {"data": deepcopy(samples)}
-                        l_plotter.update(train_data)
-                        
-                    # Plot the uncertainty plots
-                    l_plotter.plot()
-                    
+        if self.model.bayesian:
+            test_kl_loss /= len(self.test_loader.data)
+            self.losses_test['kl'].append(test_kl_loss)
+            
+        if self.model.bayesian:
+            return test_loss, test_inn_loss, test_kl_loss
                 
+        return test_loss, test_inn_loss
+                  
+    def __analyze_logsigs(self):
+        """Analyzes the logsigma parameters for a bayesian network.
+        """
+
+        logsigs = np.array([])
+        
+        # Save some parameter values for documentation
+        self.close_to_prior.append(0)
+        
+        # Sigmas only existing for bayesian network
+        assert self.model.bayesian
+        
+        # Initialize the values
+        max_bias = 0.0
+        max_mu_w = 0.0
+        min_logsig2_w = float("inf")
+        max_logsig2_w = -float("inf")
+        
+        # Iterate over all parameters and look at the logsigmas
+        for name, param in self.model.named_parameters():
+            if 'bias' in name:
+                max_bias = max(max_bias, torch.max(torch.abs(param)).item())
+            if 'mu_w' in name:
+                max_mu_w = max(max_mu_w, torch.max(torch.abs(param)).item())
+            if 'logsig2_w' in name:
+                self.close_to_prior[-1] += np.sum(np.abs((param - self.logsig2_prior).detach().cpu().numpy()) < 0.01)
+                min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
+                max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
+                logsigs = np.append(logsigs, param.flatten().cpu().detach().numpy())
+        
+        self.max_logsig.append(max_logsig2_w)
+        self.min_logsig.append(min_logsig2_w)
+        self.mean_logsig.append(np.mean(logsigs))
+        self.median_logsig.append(np.median(logsigs))
+        
+        return max_bias, max_mu_w, min_logsig2_w, max_logsig2_w
+     
+    def plot_results(self, epoch):
+        """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
+        """
+        
+        # If we are in the final epoch: use more samples!
+        if (not epoch == self.params['n_epochs']) or self.pretraining:
+                num_samples = 10000
+                num_rand = 30
+        else:
+            # TODO: Change to 100000
+            num_samples = 10000
+            num_rand = 30
+        
+        # Now start the plotting
+        
+        # Case1: We use all the voxels
+        if self.voxels is None:
+            
+            generated = self.generate(num_samples=num_samples, return_data=True, save_data=False, postprocessing=True)
+                
+            # Now create the no-errorbar histograms
+            plotting.plot_all_hist(
+                self.doc.basedir,
+                self.params['data_path_test'],
+                calo_layer=self.params.get("calo_layer", None),
+                epoch=epoch,
+                summary_plot=True, 
+                single_plots=False,
+                data=generated,
+                p_ref=self.params.get("particle_type", "piplus"))  
+            
+            # Plot also the errorbar plots if a bayesian model is used
+            if self.model.bayesian:
+                # TODO: Modify the uncertainties function s.t. it is able to sample from same latent point
+                self.plot_uncertaintys(self.plot_params, name=f'epoch_{epoch:03d}', num_samples=num_samples, postprocessing=True, num_rand=num_rand)
+                
+                plotting.plot_correlation_plots(model = self.model, doc =self.doc, epoch = epoch)
+                
+                plotting.plot_logsigma_development(model=self.model, doc=self.doc, test_loader=self.test_loader, epoch=epoch, num_rand=30)
+                
+                
+                      
+        # Case2: We use only some voxels and use no postprocessing
+        else:
+            plotting.plot_lin_log_voxels(trainer=self, epoch=epoch, num_samples=num_samples, n_bins=100)
+            
+            # Plot also the errorbar plots if a bayesian model is used
+            if self.model.bayesian:
+                
+                plot_params = self.get_plot_params_voxels()
+                self.plot_uncertaintys(plot_params, name=f'epoch_{epoch:03d}', num_samples=num_samples, postprocessing=False, num_rand=num_rand)
+                
+                plotting.plot_overview(self.doc.get_file("overwiev.pdf"),
+                                                train_loss=self.losses_train["total"], train_inn_loss=self.losses_train["inn"],
+                                                test_loss=self.losses_test["total"], test_inn_loss=self.losses_test["inn"],
+                                                learning_rate=self.learning_rates, close_to_prior=self.close_to_prior,
+                                                logsigs=[self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig],
+                                                logsig2_prior=self.logsig2_prior, batches_per_epoch=len(self.train_loader))
+                
+                plotting.plot_correlation_plots(model = self.model, doc =self.doc, epoch = epoch)
+                
+                plotting.plot_logsigma_development(model=self.model, doc=self.doc, test_loader=self.test_loader, epoch=epoch, num_rand=30)
+                 
+    def get_plot_params_voxels(self):
+        plot_params = {}
+        for voxel in range(len(self.voxels_list)):
+            for log in [True, False]:
+                
+                plot = self.voxels_list[voxel].replace(" ", "_") + ("_log" if log else "") + ".pdf"
+                plot_params[plot] = {}
+                plot_params[plot]["label"] = f"voxel_{voxel}" + (" (logscale)" if log else "")
+                plot_params[plot]["label"] = f"Distribution of {self.voxels_list[voxel]}"
+                plot_params[plot]["x_log"] = log
+                plot_params[plot]["y_log"] = log
+                plot_params[plot]["func"] = "return_voxel"
+                plot_params[plot]["args"] = {"voxel_index": voxel}
+        return plot_params
+        
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
         if params is None:
@@ -415,6 +497,8 @@ class INNTrainer:
                 params.get("max_lr", params["lr"]*10),
                 epochs = params.get("opt_epochs") or params["n_epochs"],
                 steps_per_epoch=steps_per_epoch)
+            
+        # TODO: Maybe just use step with no decrease?
         elif self.lr_sched_mode == "no_scheduling":
             self.scheduler = None
 
@@ -426,8 +510,15 @@ class INNTrainer:
                     "losses_train": self.losses_train,
                     "learning_rates": self.learning_rates,
                     "grads": self.max_grad,
-                    "epoch": self.epoch}, self.doc.get_file(f"model{epoch}.pt"))
-
+                    "epoch": self.epoch,
+                    
+                    # Save the logsigma arrays
+                    "logsig_min": self.min_logsig,
+                    "logsig_max": self.max_logsig,
+                    "logsig_mean": self.mean_logsig,
+                    "logsig_median": self.median_logsig,
+                    "close_to_prior": self.close_to_prior}, self.doc.get_file(f"model{epoch}.pt"))
+                    
     def load(self, epoch="", update_offset=False):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
         name = self.doc.get_file(f"model{epoch}.pt")
@@ -443,21 +534,27 @@ class INNTrainer:
         self.learning_rates = state_dicts.get("learning_rates", [])
         self.epoch = state_dicts.get("epoch", 0)
         self.max_grad = state_dicts.get("grads", [])
+        
+        # Load logsigmas, needed for documentation
+        self.min_logsig = state_dicts.get("logsig_min",[])
+        self.max_logsig = state_dicts.get("logsig_max", [])
+        self.mean_logsig = state_dicts.get("logsig_mean", [])
+        self.median_logsig = state_dicts.get("logsig_median", [])
+        self.close_to_prior = state_dicts.get("close_to_prior", [])
+
         if update_offset:
             self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
 
-    def generate(self, num_samples, batch_size = 10000, return_data=False, save_data=True, postprocessing=True):
+    def generate(self, num_samples, batch_size = 10000, return_data=True, save_data=False, postprocessing=True):
         """
             generate new data using the modle and storing them to a file in the run folder.
 
             Parameters:
             num_samples (int): Number of samples to generate
             batch_size (int): Batch size for samlpling
-        """
-        # TODO: Maybe add possibility to call "model.reset_random()"
-        
+        """        
         self.model.eval()
         with torch.no_grad():
             # Creates the condition energies uniformly between 1 and 100
@@ -525,7 +622,7 @@ class INNTrainer:
             samples = samples.numpy()
         plotting.plot_latent(samples, self.doc.basedir, epoch)
 
-    def plot_uncertaintys(self, plot_params, num_samples=100000, num_rand=30, batch_size = 10000):
+    def plot_uncertaintys(self, plot_params, name=None, num_samples=100000, num_rand=30, batch_size=10000, postprocessing=True):
         """
             Plot Bayesian uncertainties for given observables.
 
@@ -535,43 +632,34 @@ class INNTrainer:
             num_rand (int): Number of random stats to use for the Bayesian parameters
             batch_size (int): Batch size for samlpling
         """
-        # Create the plotting class
-        l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
+        # Create the plotting class (needs the output directory)
+        if name is None:
+            l_plotter = Plotter(plot_params, self.doc.get_file('plots/uncertaintys'))
+        else:
+            l_plotter = Plotter(plot_params, self.doc.get_file('plots/' + name))
         
-        # Load the test dataset for comparison
-        data = data_util.load_data(
-            data_file=self.params.get('data_path_test'),
-            mask=self.params.get("mask", 0))
         
-        # Update the plotter with the test dataset
-        l_plotter.bin_train_data(data)
+        # Load the test dataset for comparison (either use the dataspace or the training space)
+        if postprocessing:
+            true_data = data_util.load_data(
+                data_file=self.params.get('data_path_test'))
+        else:
+            true_data = {"data": deepcopy(self.train_loader.data.cpu().numpy())}
+        
+        # Initialize the plotter with the ground truth data
+        l_plotter.bin_train_data(true_data)
         
         # Generate "num_rand" times a sample with the BINN and update the plotter
         # (Internally it calculates mu and std from the passed data)
-        # TODO: Might be more elegant to use the generate function -> Watch out for reset random
-        self.model.eval()
         for i in range(num_rand):
             # Reset random disables the map, which makes the net deterministic during evaluation
             self.model.reset_random()
-            with torch.no_grad():
-                energies = 99.0*torch.rand((num_samples,1)) + 1.0
-                samples = torch.zeros((num_samples,1,self.num_dim))
-                for batch in range((num_samples+batch_size-1)//batch_size):
-                        start = batch_size*batch
-                        stop = min(batch_size*(batch+1), num_samples)
-                        energies_l = energies[start:stop].to(self.device)
-                        samples[start:stop] = self.model.sample(1, energies_l).cpu()
-                samples = samples[:,0,...].cpu().numpy()
-                energies = energies.cpu().numpy()
-            samples -= self.params.get("width_noise", 1e-7)
-            data = data_util.postprocess(
-                    samples,
-                    energies,
-                    use_extra_dim=self.params.get("use_extra_dim", False),
-                    use_extra_dims=self.params.get("use_extra_dims", False),
-                    layer=self.params.get("calo_layer", None)
-                )
-            l_plotter.update(data)
+            samples = self.generate(num_samples, batch_size=batch_size, return_data=True, postprocessing=postprocessing)
+            if postprocessing:
+                generated_data = samples
+            else:
+                generated_data = {"data": samples}
+            l_plotter.update(generated_data)
             
         # Plot the uncertainty plots
         l_plotter.plot()
@@ -579,7 +667,7 @@ class INNTrainer:
 class DNNTrainer:
     """ This class is responsible for training and testing the DNN.  """
 
-    def __init__(self, params, device, doc):
+    def __init__(self, test_trainer, params=None, device=None, doc=None):
         """
             Initializes train_loader, test_loader, DNN, optimizer and scheduler.
             Parameters:
@@ -591,9 +679,22 @@ class DNNTrainer:
         # Save some important parameters
         self.run = 0
         
-        self.params = params
-        self.device = device
-        self.doc = doc
+        # Use the params, device, doc values that are given. If none are passed, use the test_trainer ones.
+        if params is not None:
+            self.params = params
+        else:
+            self.params = test_trainer.params
+            
+        if device is not None:
+            self.device = device
+        else:
+            self.device = test_trainer.device
+            
+        if doc is not None:
+            self.doc = doc
+        else:
+            self.doc = test_trainer.doc
+            
         self.sigmoid_in_BCE = self.params.get("sigmoid_in_BCE", True)
         self.epochs = self.params.get("classifier_n_epochs", 30)
         
@@ -605,9 +706,18 @@ class DNNTrainer:
             del layer_names[layer_index]
         else:
             layer_names = None
+            
         
-        # Load the dataloaders
-        dataloader_train, dataloader_val, dataloader_test = data_util.get_classifier_loaders(params, doc, device, drop_layers=layer_names) 
+        # TODO: This is very problem dependent and might be wrong!
+        if test_trainer.voxels is None:
+            self.postprocessing = True
+        else:
+            self.postprocessing = False
+        
+        
+        dataloader_train, dataloader_val, dataloader_test = data_util.get_classifier_loaders(test_trainer,
+            self.params, self.doc, self.device, drop_layers=layer_names, postprocessing=self.postprocessing)
+             
         self.train_loader = dataloader_train
         self.val_loader = dataloader_val
         self.test_loader = dataloader_test
@@ -624,7 +734,7 @@ class DNNTrainer:
                     dropout_probability=self.params.get("DNN_dropout", 0.), 
                     is_classifier=(not self.sigmoid_in_BCE) )
         
-        self.model = model.to(device)
+        self.model = model.to(self.device)
         
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("classifier_lr", 2e-4))
 
@@ -632,6 +742,8 @@ class DNNTrainer:
         self.losses_test = []
         self.losses_val = []
         self.learning_rates = []
+        
+        atexit.register(self.clean_up)
 
     def train(self):
         """ Trains the model. """
@@ -640,8 +752,6 @@ class DNNTrainer:
         print(f"cuda is used: {next(self.model.parameters()).is_cuda}")
         
         self.run += 1
-        
-        # TODO: Consider the dtype bug here!
 
         best_eval_acc = float('-inf')
 
@@ -672,8 +782,6 @@ class DNNTrainer:
                 
                 # Used for printing
                 train_loss += loss.item()*len(batch_data)
-                
-                # TODO: Maybe use a scheduler?
 
                 # Used for printing 
                 for param in self.model.params_trainable:
@@ -704,7 +812,7 @@ class DNNTrainer:
                     output_vector = self.model(input_vector)
                     
                     pred = output_vector.reshape(-1)
-                    target = target_vector.type(torch.get_default_dtype())
+                    target = target_vector
                     
                     # Store the model predictions
                     if batch == 0:
@@ -772,7 +880,11 @@ class DNNTrainer:
         """ takes dataloader and returns tensor of
             layer0, layer1, layer2, log10 energy
         """
-
+        device = self.device
+        
+        if not self.postprocessing:
+            return data[0].type(dtype).to(device), data[1].type(dtype).to(device)
+        
         # Called for batches in order to prevent ram overflow
         ALPHA = 1e-6
 
@@ -783,7 +895,6 @@ class DNNTrainer:
             local_x = ALPHA + (1. - 2.*ALPHA) * x
             return logit(local_x)
 
-        device = self.device
         threshold=self.params["classifier_threshold"]
         normalize=self.params["classifier_normalize"]
         use_logit=self.params["classifier_use_logit"]
@@ -841,7 +952,7 @@ class DNNTrainer:
         for elem in layer_energy:
             final_tensors.append(elem)
 
-        return torch.cat(final_tensors, 1, ).type(dtype), target
+        return torch.cat(final_tensors, 1, ).type(dtype), target.type(dtype)
        
     def __calibrate_classifier(self, calibration_data):
         """ reads in calibration data and performs a calibration with isotonic regression"""
@@ -854,8 +965,7 @@ class DNNTrainer:
                 pred = torch.sigmoid(output_vector).reshape(-1)
             else:
                 pred = output_vector.reshape(-1)
-            # TODO: Another hard-coded dtype!
-            target = target_vector.type(torch.get_default_dtype())
+            target = target_vector
             if batch == 0:
                 result_true = target
                 result_pred = pred
@@ -879,7 +989,7 @@ class DNNTrainer:
                 output_vector = self.model(input_vector)
                 
                 pred = output_vector.reshape(-1)
-                target = target_vector.type(torch.get_default_dtype())
+                target = target_vector
                 
                 # Store the model predictions
                 if batch == 0:

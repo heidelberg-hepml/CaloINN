@@ -3,11 +3,12 @@ import h5py
 import torch
 from copy import deepcopy
 from myDataLoader import MyDataLoader
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
 import os
 import warnings
 
-def load_data(data_file, mask=None, threshold=1e-5):
+def load_data(data_file, threshold=1e-5):
+    """load the requested h5py file and return it as dict"""
     full_file = h5py.File(data_file, 'r')
     layer_0 = full_file['layer_0'][:] / 1e3
     layer_1 = full_file['layer_1'][:] / 1e3
@@ -22,21 +23,15 @@ def load_data(data_file, mask=None, threshold=1e-5):
         'energy': energy
     }
 
-    if mask==1:
-        binary_mask = (layer_1 > threshold).mean((1,2)) < 0.1+0.2*np.log10(energy[:,0])
-    elif mask==2:
-        binary_mask = (layer_1 > threshold).mean((1,2)) >= 0.1+0.2*np.log10(energy[:,0])
-    else:
-        binary_mask = np.full(len(energy), True)
-
-    return apply_mask(data, binary_mask)
+    return data
 
 def save_data(data, data_file):
+    """saves the given dict as h50y file. Has to satisfy the syntax of the original dataset"""
     layer_0 = data['layer_0']
     layer_1 = data['layer_1']
     layer_2 = data['layer_2']
     energy = data['energy']
-    overflow = np.zeros((len(energy), 3))
+    overflow = data['overflow']
 
     save_file = h5py.File(data_file, 'w')
     save_file.create_dataset('layer_0', data=layer_0*1e3)
@@ -46,68 +41,73 @@ def save_data(data, data_file):
     save_file.create_dataset('overflow', data=overflow)
     save_file.close()
 
-def apply_mask(data, mask):
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-
-    return {
-        'layer_0': layer_0[mask],
-        'layer_1': layer_1[mask],
-        'layer_2': layer_2[mask],
-        'energy': energy[mask]
-    }
-
 def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None):
+    """Preprocessing of the given data dict. Returns two numpy arrays containing the features and the conditions.
+    Furthermore extra dimensions can be added if requested."""
+    
+    assert not (use_extra_dim and use_extra_dims), "Cannot use extra_dim and extra_dims simultaneously!"
+    
+    # Extract the arrays from the dict
     layer_0 = data['layer_0']
     layer_1 = data['layer_1']
     layer_2 = data['layer_2']
     energy = data['energy']
     
+    # flatten the arrays
     layer0 = layer_0.reshape(layer_0.shape[0], -1)
     layer1 = layer_1.reshape(layer_1.shape[0], -1)
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
 
+    # Mask to filter the events (e.g. ensure energy conservation and prevent divisions by zero)
     binary_mask = np.full(len(energy), True)
-
+    
+    # If we use a single layer, make sure that the total energy is larger than the threshold
     if layer is not None:
         x = (layer0, layer1, layer2)[layer]
         binary_mask &= np.sum(x, axis=1) > threshold
     else:
         x = np.concatenate((layer0, layer1, layer2), 1)
 
-    if use_extra_dims:
-        binary_mask &= np.sum(x, axis=1) < energy[:,0]
+    # Ensure energy conservation
+    binary_mask &= np.sum(x, axis=1) < energy[:,0]
 
+    # Apply these two conditions
     x = x[binary_mask]
     c = energy[binary_mask]
 
+    # Warning in case of extra_dims and not all layers
+    if use_extra_dims and (layer is not None):
+        warnings.warn("Extradims function uses the energies per layer and might not work as expected with only one used layer!")
+
+    # Add the requested dimensions. Also normalizes the data properly    
     if use_extra_dims:
         x = add_extra_dims(x, c)
     elif use_extra_dim:
-        # x = add_extra_dim(x, c)
-        assert 0 == 1
+        x = add_extra_dim(x, c)
     return x, c
 
-def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5):
+def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5, overflow=None):
+    """Reverses the precprocessing and returns an dict that e.g. could be used for save_data."""
     
+    # Makes sure, that the original set is not modified inplace
     samples = deepcopy(samples)
     
     assert len(energy) == len(samples)
-
-    if use_extra_dims and (layer is not None):
-        warnings.warn("Extradims function uses the energies per layer and does not work with only one used layer!")
-        
-    if use_extra_dims:
-        samples = remove_extra_dims(samples, energy)
     
+    # Adds an empty overflow to the dataset, if overflow is not specified
+    if overflow is None:
+        overflow = np.zeros((len(energy), 3))
+    
+    # Revert the modifications of add_extra_dim or add_extra_dims
+    if use_extra_dims:
+        samples = remove_extra_dims(samples, energy) 
     elif use_extra_dim:
-        assert 0 == 1
-    #     samples = remove_extra_dim(samples, energy)
+        samples = remove_extra_dim(samples, energy)
 
+    # Set all negative energies to 0. Can happen due to noise substraction in generate
     samples[samples < threshold] = 0.
 
+    # Reshape the layers to their original shape
     if layer is not None:
         layer_0 = np.zeros((len(samples), 3, 96))
         layer_1 = np.zeros((len(samples), 12, 12))
@@ -122,20 +122,21 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
         'layer_0': layer_0,
         'layer_1': layer_1,
         'layer_2': layer_2,
-        'energy': energy
+        'energy': energy,
+        'overflow': overflow
     }
 
-# def add_extra_dim(data, energies):
-#     s = np.sum(data, axis=1, keepdims=True)
-#     factors = s/energies
-#     data = data / s
-#     return np.concatenate((data, factors), axis=1)
+def add_extra_dim(data, energies):
+    s = np.sum(data, axis=1, keepdims=True)
+    factors = s/energies
+    data = data / s
+    return np.concatenate((data, factors), axis=1)
 
-# def remove_extra_dim(data, energies):
-#     factors = data[:,[-1]]
-#     data = data[:,:-1]
-#     data = data / np.sum(data, axis=1, keepdims=True)
-#     return data*energies*factors
+def remove_extra_dim(data, energies):
+    factors = data[:,[-1]]
+    data = data[:,:-1]
+    data = data / np.sum(data, axis=1, keepdims=True)
+    return data*energies*factors
 
 def add_extra_dims(data, e_part):
     e0 = np.sum(data[..., :288], axis=1, keepdims=True)
@@ -169,13 +170,15 @@ def remove_extra_dims(data, e_part):
     return data
 
 def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
-        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
+        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, layer=None):
+    """Returns the dataloaders for the training of the CINN"""
     
-    data_train, cond_train = preprocess(load_data(data_file_train, mask),
+    # Create the train loader
+    data_train, cond_train = preprocess(load_data(data_file_train),
         use_extra_dim, use_extra_dims, layer=layer)
 
-
-    data_test, cond_test = preprocess(load_data(data_file_test, mask),
+    # Create the test loader
+    data_test, cond_test = preprocess(load_data(data_file_test),
         use_extra_dim, use_extra_dims, layer=layer)
 
 
@@ -183,12 +186,14 @@ def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
     postprocess(data_train, cond_train, use_extra_dim, use_extra_dims, layer)
     postprocess(data_test, cond_test, use_extra_dim, use_extra_dims, layer)
 
+    # Convert the ndarrays into torch.tensors
     data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
     cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
 
     data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
     cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-
+    
+    # Create the dataloaders
     loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
     loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
     return loader_train, loader_test
@@ -485,7 +490,7 @@ def split_dataset(input_dataset, val_fraction=0.2, test_fraction=0.2, save_dir=N
         
     return train_dataset, val_dataset, test_dataset
 
-def get_classifier_loaders(params, doc, device, drop_layers=None):
+def get_classifier_loaders_old(params, doc, device, drop_layers=None):
 
     """Returns the dataloaders for the classifier test
 
@@ -537,3 +542,133 @@ def get_classifier_loaders(params, doc, device, drop_layers=None):
 
     return dataloader_train, dataloader_val, dataloader_test
 
+def get_classifier_loaders(test_trainer, params, doc, device, drop_layers=None, postprocessing=False, val_fraction = 0.2, test_fraction = 0.2):
+    """Returns the dataloaders for the classifier test sampling from the passed model
+
+    Args:
+        params (dict): params dictionary from the training (origin: yaml file)
+        doc (documeter): An instance of the documenter class responsible for documenting the run
+        device (str): device used for pytorch calculations
+        trainer: trainer with a model to be sampled fron. Must have a trainer.generate function like the INN_trainer.
+        drop_layers (list of strings, optional): A container wrapping the names of the layers that should be dropped.
+            Defaults to None.
+
+    Returns:
+        torch.utils.data.DataLoader: Training dataloader
+        torch.utils.data.DataLoader: Validation dataloader
+        torch.utils.data.DataLoader: Test dataloader
+    """
+    
+    
+    
+    # Case 1: Work with the same preprocessing as for the original classifier test proposed by Claudius.
+    # This means were working on the space of the datafiles.
+    if postprocessing == True:
+            
+        # load the datafiles
+        original_file = h5py.File(params["classification_set"], 'r')
+        original = h5py_to_dict(original_file)
+        original_file.close()
+        
+        for elem in original:
+            num_samples = len(original[elem])
+            break
+        
+        # Generate the samples. Pay attention, that the trainer dtype is temporarily the default dtype
+        trainer_dtype = next(iter(test_trainer.model.parameters())).dtype
+        old_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(trainer_dtype)
+        sample = test_trainer.generate(num_samples=num_samples, return_data=True, save_data=False, postprocessing=postprocessing)
+        torch.set_default_dtype(old_dtype)
+        
+        print(len(sample["energy"]))
+        
+        # Drop the layers that are not needed, if requested
+        if drop_layers is not None:
+
+            for layer in drop_layers:
+                original.pop(layer, None)
+                
+            for layer in drop_layers:
+                sample.pop(layer, None)
+        
+        # Load the data files
+        train_file, validation_file, test_file = split_dataset(merge_datasets(sample=sample, original=original), val_fraction, test_fraction)
+        
+        # Create the datasets
+        dataset_train = CaloDataset(train_file, apply_logit=False, with_noise=False, return_label=True)
+        dataset_val = CaloDataset(validation_file, apply_logit=False, with_noise=False, return_label=True)
+        dataset_test = CaloDataset(test_file, apply_logit=False, with_noise=False, return_label=True)
+
+    
+    # Case 2: Work directly in the training space, directly on the output of the INN.
+    elif postprocessing == False:
+        
+        # Load the classification set using the data_util implementation
+        # Device = CPU since we are needing them as numpy arrays...
+        train_loader, _ = get_loaders(
+                data_file_train=params.get("classification_set"),
+                data_file_test=params.get('classification_set'),
+                batch_size=params.get('batch_size'),
+                device="cpu",
+                width_noise=params.get("width_noise", 1e-7),
+                use_extra_dim=params.get("use_extra_dim", False),
+                use_extra_dims=params.get("use_extra_dims", False),
+                layer=params.get("calo_layer", None)
+            )
+            
+        # Only take the enery dimensions (cf. trainer)
+        voxels = params["voxels"]
+        voxels = voxels
+        train_loader.data = train_loader.data[:, voxels]
+        
+        # Do computations on cpu using numpy
+        real_data = train_loader.data.cpu().numpy()
+        real_labels = np.ones(real_data.shape[0])
+        
+        # Generate the samples. Pay attention, that the trainer dtype is temporarily the default dtype
+        trainer_dtype = next(iter(test_trainer.model.parameters())).dtype
+        old_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(trainer_dtype)
+        generated_data = test_trainer.generate(real_data.shape[0], return_data=True, save_data=False, postprocessing=False)
+        torch.set_default_dtype(old_dtype)
+        
+        generated_labels = np.zeros(generated_data.shape[0])
+        
+        # TODO: Make sure that np.append preserves the order?
+        complete_data = np.append(real_data, generated_data, axis=0)
+        complete_labels = np.append(real_labels, generated_labels)
+        
+        # Shuffle the data & labels
+        shuffle_index = np.random.choice(complete_data.shape[0], complete_data.shape[0], replace=False)
+        complete_data = complete_data[shuffle_index]
+        complete_labels = complete_labels[shuffle_index]
+        
+        # Make tensors
+        data = torch.tensor(complete_data).type(torch.get_default_dtype())
+        labels = torch.tensor(complete_labels).type(torch.get_default_dtype())
+        
+        # Create the dataset
+        dataset = TensorDataset(data, labels)
+        
+        # Calculate the number of samples for each set
+        total_samples = len(dataset)
+        val_samples = int(val_fraction * total_samples)
+        test_samples = int(test_fraction * total_samples)
+        train_samples = total_samples - val_samples - test_samples
+
+        # Split the dataset into the train, test, and validation sets
+        dataset_train, dataset_test, dataset_val = random_split(dataset, [train_samples, test_samples, val_samples])
+
+        
+    
+    # Create the dataloaders
+    batch_size = params.get("classifier_batch_size", 1000)
+    
+    # Keywords for the dataloader if using cuda
+    kwargs = {'num_workers': 2, 'pin_memory': True} if 'cuda' in device else {}
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, **kwargs)
+    dataloader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=True, **kwargs)
+    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, shuffle=True, **kwargs)
+    
+    return dataloader_train, dataloader_val, dataloader_test

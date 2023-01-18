@@ -11,6 +11,8 @@ from matplotlib import cm
 
 import data_util
 from calc_obs import *
+import math
+import torch
 
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.default'] = 'rm'
@@ -289,14 +291,27 @@ def plot_logsig(
 
     plt.close()
     
-def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_layer=None, epoch=None, in_one_file=False, p_ref="e_plus"):
-    data_file = os.path.join(results_dir, 'samples.hdf5')
+def plot_all_hist(results_dir, reference_file, include_coro=False, 
+                  calo_layer=None, epoch=None, summary_plot=True, single_plots=False,
+                  p_ref="e_plus", data=None):
+    
+    # Load the sampled data if no data is passed:
+    if data is None:
+        data_file = os.path.join(results_dir, 'samples.hdf5')
+        data = data_util.load_data(data_file)
+        
+    # Load the reference data
+    reference = data_util.load_data(reference_file)
+    
+    # Select the output dir
     if epoch:
         plot_dir = os.path.join(results_dir, 'plots', f'epoch_{epoch:03d}')
     else:
         plot_dir = os.path.join(results_dir, 'plots/final')
+        
     os.makedirs(plot_dir, exist_ok=True)
   
+    # Define some plot paramters
     if calo_layer is None:
         plots = [
                 (calc_e_ratio, 'e_ratio.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)', 'p_ref': p_ref}),
@@ -362,22 +377,21 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
         if include_coro:
             plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
                 {'axis_label': f'\\(C_{{0.2}}\\) layer {layer}', 'xscale': 'linear', 'yscale': 'log', 'p_ref': p_ref}) )
-    
-    data = data_util.load_data(data_file)
-    reference = data_util.load_data(reference_file, mask)
  
-    for function, name, args1, args2 in plots:
-        data_coppy = {k: np.copy(v) for k, v in data.items()}
-        reference_coppy = {k: np.copy(v) for k, v in reference.items()}
-        plot_hist(
-            file_name=os.path.join(plot_dir, name),
-            data=function(data_coppy, **args1),
-            reference=function(reference_coppy, **args1),
-            **args2
-        )
+    # Plot every histrogramn in its own file
+    if single_plots:
+        for function, name, args1, args2 in plots:
+            data_coppy = {k: np.copy(v) for k, v in data.items()}
+            reference_coppy = {k: np.copy(v) for k, v in reference.items()}
+            plot_hist(
+                file_name=os.path.join(plot_dir, name),
+                data=function(data_coppy, **args1),
+                reference=function(reference_coppy, **args1),
+                **args2
+            )
 
-    if in_one_file:
-    # if True:
+    # Plot all the histogramms in one file
+    if summary_plot:
         number_of_plots = len(plots)
         rows = number_of_plots // 6
         if number_of_plots%6 != 0:
@@ -431,12 +445,12 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
                     iteration += 1
 
                 if i % 3 == 1:
-                    fig.canvas.draw()
                     plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
                     iteration += 1             
 
         fig.subplots_adjust(hspace=0)
-        fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        fig.savefig(plot_dir+"/summary.pdf", bbox_inches='tight', dpi=500)
         # Dont use tight_layout!
         plt.close()
         
@@ -482,16 +496,230 @@ def plot_latent(samples, results_dir, epoch=None):
         fig.savefig(os.path.join(plot_dir, f'latent_{idx:03d}.pdf'), bbox_inches='tight')
         plt.close()
 
+def plot_lin_log_voxels(trainer, epoch, num_samples=100000, n_bins=100, max_width = 6):
+    """Plots all the histogramms of the voxels of the passed trainer in linear and logarithmic scale."""
+    
+    trainer.model.eval()
+    
+    colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
+    
+    p_ref = trainer.params.get("particle_type", "piplus")
+    
+    if p_ref == 'eplus':
+        color = colors[0]
+    elif p_ref == 'gamma':
+        color = colors[1]
+    elif p_ref == 'piplus':
+        color = colors[2]
+    else:
+        color = 'blue'
+    
+    generated = trainer.generate(num_samples, return_data=True, save_data=False, postprocessing=False)
+    
+    num_voxels = trainer.num_dim
+    
+    rows = math.ceil(num_voxels / max_width)
+    
+    if rows == 1:
+        width = num_voxels
+    else: width = max_width
+    
+    fig, axs = plt.subplots(2*rows,width, figsize=(6*width, 6*2*rows))
+    for i, ax in enumerate(axs.flatten()):
+        if i < num_voxels:
+            data_gen = np.copy(generated[:,i][np.argwhere(np.isfinite(generated[:,i]))])
+            data_tst = np.copy(trainer.test_loader.data[:,i].cpu())
+            v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
+            v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
+            bins = np.linspace(v_min, v_max, n_bins)
+            ax.hist(data_gen, bins=bins, density=True, color=color,histtype="step", linewidth=2)
+            ax.hist(data_tst, bins=bins, color=color, density=True, alpha=0.5)
+            ax.set_title(f"Distribution of {trainer.voxels_list[i]}")
+        
+        else:
+            data_gen = np.copy(generated[:,i-num_voxels][np.argwhere(np.isfinite(generated[:,i-num_voxels]))])
+            data_tst = np.copy(trainer.test_loader.data[:,i-num_voxels].cpu())
+            data_gen = data_gen[data_gen>1.e-7]
+            data_tst = data_tst[data_tst>1.e-7]
+            v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
+            v_max = max([np.nanmax(data_gen), np.nanmax(data_tst)])
+            bins = np.logspace(np.log10(v_min), np.log10(v_max), n_bins)
+            ax.hist(data_gen, bins=bins, density=True, color=color,histtype="step", linewidth=2)
+            ax.hist(data_tst, bins=bins, color=color, density=True, alpha=0.5)
+            ax.set_title(f"Distribution of {trainer.voxels_list[i-num_voxels]} (loglog)")
+            ax.loglog()
+
+    fig.savefig(trainer.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "summary.pdf")))
+    plt.close()
+
+def plot_overview(save_name, train_loss, train_inn_loss, test_loss, test_inn_loss, 
+                           learning_rate, close_to_prior, logsigs, logsig2_prior, batches_per_epoch):
+      
+    # Logsigma development
+    fig, axs = plt.subplots(5, sharex=True, dpi=300, figsize=(12,12), gridspec_kw={'height_ratios': [5,1.5,1,1.5,1.5]})
+    colors = ["red", "blue", "green", "orange"]
+    labels = ["max", "min", "mean", "median"]
+
+    # Plot the logsigma development
+    for logsig, label, color in zip(logsigs, labels, colors):
+        axs[0].plot(np.arange(1,len(logsig)+1), logsig, label=label, color=color)
+        axs[0].set_ylabel('$log(\\sigma^2)$', fontproperties=axislabelfont)
+    axs[0].legend(prop=labelfont)
+
+    axs[1].plot(np.arange(1,len(close_to_prior)+1), close_to_prior, label=f"\# close to the prior of {logsig2_prior:0.2f}", color="red")
+    axs[1].set_ylabel('Count', fontproperties=axislabelfont)
+    axs[1].legend(prop=labelfont)
+
+
+    # Plot the LR panel
+    axs[2].plot(np.arange(1,len(learning_rate)+1)/batches_per_epoch, learning_rate, color='red', label='learning rate')
+    axs[2].set_ylabel('learning rate', fontproperties=axislabelfont)
+    axs[2].legend(prop=labelfont)
+
+    # Plot the loss panel
+    losses = [[train_loss, test_loss], [train_inn_loss, test_inn_loss]]
+    labels_train = ["Total train loss", "Inn train loss"]
+    labels_test = ["Total test loss", "Inn test loss"]
+    for i, (loss_train, loss_test) in enumerate(losses):
+        c = len(loss_test)/len(loss_train)
+        axs[3+i].plot(c*np.arange(1,len(loss_train)+1), loss_train, color='blue', label=labels_train[i])
+        axs[3+i].plot(np.arange(1,len(loss_test)+1), loss_test, color='red', label=labels_test[i])
+        axs[3+i].legend(loc='upper right', prop=labelfont)
+        axs[3+i].set_xlim([0,len(loss_test)])
+        if len(loss_test) <= 10:
+            y_min = np.min(np.min(np.array([loss_train, loss_test], dtype=object)))
+            y_max = np.max(np.max(np.array([loss_train, loss_test], dtype=object)))
+        elif len(loss_test) <= 20:
+            train_idx = 10 * len(loss_train) // len(loss_test)
+            y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
+            y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
+        else:
+            train_idx = 20 * len(loss_train) // len(loss_test)
+            y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
+            y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
+            
+        if y_min > 0:
+            if y_max > 0:
+                axs[3+i].set_ylim([y_min*0.9, y_max*1.1])
+            else:
+                axs[3+i].set_ylim([y_min*0.9, y_max*0.9])
+        else:
+            if y_max > 0:
+                axs[3+i].set_ylim([y_min*1.1, y_max*1.1])
+            else:
+                axs[3+i].set_ylim([y_min*1.1, y_max*0.9])
+                
+        axs[3+i].set_ylabel('loss', fontproperties=axislabelfont)
+
+    axs[4].set_xlabel('epoch', fontproperties=axislabelfont)
+    axs[4].set_xlim([1,len(logsig)+1])
+
+    fig.tight_layout()
+    fig.savefig(save_name)
+    plt.close()
+
+def plot_correlation_plots(model, doc, epoch):
+    # mu & sigma correlation plots
+    model.eval()
+    mus = np.array([])
+    sigmas = np.array([])
+    mu_shapes = []
+
+    for name, parameter in model.named_parameters():
+        if "mu_w" in name:
+            mu_shapes.append(parameter.detach().cpu().numpy().shape)
+            mus = np.append(mus, parameter.detach().cpu().numpy().flatten())
+        if "logsig" in name:
+            sigmas = np.append(sigmas, parameter.detach().cpu().numpy().flatten())
+            
+    bias = np.array([])
+    i = 0
+    for name, parameter in model.named_parameters():        
+        if "bias" in name:
+            # print(parameter.detach().cpu().numpy().shape, mu_shapes[i])
+            added = (parameter.detach().cpu().numpy()[0]+np.zeros(mu_shapes[i]))
+            # print(mu_shapes[i], added.shape)
+            bias = np.append(bias, added.flatten())
+            i += 1
+
+
+
+    plt.figure(dpi=300)
+    plt.plot(np.abs(mus), sigmas, lw=0, marker=",")
+    plt.title(r"$\mu$ and $\sigma$ correlations (logplot)")
+    plt.xscale("log")
+    plt.xlabel(r"$|\mu|$")
+    plt.ylabel(r"log($\sigma$)")
+    plt.xlim(1.e-9, 5.e1)
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation_log.pdf")))
+    plt.close()
+
+    plt.figure(dpi=300)
+    plt.plot(mus, sigmas, lw=0, marker=",")
+    plt.title(r"$\mu$ and $\sigma$ correlations")
+    plt.xlabel(r"$\mu$")
+    plt.ylabel(r"log($\sigma$)")
+    plt.xlim(-2, 2)
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation.pdf")))
+    plt.close()
+
+    plt.show()
+    plt.figure(dpi=300)
+    plt.plot(bias, sigmas, lw=0, marker=".", markersize=1)
+    plt.title(r"$\mu$ and $\sigma$ correlations")
+    # plt.xscale("log")
+    plt.xlabel(r"$bias$")
+    plt.ylabel(r"log($\sigma$)")
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "bias_sigma_correlation.pdf")))
+    plt.close()
+
+def plot_logsigma_development(model, doc, test_loader, epoch, num_rand=30):
+    
+    model.eval()
+    
+    with torch.no_grad():
+        for i in range(num_rand):
+            model.reset_random()
+            if i == 0:
+                likelihoods = [model.log_prob(test_loader.data, test_loader.cond).detach().cpu().numpy()]
+            likelihoods = np.append(likelihoods, [model.log_prob(test_loader.data, test_loader.cond).detach().cpu().numpy()], axis=0) 
+    
+    likelihood_sigmas = np.std(likelihoods, axis=0)
+    # likelihood_sigmas[likelihood_sigmas<1.0e-8] = 1.0e-8
+
+    mus = np.array([])
+    log_sigmas = np.array([])
+    for name, parameter in model.named_parameters():
+        if "mu_w" in name:
+            mus = np.append(mus, parameter.detach().cpu().numpy().flatten())
+        if "logsig" in name:
+            log_sigmas = np.append(log_sigmas, parameter.detach().cpu().numpy().flatten())
+            
+            
+    np.random.shuffle(log_sigmas)
+
+
+    fig,ax = plt.subplots(dpi=300)
+    ax.set_title(f"Epoch {epoch}")
+    ax.hist(np.log(likelihood_sigmas**2), bins=100, color="green", alpha=0.5, label="sigmas (loglikelihood)")
+    ax.hist(log_sigmas, bins=100, color="orange", alpha=0.5, label="sigmas (parameters)")
+    ax.set_yscale("log")
+    ax.axvline(np.mean(np.log(likelihood_sigmas**2)), color="green", ls="--", lw=0.5, alpha=1)
+    ax.axvline(np.mean(log_sigmas), color="orange", ls="--", lw=0.5, alpha=1)
+    ax.set_xlim(-30, 10)
+    ax.legend()
+    fig.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "sigma_development.pdf")))
+    plt.close()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results_dir', help='Where to find the results and save the plots')
     parser.add_argument('--reference_file', help='Where to find the reference data')
     parser.add_argument('--include_coro', action='store_true', help='Also plot the pixel to pixel correlation (Computationally expensive)')
-    parser.add_argument('--mask', default=0, type=int)
     parser.add_argument('--layer', default=None, type=int, help='Which layer to plot')
     args = parser.parse_args()
 
-    plot_all_hist(args.results_dir, args.reference_file, args.include_coro, args.mask, args.layer)
+    plot_all_hist(args.results_dir, args.reference_file, args.include_coro, args.layer)
 
 if __name__=='__main__':
     main()

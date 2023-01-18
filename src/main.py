@@ -99,17 +99,17 @@ def main():
 
         # Pretrain the model with a fixed std and train the model afterwards normaly with
         # improved initial parameters
-        inn_pretrainer = INNTrainer(pretrain_params, device, doc, pretraining=True)
+        inn_pretrainer = INNTrainer(pretrain_params, device, doc, pretraining=True, plot_params=plot_params)
         inn_pretrainer.train()
         
-        inn_trainer = INNTrainer(params, device, doc)
+        inn_trainer = INNTrainer(params, device, doc, plot_params=plot_params)
         inn_trainer.load(update_offset=True)
         inn_trainer.model.reset_sigma()
         inn_trainer.train()
         
     else:
         # Just train the model
-        inn_trainer = INNTrainer(params, device, doc)
+        inn_trainer = INNTrainer(params, device, doc, plot_params=plot_params)
         inn_trainer.train()
     
     # Do the classifier test if required
@@ -120,10 +120,10 @@ def main():
     
     # TODO: Maybe pass the samples as file
     # TODO: Could also run over different "modes" here...
-    print("\n\nstarting classifier test")
-    sys.stdout.flush()
     if params.get('do_classifier_test', False):
-        dnn_trainer = DNNTrainer(params, device, doc)
+        print("\n\nstarting classifier test")
+        sys.stdout.flush()
+        dnn_trainer = DNNTrainer(inn_trainer, params, device, doc)
         for _ in range(params["classifier_runs"]):
             dnn_trainer.train()
             # TODO: Pass as params parameter
@@ -135,10 +135,6 @@ def main():
         
     # Revert to the previous precision
     torch.set_default_dtype(old_default_dtype)
-    
-    # Create some uncertainty plots
-    if 'bayesian' in params and params['bayesian']:
-        inn_trainer.plot_uncertaintys(plot_params)
 
 if __name__=='__main__':
     main()
