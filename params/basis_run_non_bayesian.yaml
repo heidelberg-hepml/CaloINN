@@ -9,7 +9,7 @@ batch_size: 256
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
-n_epochs: 400
+n_epochs: 200
 save_interval: 10
 keep_models: 100
 
