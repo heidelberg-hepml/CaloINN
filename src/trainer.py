@@ -21,6 +21,29 @@ from sklearn.calibration import calibration_curve
 from copy import deepcopy
 
 
+
+# prepare the plotting paramters
+from matplotlib.font_manager import FontProperties
+plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['mathtext.default'] = 'rm'
+plt.rcParams['text.usetex'] = True
+
+labelfont = FontProperties()
+labelfont.set_family('serif')
+labelfont.set_name('Times New Roman')
+labelfont.set_size(20)
+
+axislabelfont = FontProperties()
+axislabelfont.set_family('serif')
+axislabelfont.set_name('Times New Roman')
+axislabelfont.set_size(20)
+
+tickfont = FontProperties()
+tickfont.set_family('serif')
+tickfont.set_name('Times New Roman')
+tickfont.set_size(20)
+
+
 class INNTrainer:
     """ This class is responsible for training and testing the inn.  """
 
@@ -109,6 +132,11 @@ class INNTrainer:
         self.max_logsig = []
         self.mean_logsig = []
         self.median_logsig = []
+        self.close_to_prior = []
+        
+        # save the prior as logsig2 value for later usage
+        if self.model.bayesian:
+            self.logsig2_prior = - np.log(params.get("prior_prec", 1))
 
     def train(self):
         """ Trains the model. """
@@ -232,6 +260,8 @@ class INNTrainer:
             logsigs = np.array([])
             
             # Save some parameter values for documentation
+            self.close_to_prior.append(0)
+            
             if self.model.bayesian:
                 max_bias = 0.0
                 max_mu_w = 0.0
@@ -244,9 +274,9 @@ class INNTrainer:
                     if 'mu_w' in name:
                         max_mu_w = max(max_mu_w, torch.max(torch.abs(param)).item())
                     if 'logsig2_w' in name:
+                        self.close_to_prior[-1] += np.sum(np.abs((param - self.logsig2_prior).detach().cpu().numpy()) < 0.01)
                         min_logsig2_w = min(min_logsig2_w, torch.min(param).item())
                         max_logsig2_w = max(max_logsig2_w, torch.max(param).item())
-                        # logsigs.append(torch.max(param).item())
                         logsigs = np.append(logsigs, param.flatten().cpu().detach().numpy())
                 
                 self.max_logsig.append(max_logsig2_w)
@@ -331,10 +361,11 @@ class INNTrainer:
                         ax.loglog()
 
                 fig.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "all_voxels_no_errors.pdf")))
-                plt.show()
+                plt.close()
                 
                 if self.model.bayesian:
                     
+                    # Uncertainty plots
                     plot_params = {}
                     for voxel, voxel_data in enumerate(self.train_loader.data.T):
                         for log in [True, False]:
@@ -375,6 +406,165 @@ class INNTrainer:
                         
                     # Plot the uncertainty plots
                     l_plotter.plot()
+                    
+                    
+                    
+                    # Logsigma development
+                    train_loss, train_inn_loss = self.losses_train["total"], self.losses_train["inn"]
+                    test_loss, test_inn_loss = self.losses_test["total"], self.losses_test["inn"]
+                    learning_rate = self.learning_rates
+                    logsigs = [self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig]
+                    close_to_prior = self.close_to_prior
+                    logsig2_prior = self.logsig2_prior
+                    batches_per_epoch = len(self.train_loader)
+                    
+                    fig, axs = plt.subplots(5, sharex=True, dpi=300, figsize=(12,12), gridspec_kw={'height_ratios': [5,1.5,1,1.5,1.5]})
+                    colors = ["red", "blue", "green", "orange"]
+                    labels = ["max", "min", "mean", "median"]
+
+                    # Plot the logsigma development
+                    for logsig, label, color in zip(logsigs, labels, colors):
+                        axs[0].plot(np.arange(1,len(logsig)+1), logsig, label=label, color=color)
+                        axs[0].set_ylabel('$log(\\sigma^2)$', fontproperties=axislabelfont)
+                    axs[0].legend(prop=labelfont)
+
+                    axs[1].plot(np.arange(1,len(close_to_prior)+1), close_to_prior, label=f"\# close to the prior of {logsig2_prior:0.2f}", color="red")
+                    axs[1].set_ylabel('Count', fontproperties=axislabelfont)
+                    axs[1].legend(prop=labelfont)
+
+
+                    # Plot the LR panel
+                    axs[2].plot(np.arange(1,len(learning_rate)+1)/batches_per_epoch, learning_rate, color='red', label='learning rate')
+                    axs[2].set_ylabel('learning rate', fontproperties=axislabelfont)
+                    axs[2].legend(prop=labelfont)
+
+                    # Plot the loss panel
+                    losses = [[train_loss, test_loss], [train_inn_loss, test_inn_loss]]
+                    labels_train = ["Total train loss", "Inn train loss"]
+                    labels_test = ["Total test loss", "Inn test loss"]
+                    for i, (loss_train, loss_test) in enumerate(losses):
+                        c = len(loss_test)/len(loss_train)
+                        axs[3+i].plot(c*np.arange(1,len(loss_train)+1), loss_train, color='blue', label=labels_train[i])
+                        axs[3+i].plot(np.arange(1,len(loss_test)+1), loss_test, color='red', label=labels_test[i])
+                        axs[3+i].legend(loc='upper right', prop=labelfont)
+                        axs[3+i].set_xlim([0,len(loss_test)])
+                        if len(loss_test) <= 10:
+                            y_min = np.min(np.min(np.array([loss_train, loss_test], dtype=object)))
+                            y_max = np.max(np.max(np.array([loss_train, loss_test], dtype=object)))
+                        elif len(loss_test) <= 20:
+                            train_idx = 10 * len(loss_train) // len(loss_test)
+                            y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
+                            y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
+                        else:
+                            train_idx = 20 * len(loss_train) // len(loss_test)
+                            y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
+                            y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
+                            
+                        if y_min > 0:
+                            if y_max > 0:
+                                axs[3+i].set_ylim([y_min*0.9, y_max*1.1])
+                            else:
+                                axs[3+i].set_ylim([y_min*0.9, y_max*0.9])
+                        else:
+                            if y_max > 0:
+                                axs[3+i].set_ylim([y_min*1.1, y_max*1.1])
+                            else:
+                                axs[3+i].set_ylim([y_min*1.1, y_max*0.9])
+                                
+                        axs[3+i].set_ylabel('loss', fontproperties=axislabelfont)
+
+                    axs[4].set_xlabel('epoch', fontproperties=axislabelfont)
+                    axs[4].set_xlim([1,len(logsig)+1])
+
+                    fig.tight_layout()
+                    fig.savefig(self.doc.get_file(os.path.join("plots", "first_logsigma_results.pdf")))
+                    plt.close()
+                    
+                    # mu & sigma correlation plots
+                    mus = np.array([])
+                    sigmas = np.array([])
+                    mu_shapes = []
+
+                    for name, parameter in self.model.named_parameters():
+                        if "mu_w" in name:
+                            mu_shapes.append(parameter.detach().cpu().numpy().shape)
+                            mus = np.append(mus, parameter.detach().cpu().numpy().flatten())
+                        if "logsig" in name:
+                            sigmas = np.append(sigmas, parameter.detach().cpu().numpy().flatten())
+                            
+                    bias = np.array([])
+                    i = 0
+                    for name, parameter in self.model.named_parameters():        
+                        if "bias" in name:
+                            # print(parameter.detach().cpu().numpy().shape, mu_shapes[i])
+                            added = (parameter.detach().cpu().numpy()[0]+np.zeros(mu_shapes[i]))
+                            # print(mu_shapes[i], added.shape)
+                            bias = np.append(bias, added.flatten())
+                            i += 1
+
+
+
+                    plt.figure(dpi=300)
+                    plt.plot(np.abs(mus), sigmas, lw=0, marker=",")
+                    plt.title(r"$\mu$ and $\sigma$ correlations (logplot)")
+                    plt.xscale("log")
+                    plt.xlabel(r"$|\mu|$")
+                    plt.ylabel(r"log($\sigma$)")
+                    plt.xlim(1.e-9, 5.e1)
+                    plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "mu_sigma_correlation_log.png")))
+                    plt.close()
+
+                    plt.figure(dpi=300)
+                    plt.plot(mus, sigmas, lw=0, marker=",")
+                    plt.title(r"$\mu$ and $\sigma$ correlations")
+                    plt.xlabel(r"$\mu$")
+                    plt.ylabel(r"log($\sigma$)")
+                    plt.xlim(-2, 2)
+                    plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "mu_sigma_correlation.png")))
+                    plt.close()
+
+                    plt.show()
+                    plt.figure(dpi=300)
+                    plt.plot(bias, sigmas, lw=0, marker=".", markersize=1)
+                    plt.title(r"$\mu$ and $\sigma$ correlations")
+                    # plt.xscale("log")
+                    plt.xlabel(r"$bias$")
+                    plt.ylabel(r"log($\sigma$)")
+                    plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "bias_sigma_correlation.png")))
+                    plt.close()
+                    
+                    
+                    for i in range(30):
+                        if i == 0:
+                            likelihoods = [self.model.log_prob(self.test_loader.data,self.test_loader.cond).detach().cpu().numpy()]
+                        likelihoods = np.append(likelihoods, [self.model.log_prob(self.test_loader.data,self.test_loader.cond).detach().cpu().numpy()], axis=0)    
+                    likelihood_sigmas = np.std(likelihoods, axis=0)
+                    
+                    likelihood_sigmas[likelihood_sigmas<1.0e-8] = 1.0e-8
+
+                    mus = np.array([])
+                    log_sigmas = np.array([])
+                    for name, parameter in self.model.named_parameters():
+                        if "mu_w" in name:
+                            mus = np.append(mus, parameter.detach().cpu().numpy().flatten())
+                        if "logsig" in name:
+                            log_sigmas = np.append(log_sigmas, parameter.detach().cpu().numpy().flatten())
+                            
+                            
+                    np.random.shuffle(log_sigmas)
+
+
+                    fig,ax = plt.subplots(dpi=300)
+                    ax.set_title(f"Epoch {epoch}")
+                    ax.hist(np.log(likelihood_sigmas**2), bins=100, color="green", alpha=0.5, label="sigmas (loglikelihood)")
+                    ax.hist(log_sigmas, bins=100, color="orange", alpha=0.5, label="sigmas (parameters)")
+                    ax.set_yscale("log")
+                    ax.axvline(np.mean(np.log(likelihood_sigmas**2)), color="green", ls="--", lw=0.5, alpha=1)
+                    ax.axvline(np.mean(log_sigmas), color="orange", ls="--", lw=0.5, alpha=1)
+                    ax.set_xlim(-30, 10)
+                    ax.legend()
+                    fig.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "sigma_development.pdf")))
+                    plt.close()
                     
                 
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
@@ -426,7 +616,15 @@ class INNTrainer:
                     "losses_train": self.losses_train,
                     "learning_rates": self.learning_rates,
                     "grads": self.max_grad,
-                    "epoch": self.epoch}, self.doc.get_file(f"model{epoch}.pt"))
+                    "epoch": self.epoch,
+                    
+                    # Save the logsigma arrays
+                    "logsig_min": self.min_logsig,
+                    "logsig_max": self.max_logsig,
+                    "logsig_mean": self.mean_logsig,
+                    "logsig_median": self.median_logsig,
+                    "close_to_prior": self.close_to_prior}, self.doc.get_file(f"model{epoch}.pt"))
+                    
 
     def load(self, epoch="", update_offset=False):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
@@ -443,6 +641,14 @@ class INNTrainer:
         self.learning_rates = state_dicts.get("learning_rates", [])
         self.epoch = state_dicts.get("epoch", 0)
         self.max_grad = state_dicts.get("grads", [])
+        
+        # Load logsigmas, needed for documentation
+        self.min_logsig = state_dicts.get("logsig_min",[])
+        self.max_logsig = state_dicts.get("logsig_max", [])
+        self.mean_logsig = state_dicts.get("logsig_mean", [])
+        self.median_logsig = state_dicts.get("logsig_median", [])
+        self.close_to_prior = state_dicts.get("close_to_prior", [])
+
         if update_offset:
             self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
