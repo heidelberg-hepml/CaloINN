@@ -417,6 +417,13 @@ class INNTrainer:
                 # TODO: Modify the uncertainties function s.t. it is able to sample from same latent point
                 self.plot_uncertaintys(self.plot_params, name=f'epoch_{epoch:03d}', num_samples=num_samples, postprocessing=True, num_rand=num_rand)
                 
+                plotting.plot_overview(self.doc.get_file("overwiev.pdf"),
+                                                train_loss=self.losses_train["total"], train_inn_loss=self.losses_train["inn"],
+                                                test_loss=self.losses_test["total"], test_inn_loss=self.losses_test["inn"],
+                                                learning_rate=self.learning_rates, close_to_prior=self.close_to_prior,
+                                                logsigs=[self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig],
+                                                logsig2_prior=self.logsig2_prior, batches_per_epoch=len(self.train_loader))
+                
                 plotting.plot_correlation_plots(model = self.model, doc =self.doc, epoch = epoch)
                 
                 plotting.plot_logsigma_development(model=self.model, doc=self.doc, test_loader=self.test_loader, epoch=epoch, num_rand=30)
