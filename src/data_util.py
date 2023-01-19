@@ -15,7 +15,7 @@ def load_data(data_file, threshold=1e-5):
     layer_2 = full_file['layer_2'][:] / 1e3
     energy = full_file['energy'][:] / 1e0
     # TODO: Use correct normalization (here and in save data!)
-    overflow = full_file['overflow']
+    overflow = full_file['overflow'][:] / 1e0
     full_file.close()
 
     data = {
@@ -41,7 +41,7 @@ def save_data(data, data_file):
     save_file.create_dataset('layer_1', data=layer_1*1e3)
     save_file.create_dataset('layer_2', data=layer_2*1e3)
     save_file.create_dataset('energy', data=energy*1e0)
-    save_file.create_dataset('overflow', data=overflow)
+    save_file.create_dataset('overflow', data=overflow*1e0)
     save_file.close()
 
 def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None):
