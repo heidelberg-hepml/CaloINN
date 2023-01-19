@@ -142,7 +142,9 @@ params/*
 !params/example_bayesian.yaml
 Datasets
 queuing_system
-notebooks
+notebooks/*
 results_old
 params_old
 params_before_prior_test
+!notebooks/template.ipynb
+!notebooks/create_runcard.ipynb
