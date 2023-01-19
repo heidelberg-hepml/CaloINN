@@ -14,19 +14,22 @@ def load_data(data_file, threshold=1e-5):
     layer_1 = full_file['layer_1'][:] / 1e3
     layer_2 = full_file['layer_2'][:] / 1e3
     energy = full_file['energy'][:] / 1e0
+    # TODO: Use correct normalization (here and in save data!)
+    overflow = full_file['overflow']
     full_file.close()
 
     data = {
         'layer_0': layer_0,
         'layer_1': layer_1,
         'layer_2': layer_2,
-        'energy': energy
+        'energy': energy,
+        'overflow': overflow
     }
 
     return data
 
 def save_data(data, data_file):
-    """saves the given dict as h50y file. Has to satisfy the syntax of the original dataset"""
+    """saves the given dict as h5py file. Has to satisfy the syntax of the original dataset"""
     layer_0 = data['layer_0']
     layer_1 = data['layer_1']
     layer_2 = data['layer_2']
@@ -217,7 +220,7 @@ class CaloDataset(Dataset):
             with_noise (bool, optional): Should noise be applied to the data. Defaults to False.
             noise_width (_type_, optional): How large should the applied noise be
                 No effect if with_noise=False. Defaults to 1e-8.
-            return_label (bool, optional): Whether the labels for the training should be returned. Defaults to True.
+            return_label (bool, optional): Whether the labels for the training should be returned. Defaults to True. (Sample == 0, true == 1)
         """
         
 
@@ -581,7 +584,13 @@ def get_classifier_loaders(test_trainer, params, doc, device, drop_layers=None, 
         sample = test_trainer.generate(num_samples=num_samples, return_data=True, save_data=False, postprocessing=postprocessing)
         torch.set_default_dtype(old_dtype)
         
-        print(len(sample["energy"]))
+        # TODO: Solve differently, is not nice! This is the effect of the save fuction. In the next change move this to the postprocessing step!
+        sample["layer_0"] *= 1e3
+        sample["layer_1"] *= 1e3
+        sample["layer_2"] *= 1e3
+        sample["energy"] *= 1e0
+
+        # print(len(sample["energy"]))
         
         # Drop the layers that are not needed, if requested
         if drop_layers is not None:
