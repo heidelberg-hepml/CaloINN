@@ -524,6 +524,8 @@ def plot_lin_log_voxels(trainer, epoch, num_samples=100000, n_bins=100, max_widt
         width = num_voxels
     else: width = max_width
     
+    offset = 0
+    
     fig, axs = plt.subplots(2*rows,width, figsize=(6*width, 6*2*rows))
     for i, ax in enumerate(axs.flatten()):
         if i < num_voxels:
@@ -536,9 +538,9 @@ def plot_lin_log_voxels(trainer, epoch, num_samples=100000, n_bins=100, max_widt
             ax.hist(data_tst, bins=bins, color=color, density=True, alpha=0.5)
             ax.set_title(f"Distribution of {trainer.voxels_list[i]}")
         
-        else:
-            data_gen = np.copy(generated[:,i-num_voxels][np.argwhere(np.isfinite(generated[:,i-num_voxels]))])
-            data_tst = np.copy(trainer.test_loader.data[:,i-num_voxels].cpu())
+        elif i < (num_voxels + width*rows) and i >= width*rows:
+            data_gen = np.copy(generated[:,i-width*rows][np.argwhere(np.isfinite(generated[:,i-width*rows]))])
+            data_tst = np.copy(trainer.test_loader.data[:,i-width*rows].cpu())
             data_gen = data_gen[data_gen>1.e-7]
             data_tst = data_tst[data_tst>1.e-7]
             v_min = min([np.nanmin(data_gen), np.nanmin(data_tst)])
@@ -546,8 +548,11 @@ def plot_lin_log_voxels(trainer, epoch, num_samples=100000, n_bins=100, max_widt
             bins = np.logspace(np.log10(v_min), np.log10(v_max), n_bins)
             ax.hist(data_gen, bins=bins, density=True, color=color,histtype="step", linewidth=2)
             ax.hist(data_tst, bins=bins, color=color, density=True, alpha=0.5)
-            ax.set_title(f"Distribution of {trainer.voxels_list[i-num_voxels]} (loglog)")
+            ax.set_title(f"Distribution of {trainer.voxels_list[i-width*rows]} (loglog)")
             ax.loglog()
+            
+        else:
+            ax.set_visible(False)
 
     fig.savefig(trainer.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "summary.pdf")))
     plt.close()
@@ -651,7 +656,7 @@ def plot_correlation_plots(model, doc, epoch):
     plt.xlabel(r"$|\mu|$")
     plt.ylabel(r"log($\sigma$)")
     plt.xlim(1.e-9, 5.e1)
-    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation_log.pdf")))
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation_log.png")))
     plt.close()
 
     plt.figure(dpi=300)
@@ -660,7 +665,7 @@ def plot_correlation_plots(model, doc, epoch):
     plt.xlabel(r"$\mu$")
     plt.ylabel(r"log($\sigma$)")
     plt.xlim(-2, 2)
-    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation.pdf")))
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "mu_sigma_correlation.png")))
     plt.close()
 
     plt.show()
@@ -670,7 +675,7 @@ def plot_correlation_plots(model, doc, epoch):
     # plt.xscale("log")
     plt.xlabel(r"$bias$")
     plt.ylabel(r"log($\sigma$)")
-    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "bias_sigma_correlation.pdf")))
+    plt.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "bias_sigma_correlation.png")))
     plt.close()
 
 def plot_logsigma_development(model, doc, test_loader, epoch, num_rand=30):
@@ -706,7 +711,7 @@ def plot_logsigma_development(model, doc, test_loader, epoch, num_rand=30):
     ax.set_yscale("log")
     ax.axvline(np.mean(np.log(likelihood_sigmas**2)), color="green", ls="--", lw=0.5, alpha=1)
     ax.axvline(np.mean(log_sigmas), color="orange", ls="--", lw=0.5, alpha=1)
-    ax.set_xlim(-30, 10)
+    ax.set_xlim(-30, 15)
     ax.legend()
     fig.savefig(doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "sigma_development.pdf")))
     plt.close()
