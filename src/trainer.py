@@ -426,7 +426,7 @@ class INNTrainer:
                 
                 plotting.plot_correlation_plots(model = self.model, doc =self.doc, epoch = epoch)
                 
-                plotting.plot_logsigma_development(model=self.model, doc=self.doc, test_loader=self.test_loader, epoch=epoch, num_rand=30)
+                # plotting.plot_logsigma_development(model=self.model, doc=self.doc, test_loader=self.test_loader, epoch=epoch, num_rand=30)
                 
                 
                       
