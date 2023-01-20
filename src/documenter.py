@@ -8,7 +8,7 @@ class Documenter:
     """ Class that makes network runs self-documenting. All output data including the saved
     model, log file, parameter file and plots are saved into an output folder. """
 
-    def __init__(self, run_name, existing_run=None, read_only=False, basedir=None, log_name="log.txt"):
+    def __init__(self, run_name, block_name=None, existing_run=None, read_only=False, basedir=None, log_name="log.txt"):
         """ If existing_run is None, a new output folder named as run_name prefixed by date
         and time is created. stdout and stderr are redirected into a log file. The method
         close is registered to be automatically called when the program exits. """
@@ -17,8 +17,12 @@ class Documenter:
         if existing_run is None:
             now = datetime.now()
             while True:
-                full_run_name = now.strftime("%Y%m%d_%H%M%S") + "_" + run_name
-                self.basedir = os.path.join(script_dir, "../results", full_run_name)
+                if block_name is None:
+                    full_run_name = now.strftime("%Y%m%d_%H%M%S") + "_" + run_name
+                    self.basedir = os.path.join(script_dir, "..", "results", full_run_name)
+                else:
+                    full_block_name = now.strftime("%Y%m%d") + "_" + block_name
+                    self.basedir = os.path.join(script_dir, "..", "results", full_block_name, run_name)
                 try:
                     os.mkdir(self.basedir)
                     break
