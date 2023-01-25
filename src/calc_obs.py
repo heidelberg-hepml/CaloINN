@@ -28,20 +28,29 @@ def calc_brightest_voxel(data, layer=0, N=1):
     layer = layer.reshape((layer.shape[0], -1))
     layer = layer[layer.sum(axis=1)>0]
     layer.sort(axis=1)
+    N = min(N, layer.shape[1])
     return layer[:,-N]/layer.sum(axis=1)
 
-def get_bin_centers(layer, dir):
+def get_shapes(data):
+    s0 = data["layer_0"].shape
+    s1 = data["layer_1"].shape
+    s2 = data["layer_2"].shape
+    
+    return s0, s1, s2
+
+def get_bin_centers(layer, dir, data):
+    s0, s1, s2 = get_shapes(data)
     if dir == 'phi':
-        cells = (3, 12, 12)[layer]
+        cells = (s0[1], s1[1], s2[1])[layer]
     elif dir == 'eta':
-        cells = (96, 12, 6)[layer]
+        cells = (s0[2], s1[2], s2[2])[layer]
     else:
         raise ValueError(f"dir={dir} not in ['eta', 'phi']")
     bins = np.linspace(-240, 240, cells + 1)
     return (bins[1:] + bins[:-1]) / 2.
 
 def calc_centroid(data, layer=0, dir='phi'):
-    bin_centers = get_bin_centers(layer, dir)
+    bin_centers = get_bin_centers(layer, dir, data)
 
     layer = data[f'layer_{layer}']
     energies = np.sum(layer, axis=(1, 2))
@@ -109,8 +118,8 @@ def calc_coro(data, layer=0, threshold=1e-5):
     mask = img > threshold
     img[~mask] = 0.
     img /= np.sum(img, axis=(1,2), keepdims=True)
-    xpixels = get_bin_centers(layer, 'eta')
-    ypixels = get_bin_centers(layer, 'phi')
+    xpixels = get_bin_centers(layer, 'eta', data)
+    ypixels = get_bin_centers(layer, 'phi', data)
 
     coro = np.zeros_like(img)
     for i in range(len(ypixels)):

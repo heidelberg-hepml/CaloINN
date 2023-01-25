@@ -538,16 +538,16 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
             # Mini-Debug terminal
             if not (discriminant >= 0).all():
                 print(f"{discriminant=}, \n {a=}, \n {b=}, \n {c=}, \n {theta=}")
-                while True:
-                    inp = input()
-                    print(inp)
-                    if inp=="break":
-                        break
-                    try:
-                        print(eval(inp), flush=True)
-                    except:
-                        print("Cannot do this", flush=True)
-            #######################################################################
+            #     while True:
+            #         inp = input()
+            #         print(inp)
+            #         if inp=="break":
+            #             break
+            #         try:
+            #             print(eval(inp), flush=True)
+            #         except:
+            #             print("Cannot do this", flush=True)
+            # #######################################################################
             
             assert (discriminant >= 0).all()
 

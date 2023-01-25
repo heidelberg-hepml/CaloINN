@@ -293,15 +293,15 @@ def plot_logsig(
     
 def plot_all_hist(results_dir, reference_file, include_coro=False, 
                   calo_layer=None, epoch=None, summary_plot=True, single_plots=False,
-                  p_ref="e_plus", data=None):
+                  p_ref="e_plus", data=None, data_resolution="full"):
     
     # Load the sampled data if no data is passed:
     if data is None:
         data_file = os.path.join(results_dir, 'samples.hdf5')
-        data = data_util.load_data(data_file)
         
     # Load the reference data
     reference = data_util.load_data(reference_file)
+    reference = data_util.rescale_dataset(data=reference, data_resolution=data_resolution)
     
     # Select the output dir
     if epoch:

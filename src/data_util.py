@@ -44,11 +44,119 @@ def save_data(data, data_file):
     save_file.create_dataset('overflow', data=overflow*1e0)
     save_file.close()
 
-def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None):
+def rescale_dataset(data, data_resolution):
+    
+    if data_resolution == "full":
+        return data
+    
+    layer_0 = data['layer_0']
+    layer_1 = data['layer_1']
+    layer_2 = data['layer_2']
+    energy = data['energy']
+    overflow = data['overflow']
+
+    pool2_x = torch.nn.AvgPool2d(kernel_size=(2,1), stride=(2,1))
+    pool2_y = torch.nn.AvgPool2d(kernel_size=(1,2), stride=(1,2))
+    
+    # Set how often the avg pooling in every dim is applied
+    if data_resolution == "small":
+        # dims: (1, 3), (6, 1), (3, 1)
+        layer_0_x, layer_0_y = 1, 5
+        layer_1_x, layer_1_y = 1, 3
+        layer_2_x, layer_2_y = 2, 2
+    elif data_resolution == "medium":
+        # dims: (3, 6), (6, 3), (3, 3)
+        layer_0_x, layer_0_y = 0, 4
+        layer_1_x, layer_1_y = 1, 2
+        layer_2_x, layer_2_y = 2, 1
+    elif data_resolution == "large":
+        # dims: (3, 6), (6, 6), (6, 6)
+        layer_0_x, layer_0_y = 0, 4
+        layer_1_x, layer_1_y = 1, 1
+        layer_2_x, layer_2_y = 1, 0
+    elif data_resolution == "large":
+        # dims: (3, 6), (6, 6), (6, 6)
+        layer_0_x, layer_0_y = 0, 4
+        layer_1_x, layer_1_y = 1, 1
+        layer_2_x, layer_2_y = 1, 0
+    elif data_resolution == "very_large":
+        # dims: (3, 24), (12, 12), (12, 6)
+        layer_0_x, layer_0_y = 0, 2
+        layer_1_x, layer_1_y = 0, 0
+        layer_2_x, layer_2_y = 0, 0
+    else:
+        raise KeyError("The data_resolution is unknown. Please use only full, small, medium, large or very_large!")
+
+    # layer_0:
+    new_layer_0 = torch.tensor(layer_0)
+    for i in range(layer_0_x):
+        new_layer_0 = pool2_x(new_layer_0)*2
+    for i in range(layer_0_y):
+        new_layer_0 = pool2_y(new_layer_0)*2
+    new_layer_0 = new_layer_0.numpy()
+
+    # layer_1:
+    new_layer_1 = torch.tensor(layer_1)
+    for i in range(layer_1_x):
+        new_layer_1 = pool2_x(new_layer_1)*2
+    for i in range(layer_1_y):
+        new_layer_1 = pool2_y(new_layer_1)*2
+    new_layer_1 = new_layer_1.numpy()
+
+
+    # layer_2:
+    new_layer_2 = torch.tensor(layer_2)
+    for i in range(layer_2_x):
+        new_layer_2 = pool2_x(new_layer_2)*2
+    for i in range(layer_2_y):
+        new_layer_2 = pool2_y(new_layer_2)*2
+    new_layer_2 = new_layer_2.numpy()
+
+    rescaled_dataset = {}
+    rescaled_dataset["layer_0"] = new_layer_0
+    rescaled_dataset["layer_1"] = new_layer_1
+    rescaled_dataset["layer_2"] = new_layer_2
+    rescaled_dataset["energy"] = energy
+    rescaled_dataset["overflow"] = overflow
+    
+    return rescaled_dataset
+
+def get_layer_sizes(data_flattened):
+
+    if data_flattened.shape[1] >= 504:
+        return 288, 144, 72
+    elif data_flattened.shape[1] >= 288:
+        return 72, 144, 72
+    elif data_flattened.shape[1] >= 90:
+        return 18, 36, 36
+    elif data_flattened.shape[1] >= 45:
+        return 18, 18, 9
+    elif data_flattened.shape[1] >= 12:
+        return 3, 6, 3
+    
+def get_layer_shapes(data_flattened):
+    
+    if data_flattened.shape[1] >= 504:
+        return [3, 96], [12, 12], [12, 6]
+    elif data_flattened.shape[1] >= 288:
+        return [3, 24], [12, 12], [12, 6]
+    elif data_flattened.shape[1] >= 90:
+        return [3, 6], [6, 6], [6, 6]
+    elif data_flattened.shape[1] >= 45:
+        return [3, 6], [6, 3], [3, 3]
+    elif data_flattened.shape[1] >= 12:
+        return [1, 3], [6, 1], [3, 1]
+
+def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None, data_resolution="full"):
     """Preprocessing of the given data dict. Returns two numpy arrays containing the features and the conditions.
     Furthermore extra dimensions can be added if requested."""
     
     assert not (use_extra_dim and use_extra_dims), "Cannot use extra_dim and extra_dims simultaneously!"
+    
+    assert not ( (layer is not None) and (data_resolution != "full")), "The resolution change needs all layers so far!"
+    
+    if data_resolution != "full":
+        data = rescale_dataset(data, data_resolution=data_resolution)
     
     # Extract the arrays from the dict
     layer_0 = data['layer_0']
@@ -111,15 +219,21 @@ def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, laye
     samples[samples < threshold] = 0.
 
     # Reshape the layers to their original shape
+    # (We made sure that single layers and resizing are never happening in the same run)
     if layer is not None:
         layer_0 = np.zeros((len(samples), 3, 96))
         layer_1 = np.zeros((len(samples), 12, 12))
         layer_2 = np.zeros((len(samples), 12, 6))
         (layer_0, layer_1, layer_2)[layer][:] = samples.reshape(((-1, 3, 96),(-1, 12, 12),(-1, 12, 6))[layer])
     else:
-        layer_0 = samples[..., :288].reshape(-1, 3, 96)
-        layer_1 = samples[..., 288:432].reshape(-1, 12, 12)
-        layer_2 = samples[..., 432:].reshape(-1, 12, 6)
+        size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=samples)
+        shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=samples)
+        l_0 = size_layer_0
+        l_01 = size_layer_0 + size_layer_1
+        
+        layer_0 = samples[..., :l_0].reshape(-1, shape_layer_0[0], shape_layer_0[1])
+        layer_1 = samples[..., l_0:l_01].reshape(-1, shape_layer_1[0], shape_layer_1[1])
+        layer_2 = samples[..., l_01:].reshape(-1, shape_layer_2[0], shape_layer_2[1])
 
     return {
         'layer_0': layer_0,
@@ -142,19 +256,29 @@ def remove_extra_dim(data, energies):
     return data*energies*factors
 
 def add_extra_dims(data, e_part):
-    e0 = np.sum(data[..., :288], axis=1, keepdims=True)
-    e1 = np.sum(data[..., 288:432], axis=1, keepdims=True)
-    e2 = np.sum(data[..., 432:], axis=1, keepdims=True)
+    
+    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data)
+    l_0 = size_layer_0
+    l_01 = size_layer_0 + size_layer_1
+    
+    e0 = np.sum(data[..., :l_0], axis=1, keepdims=True)
+    e1 = np.sum(data[..., l_0:l_01], axis=1, keepdims=True)
+    e2 = np.sum(data[..., l_01:], axis=1, keepdims=True)
     u1 = (e0+e1+e2)/e_part
     u2 = e0/(e0+e1+e2)
     u3 = e1/(e1+e2+1e-7)
-    data[..., :288] = data[..., :288] / e0
-    data[..., 288:432] = data[..., 288:432] / (e1 + 1e-7)
-    data[..., 432:] = data[..., 432:] / (e2 + 1e-7)
+    data[..., :l_0] = data[..., :l_0] / e0
+    data[..., l_0:l_01] = data[..., l_0:l_01] / (e1 + 1e-7)
+    data[..., l_01:] = data[..., l_01:] / (e2 + 1e-7)
     return np.concatenate((data, u1, u2, u3), axis=1)
 
 def remove_extra_dims(data, e_part):
     data = deepcopy(data)
+    
+    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data)
+    l_0 = size_layer_0
+    l_01 = size_layer_0 + size_layer_1
+    
     u1 = data[:,[-3]]
     u2 = data[:,[-2]]
     u3 = data[:,[-1]]
@@ -164,30 +288,30 @@ def remove_extra_dims(data, e_part):
     e2 = e_tot - e0 -e1
     data = data[:,:-3]
     data[data<0] = 0.
-    data[..., :288]    = data[..., :288] / (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
-    data[..., 288:432] = data[..., 288:432] / (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
-    data[..., 432:]    = data[..., 432:] / (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
-    data[..., :288]    = data[..., :288] * e0
-    data[..., 288:432] = data[..., 288:432] * e1
-    data[..., 432:]    = data[..., 432:] * e2
+    data[..., :l_0]    = data[..., :l_0] / (np.sum(data[..., :l_0], axis=1, keepdims=True) + 1e-7)
+    data[..., l_0:l_01] = data[..., l_0:l_01] / (np.sum(data[..., l_0:l_01], axis=1, keepdims=True) + 1e-7)
+    data[..., l_01:]    = data[..., l_01:] / (np.sum(data[..., l_01:], axis=1, keepdims=True) + 1e-7)
+    data[..., :l_0]    = data[..., :l_0] * e0
+    data[..., l_0:l_01] = data[..., l_0:l_01] * e1
+    data[..., l_01:]    = data[..., l_01:] * e2
     return data
 
 def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
-        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, layer=None):
+        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, layer=None, data_resolution="full"):
     """Returns the dataloaders for the training of the CINN"""
     
     # Create the train loader
     data_train, cond_train = preprocess(load_data(data_file_train),
-        use_extra_dim, use_extra_dims, layer=layer)
+        use_extra_dim, use_extra_dims, layer=layer, data_resolution=data_resolution)
 
     # Create the test loader
     data_test, cond_test = preprocess(load_data(data_file_test),
-        use_extra_dim, use_extra_dims, layer=layer)
+        use_extra_dim, use_extra_dims, layer=layer, data_resolution=data_resolution)
 
-
-    # Just to check that the function is not returning an error
-    postprocess(data_train, cond_train, use_extra_dim, use_extra_dims, layer)
-    postprocess(data_test, cond_test, use_extra_dim, use_extra_dims, layer)
+    if data_resolution == "full": # Does not work for resized calo
+        # Just to check that the function is not returning an error
+        postprocess(data_train, cond_train, use_extra_dim, use_extra_dims, layer)
+        postprocess(data_test, cond_test, use_extra_dim, use_extra_dims, layer)
 
     # Convert the ndarrays into torch.tensors
     data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
@@ -545,7 +669,7 @@ def get_classifier_loaders_old(params, doc, device, drop_layers=None):
 
     return dataloader_train, dataloader_val, dataloader_test
 
-def get_classifier_loaders(test_trainer, params, doc, device, drop_layers=None, postprocessing=False, val_fraction = 0.2, test_fraction = 0.2):
+def get_classifier_loaders(test_trainer, params, doc, device, drop_layers=None, postprocessing=False, val_fraction = 0.2, test_fraction = 0.2, data_resolution="full"):
     """Returns the dataloaders for the classifier test sampling from the passed model
 
     Args:
@@ -576,6 +700,8 @@ def get_classifier_loaders(test_trainer, params, doc, device, drop_layers=None, 
         for elem in original:
             num_samples = len(original[elem])
             break
+        
+        original = rescale_dataset(data=original, data_resolution=data_resolution)
         
         # Generate the samples. Pay attention, that the trainer dtype is temporarily the default dtype
         trainer_dtype = next(iter(test_trainer.model.parameters())).dtype

@@ -58,8 +58,10 @@ class INNTrainer:
             width_noise=params.get("width_noise", 1e-7),
             use_extra_dim=params.get("use_extra_dim", False),
             use_extra_dims=params.get("use_extra_dims", False),
-            layer=params.get("calo_layer", None)
+            layer=params.get("calo_layer", None),
+            data_resolution=params.get("data_resolution", "full")
         )
+        
         
         voxels = params.get("voxels", None)
         self.voxels = voxels
@@ -83,10 +85,10 @@ class INNTrainer:
         full_voxels = np.array(full_voxels)
         
         if self.voxels is not None:
-            self.voxels_list = full_voxels[voxels]
+            self.voxels_list = full_voxels[self.voxels]
             
-            train_loader.data = train_loader.data[:, voxels]
-            test_loader.data = test_loader.data[:, voxels]
+            train_loader.data = train_loader.data[:, self.voxels]
+            test_loader.data = test_loader.data[:, self.voxels]
             
         else:
             self.voxels_list = full_voxels
@@ -157,6 +159,7 @@ class INNTrainer:
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
+            min_test_loss = np.inf
             
             # Do training and validation for the current epoch
             if self.model.bayesian:
@@ -166,6 +169,10 @@ class INNTrainer:
             else:       
                 max_grad, train_loss, train_inn_loss = self.__train_one_epoch()
                 test_loss, test_inn_loss = self.__do_validation()
+                
+            if test_loss < min_test_loss:
+                min_test_loss = test_loss
+                self.save("_best")
                 
             # Print the data saved for documentation
             print('')
@@ -216,7 +223,10 @@ class INNTrainer:
                 self.save()
                 
                 self.latent_samples(epoch)
-                self.plot_results(epoch)
+                try:
+                    self.plot_results(epoch)
+                except:
+                    print(f"Error while plotting the results during epoch {epoch}")
      
     def __train_one_epoch(self):
         """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
@@ -410,7 +420,8 @@ class INNTrainer:
                 summary_plot=True, 
                 single_plots=False,
                 data=generated,
-                p_ref=self.params.get("particle_type", "piplus"))  
+                p_ref=self.params.get("particle_type", "piplus"),
+                data_resolution=self.params.get("data_resolution", "full"))  
             
             # Plot also the errorbar plots if a bayesian model is used
             if self.model.bayesian:
@@ -509,7 +520,7 @@ class INNTrainer:
         elif self.lr_sched_mode == "no_scheduling":
             self.scheduler = None
 
-    def save(self, epoch=""):
+    def save(self, epoch="", name=None):
         """ Save the model, its optimizer, losses, learning rates and the epoch """
         torch.save({"opt": self.optim.state_dict(),
                     "net": self.model.state_dict(),
@@ -648,8 +659,8 @@ class INNTrainer:
         
         # Load the test dataset for comparison (either use the dataspace or the training space)
         if postprocessing:
-            true_data = data_util.load_data(
-                data_file=self.params.get('data_path_test'))
+            true_data = data_util.load_data(data_file=self.params.get('data_path_test'))
+            true_data = data_util.rescale_dataset(data=true_data, data_resolution=self.params.get("data_resolution", "full"))
         else:
             true_data = {"data": deepcopy(self.train_loader.data.cpu().numpy())}
         
@@ -723,7 +734,8 @@ class DNNTrainer:
         
         
         dataloader_train, dataloader_val, dataloader_test = data_util.get_classifier_loaders(test_trainer,
-            self.params, self.doc, self.device, drop_layers=layer_names, postprocessing=self.postprocessing)
+            self.params, self.doc, self.device, drop_layers=layer_names,
+            postprocessing=self.postprocessing, data_resolution=params.get("data_resolution", "full"))
              
         self.train_loader = dataloader_train
         self.val_loader = dataloader_val
