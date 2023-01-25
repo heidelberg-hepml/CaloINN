@@ -1,3 +1,6 @@
+run_name: ...
+block_name: ...
+
 # Data
 particle_type: piplus
 fixed_noise: False
@@ -9,13 +12,14 @@ batch_size: 256
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
-n_epochs: 200
+n_epochs: 400
 save_interval: 10
 keep_models: 100
 
 # Bayesian Setup
-bayesian: False
-
+bayesian: True
+std_init: -9
+prior_prec: 50.0
 
 # INN Architecture
 n_blocks: 12
