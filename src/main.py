@@ -44,7 +44,7 @@ def main():
 
     # Initialize the documenter class
     # Sends all outputs to a log file and manages the file system of the output folder
-    doc = Documenter(params['run_name'])
+    doc = Documenter(params['run_name'], block_name=params.get("block_name", None))
     
     # Backup of the parameter file
     shutil.copy(args.param_file, doc.get_file('params.yaml'))

@@ -18,13 +18,13 @@ class Documenter:
             now = datetime.now()
             while True:
                 if block_name is None:
-                    full_run_name = now.strftime("%Y%m%d_%H%M%S") + "_" + run_name
+                    full_run_name = now.strftime("%Y_%m_%d_%H%M%S") + "_" + run_name
                     self.basedir = os.path.join(script_dir, "..", "results", full_run_name)
                 else:
-                    full_block_name = now.strftime("%Y%m%d") + "_" + block_name
+                    full_block_name = now.strftime("%Y_%m_%d") + "_" + block_name
                     self.basedir = os.path.join(script_dir, "..", "results", full_block_name, run_name)
                 try:
-                    os.mkdir(self.basedir)
+                    os.makedirs(self.basedir)
                     break
                 except FileExistsError:
                     now += timedelta(seconds=1)
