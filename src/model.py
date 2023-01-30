@@ -473,3 +473,139 @@ class DNN(torch.nn.Module):
     
     def loss(self, *args, **kwargs):
         return self.loss_fct(*args, **kwargs)
+    
+    
+class VAE(nn.Module):
+    def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5):
+        super(VAE, self).__init__()
+        
+        # Create a logit preprocessing
+        self.logit_trafo_in = LogitTransformation([(input_dim, )], alpha=alpha)
+        
+        # Save the latent dimension
+        self.latent_dim = latent_dim
+        
+        # Create decoder and encoder
+        self.encoder = nn.Sequential()
+        self.decoder = nn.Sequential()
+        
+        # in_size is the always overwritten with the size of the previous layer
+        in_size = input_dim
+        
+        # Add the layers to the encoder
+        for i, hidden_size in enumerate(hidden_sizes):
+            self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            self.encoder.add_module(f"relu{i}", nn.ReLU())
+            in_size = hidden_size
+        
+        self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
+        in_size = latent_dim
+        
+        # add the layers to the decoder
+        for i, hidden_size in enumerate(reversed(hidden_sizes)):
+            self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            self.decoder.add_module(f"relu{i}", nn.ReLU())
+            in_size = hidden_size
+            
+        self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
+        
+        self.logit_trafo_out = LogitTransformation([(input_dim, )], alpha=alpha)
+        
+        # the hyperparamter for the reco_loss
+        self.beta = beta
+
+    def encode(self, x):
+        x = self.encoder(x)
+        mu, logvar = x[:, :self.latent_dim], x[:, self.latent_dim:]
+        return mu, logvar
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5*logvar)
+        eps = torch.randn_like(std)
+        return eps * std + mu
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        x_logit = self.logit_trafo_in((x, ))[0][0]
+        mu, logvar = self.encode(x_logit)
+        z = self.reparameterize(mu, logvar)
+        x_recon_logit = self.decode(z)
+        x_recon = self.logit_trafo_out( (x_recon_logit, ), rev=True)[0][0]
+        return x_recon
+    
+    def reco_loss(self, x, compare_total_energy=False):
+        """Computes the reconstruction loss in the logit space"""          
+        
+        x_logit = self.logit_trafo_in((x, ))[0][0]
+        mu, logvar = self.encode(x_logit)
+        z = self.reparameterize(mu, logvar)
+        x_recon_logit = self.decode(z)
+        
+        # append the total energy as a coparison criterion
+        if compare_total_energy:
+            energy = x_logit.sum(axis=1).unsqueeze(-1)
+            recon_energy = x_recon_logit.sum(axis=1).unsqueeze(-1)
+            
+            x_logit = torch.cat((x_logit, energy), axis=1)
+            x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
+        
+        MSE = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+            
+        
+        return MSE + self.beta * KLD, MSE, KLD 
+    
+    
+class CVAE(VAE):
+    def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5):
+        super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta)
+        
+        # Have to change the decoder as it takes a larger input now!
+        self.decoder[0] = nn.Linear(latent_dim+cond_dim, hidden_sizes[-1])
+    
+    def forward(self, x, c):
+        
+        # from VAE
+        x_logit = self.logit_trafo_in((x, ))[0][0]
+        mu, logvar = self.encode(x_logit)
+        z = self.reparameterize(mu, logvar)
+        
+        # append the conditions to the latent point
+        if len(c.shape)==1:
+            c = c.unsqueeze(-1)
+        z = torch.cat((z, c), axis = 1)
+        
+        # from VAE
+        x_recon_logit = self.decode(z)
+        x_recon = self.logit_trafo_out( (x_recon_logit, ), rev=True)[0][0]
+        return x_recon
+    
+    def reco_loss(self, x, c, compare_total_energy=False):
+        """Computes the reconstruction loss in the logit space"""          
+        # From VAE
+        x_logit = self.logit_trafo_in((x, ))[0][0]
+        mu, logvar = self.encode(x_logit)
+        z = self.reparameterize(mu, logvar)
+        
+        # append the conditions to the latent point
+        if len(c.shape)==1:
+            c = c.unsqueeze(-1)
+        z = torch.cat((z, c), axis = 1)
+    
+        # From VAE
+        x_recon_logit = self.decode(z)
+        # append the total energy as a coparison criterion
+        if compare_total_energy:
+            energy = x_logit.sum(axis=1).unsqueeze(-1)
+            recon_energy = x_recon_logit.sum(axis=1).unsqueeze(-1)
+            
+            x_logit = torch.cat((x_logit, energy), axis=1)
+            x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
+        
+        MSE = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+            
+        
+        return MSE + self.beta * KLD, MSE, KLD 
