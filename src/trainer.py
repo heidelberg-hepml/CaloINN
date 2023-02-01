@@ -1150,13 +1150,15 @@ class VAETrainer:
                               latent_dim = self.latent_dim,
                               hidden_sizes = hidden_sizes,
                               alpha = params.get("alpha", 1.e-6),
-                              beta = params.get("beta", 1.e-5))
+                              beta = params.get("beta", 1.e-5),
+                              gamma = params.get("gamma", 1.e+3))
         else:
             self.model = VAE(input_dim = data.shape[-1],
                              latent_dim = self.latent_dim,
                              hidden_sizes = hidden_sizes,
                              alpha = params.get("alpha", 1.e-6),
-                             beta = params.get("beta", 1.e-5))
+                             beta = params.get("beta", 1.e-5),
+                             gamma = params.get("gamma", 1.e+3))
         
         self.model = self.model.to(self.device)
         
@@ -1169,8 +1171,8 @@ class VAETrainer:
         sys.stdout.flush()
         
         # Needed for documentation (printing & plotting)
-        self.losses_train = {'mse': [], 'kl': [], 'total': []}
-        self.losses_test = {'mse': [], 'kl': [], 'total': []}
+        self.losses_train = {'mse': [], 'mse_logit': [],'kl': [], 'total': []}
+        self.losses_test = {'mse': [], 'mse_logit': [], 'kl': [], 'total': []}
         self.learning_rates = []
         self.max_grad = []
         
@@ -1187,8 +1189,8 @@ class VAETrainer:
             min_test_loss = np.inf
             
             # Do training and validation for the current epoch
-            max_grad, train_loss, train_mse_loss, train_kl_loss = self.__train_one_epoch()
-            test_loss, test_mse_loss, test_kl_loss = self.__do_validation()
+            max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss = self.__train_one_epoch()
+            test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss = self.__do_validation()
 
             # Remember the best model so far
             if test_loss < min_test_loss:
@@ -1196,8 +1198,8 @@ class VAETrainer:
                 self.save("_best")
                 
             # Print the data saved for documentation
-            self.print_losses(epoch, train_mse_loss, train_kl_loss, train_loss,
-                              test_mse_loss, test_kl_loss, test_loss, max_grad)
+            self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_loss,
+                              test_mse_loss, test_mse_loss_logit, test_kl_loss, test_loss, max_grad)
             
             # Plot the losses as well
             if epoch >= 1:
@@ -1219,6 +1221,7 @@ class VAETrainer:
         # Initialize the loss values for the documentation
         train_loss = 0
         train_mse_loss = 0
+        train_mse_loss_logit = 0
         train_kl_loss = 0
         max_grad = 0.0
 
@@ -1237,9 +1240,9 @@ class VAETrainer:
             
             # Get the reconstruction loss
             if self.params.get("conditional", True):
-                loss, mse_loss, kl_loss  = self.model.reco_loss(x, c, compare_total_energy=self.params.get("compare_total_energy", False))
+                loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c, compare_total_energy=self.params.get("compare_total_energy", False))
             else:
-                loss, mse_loss, kl_loss  = self.model.reco_loss(x, compare_total_energy=self.params.get("compare_total_energy", False))
+                loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, compare_total_energy=self.params.get("compare_total_energy", False))
                 
             # Calculate the gradients
             loss.backward()
@@ -1249,11 +1252,13 @@ class VAETrainer:
 
             # Save the losses for documentation
             self.losses_train['mse'].append(mse_loss.item())
+            self.losses_train['mse_logit'].append(mse_loss_logit.item())
             self.losses_train['total'].append(loss.item())
             self.losses_train['kl'].append(kl_loss.item())
             
             train_loss += loss.item()*len(x)
             train_mse_loss += mse_loss.item()*len(x)
+            train_mse_loss_logit += mse_loss_logit.item()*len(x)
             train_kl_loss += kl_loss.item()*len(x)
 
             # Save the maximum gradient for documentation
@@ -1266,10 +1271,11 @@ class VAETrainer:
         # Normalize the losses to the dataset length and return them.
         # We need a different normalization here compared to the plotting because we summed over the whole epoch!
         train_mse_loss /= len(self.train_loader.data)
+        train_mse_loss_logit /= len(self.train_loader.data)
         train_kl_loss /= len(self.train_loader.data)
         train_loss /= len(self.train_loader.data)                
 
-        return max_grad, train_loss, train_mse_loss, train_kl_loss
+        return max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss
                        
     def __do_validation(self):
         """Evaluates the model on the test set.
@@ -1278,6 +1284,7 @@ class VAETrainer:
         # Initialize the loss values for the documentation
         test_loss = 0
         test_mse_loss = 0
+        test_mse_loss_logit = 0
         test_kl_loss = 0
         
         # Evaluate the model on the test dataset and save the losses
@@ -1285,26 +1292,30 @@ class VAETrainer:
         with torch.no_grad():
             for x, c in self.test_loader:
                 
+                # Get the reconstruction loss
                 if self.params.get("conditional", True):
-                    loss, mse_loss, kl_loss  = self.model.reco_loss(x, c, compare_total_energy=self.params.get("compare_total_energy", False))
+                    loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c, compare_total_energy=self.params.get("compare_total_energy", False))
                 else:
-                    loss, mse_loss, kl_loss  = self.model.reco_loss(x, compare_total_energy=self.params.get("compare_total_energy", False))
+                    loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, compare_total_energy=self.params.get("compare_total_energy", False))
                 
                 test_loss += loss.item() * len(x)
                 test_mse_loss += mse_loss.item() * len(x)
+                test_mse_loss_logit += mse_loss_logit.item() * len(x)
                 test_kl_loss += kl_loss.item() * len(x)
                 
         
         # Normalize the losses for printing and plotting and store them also in the corresponding dict
         test_mse_loss /= len(self.test_loader.data)
+        test_mse_loss_logit /= len(self.test_loader.data)
         test_loss /= len(self.test_loader.data)
         test_kl_loss /= len(self.test_loader.data)
                
         self.losses_test['mse'].append(test_mse_loss)
+        self.losses_test['mse_logit'].append(test_mse_loss_logit)
         self.losses_test['total'].append(test_loss)
         self.losses_test['kl'].append(test_kl_loss)
 
-        return test_loss, test_mse_loss, test_kl_loss
+        return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss
     
     def plot_results(self, epoch):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
@@ -1353,21 +1364,24 @@ class VAETrainer:
     def plot_losses(self):
         # Plot the losses
         plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
-        plotting.plot_loss(self.doc.get_file('loss_mse.pdf'), self.losses_train['mse'], self.losses_test['mse'])
+        plotting.plot_loss(self.doc.get_file('loss_mse_data.pdf'), self.losses_train['mse'], self.losses_test['mse'])
+        plotting.plot_loss(self.doc.get_file('loss_mse_logit.pdf'), self.losses_train['mse_logit'], self.losses_test['mse_logit'])
         plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
         
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
 
-    def print_losses(self, epoch, train_mse_loss, train_kl_loss, train_loss, test_mse_loss, test_kl_loss, test_loss, max_grad):
+    def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_loss, max_grad):
         print('')
         print(f'=== epoch {epoch} ===')
         
-        print(f'mse loss (train): {train_mse_loss}')
+        print(f'mse data-loss (train): {train_mse_loss}')
+        print(f'mse logit-loss (train): {train_mse_loss_logit}')
         print(f'kl loss (train): {train_kl_loss}')
         print(f'total loss (train): {train_loss}')
         
-        print(f'mse loss (test): {test_mse_loss}')
+        print(f'mse data-loss (test): {test_mse_loss}')
+        print(f'mse logit-loss (test): {test_mse_loss_logit}')
         print(f'kl loss (test): {test_kl_loss}')
         print(f'total loss (test): {test_loss}')
 

@@ -10,6 +10,8 @@ from myBlocks import *
 from vblinear import VBLinear
 from splines.rational_quadratic import RationalQuadraticSpline
 
+from copy import deepcopy
+
 class Subnet(nn.Module):
     """ This class constructs a subnet for the coupling blocks """
 
@@ -474,13 +476,29 @@ class DNN(torch.nn.Module):
     def loss(self, *args, **kwargs):
         return self.loss_fct(*args, **kwargs)
     
+class LogitTransformationVAE:
+    def __init__(self, rev=False, alpha=1.e-6):
+        self.alpha = alpha
+        self.rev = rev
+        
+    def forward(self, x):
+        if not self.rev:
+            x = x*(1-2*self.alpha) + self.alpha
+            z = torch.logit(x)
+        else:
+            z = torch.sigmoid(x)
+            z = (z - self.alpha)/(1-2*self.alpha)
+        return z
+        
+    def __call__(self, x):
+        return self.forward(x)
     
 class VAE(nn.Module):
     def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5):
         super(VAE, self).__init__()
         
         # Create a logit preprocessing
-        self.logit_trafo_in = LogitTransformation([(input_dim, )], alpha=alpha)
+        self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
         # Save the latent dimension
         self.latent_dim = latent_dim
@@ -509,7 +527,7 @@ class VAE(nn.Module):
             
         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
         
-        self.logit_trafo_out = LogitTransformation([(input_dim, )], alpha=alpha)
+        self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
         
         # the hyperparamter for the reco_loss
         self.beta = beta
@@ -528,17 +546,17 @@ class VAE(nn.Module):
         return self.decoder(z)
 
     def forward(self, x):
-        x_logit = self.logit_trafo_in((x, ))[0][0]
+        x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
         x_recon_logit = self.decode(z)
-        x_recon = self.logit_trafo_out( (x_recon_logit, ), rev=True)[0][0]
+        x_recon = self.logit_trafo_out(x_recon_logit)
         return x_recon
     
     def reco_loss(self, x, compare_total_energy=False):
         """Computes the reconstruction loss in the logit space"""          
         
-        x_logit = self.logit_trafo_in((x, ))[0][0]
+        x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
         x_recon_logit = self.decode(z)
@@ -559,16 +577,18 @@ class VAE(nn.Module):
     
     
 class CVAE(VAE):
-    def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5):
+    def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3):
         super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta)
+        # TODO: Put gamma into base class
+        self.gamma = gamma
         
         # Have to change the decoder as it takes a larger input now!
         self.decoder[0] = nn.Linear(latent_dim+cond_dim, hidden_sizes[-1])
     
-    def forward(self, x, c):
+    def forward(self, x, c, layer_breakpoints=None):
         
         # from VAE
-        x_logit = self.logit_trafo_in((x, ))[0][0]
+        x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
         
@@ -579,15 +599,59 @@ class CVAE(VAE):
         
         # from VAE
         x_recon_logit = self.decode(z)
-        x_recon = self.logit_trafo_out( (x_recon_logit, ), rev=True)[0][0]
+        x_recon = self.logit_trafo_out(x_recon_logit)
+        
+        # Enforce the correct energies of the layers:                
+        if layer_breakpoints is not None:
+            assert len(layer_breakpoints) == 3
+            for i in range(len(layer_breakpoints)):
+                #  x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] *= (x[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] + 1.e-7)
+                x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] = x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] / (x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]].sum(axis=1, keepdim=True)+1.e-7)
+                
+        x_recon[:,-3] = deepcopy(x[:,-3])
+        x_recon[:,-2] = deepcopy(x[:,-2])
+        x_recon[:,-1] = deepcopy(x[:,-1])
+        
         return x_recon
     
     def reco_loss(self, x, c, compare_total_energy=False):
         """Computes the reconstruction loss in the logit space"""          
-        # From VAE
-        x_logit = self.logit_trafo_in((x, ))[0][0]
+        
+        x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
+        
+        # append the conditions to the latent point
+        if len(c.shape)==1:
+            c = c.unsqueeze(-1)
+        z = torch.cat((z, c), axis = 1)
+        
+        x_recon_logit = self.decode(z)
+        
+        x_recon = self.logit_trafo_out(x_recon_logit)
+        
+        # append the total energy as a coparison criterion
+        if compare_total_energy:
+            energy = x_logit.sum(axis=1).unsqueeze(-1)
+            recon_energy = x_recon_logit.sum(axis=1).unsqueeze(-1)
+            
+            x_logit = torch.cat((x_logit, energy), axis=1)
+            x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
+        
+        MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x, reduction="mean")
+        KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+            
+        
+        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD 
+    
+    def reco_loss_old(self, x, c, compare_total_energy=False, layer_breakpoints=None):
+        """Computes the reconstruction loss in the logit space"""          
+        # From VAE
+        x = deepcopy(x)
+        x_logit = self.logit_trafo_in(x)
+        mu, logvar = self.encode(x_logit)
+        z = self.reparameterize(mu, logvar)            
         
         # append the conditions to the latent point
         if len(c.shape)==1:
@@ -596,6 +660,38 @@ class CVAE(VAE):
     
         # From VAE
         x_recon_logit = self.decode(z)
+        
+        # Enforce the correct energies of the layers: 
+        
+                       
+        if layer_breakpoints is not None:
+                
+        #     assert len(layer_breakpoints) == 3
+            x_recon = self.logit_trafo_out(x_recon_logit)
+            # with torch.no_grad():
+            layer_energy_factor = (torch.cat([(x_recon[:, layer_breakpoints[0,0]:layer_breakpoints[0,1]].sum(axis=1, keepdim=True)+1.e-7).repeat(1, layer_breakpoints[0,1] - layer_breakpoints[0,0]),
+                                            (x_recon[:, layer_breakpoints[1,0]:layer_breakpoints[1,1]].sum(axis=1, keepdim=True)+1.e-7).repeat(1, layer_breakpoints[1,1] - layer_breakpoints[1,0]),
+                                            (x_recon[:, layer_breakpoints[2,0]:layer_breakpoints[2,1]].sum(axis=1, keepdim=True)+1.e-7).repeat(1, layer_breakpoints[1,1] - layer_breakpoints[1,0]),
+                                            torch.ones((x_recon.shape[0], x_recon.shape[1]-layer_breakpoints[2,1])).to(x.get_device())], axis=1))**-1
+        #     for i in range(len(layer_breakpoints)):
+        #         #  x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] = x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] / (x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]].sum(axis=1, keepdim=True)+1.e-7)
+        #          x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] = x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] / 1.1
+            # if (layer_energy_factor>1).sum() != 0:
+            #     print(layer_energy_factor)
+            # print(layer_energy_factor.min(), layer_energy_factor.mean(), layer_energy_factor.max())
+            x_recon = x_recon * layer_energy_factor
+            # print(x_recon)
+            # x_recon = x_recon * torch.rand_like(x_recon)
+                
+                
+        # print((x_recon > 1).sum(), x_recon.shape)
+        # print(x_recon[:,:-3].sum(axis=1))
+        x_recon_logit = self.logit_trafo_in(x_recon)
+        # x_recon_logit = torch.logit(torch.sigmoid(x_recon_logit) / 1.1 + 1.e-6 * (0.1) / 1.1)
+            
+        # print(x_logit)
+
+        
         # append the total energy as a coparison criterion
         if compare_total_energy:
             energy = x_logit.sum(axis=1).unsqueeze(-1)
@@ -606,6 +702,8 @@ class CVAE(VAE):
         
         MSE = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
         KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+        
+        # print(MSE, KLD)
             
         
         return MSE + self.beta * KLD, MSE, KLD 
