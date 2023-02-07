@@ -502,9 +502,25 @@ class LogitTransformationVAE:
     def __call__(self, x):
         return self.forward(x)
   
+class noise_layer(nn.Module):
+    def __init__(self, noise_width, rev):
+        super().__init__()
+        
+        self.noise_width = noise_width
+        self.noise_distribution = torch.distributions.Uniform(torch.tensor(0., device="cpu"), torch.tensor(1., device="cpu"))
+        self.rev = rev
+        
+    def forward(self, input):
+        if not self.rev:
+            noise = self.noise_distribution.sample(input.shape)*self.noise_width
+            noise.to(input.device)
+            return input + noise.reshape(input.shape)
+        else:
+            input -= self.noise_width
+        
     
 class VAE(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3):
+    def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3, cond_dim=None, noise_width=None):
         super(VAE, self).__init__()
         
         # Create a logit preprocessing
@@ -522,12 +538,22 @@ class VAE(nn.Module):
         
         # Add the layers to the encoder
         for i, hidden_size in enumerate(hidden_sizes):
+            # if noise_width is not None:
+            #     assert alpha >= noise_width
+            #     self.encoder.add_module("Add noise", noise_layer(noise_width, rev=False))
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
             in_size = hidden_size
         
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
-        in_size = latent_dim
+        
+        # Enables conditional VAE support
+        if cond_dim is None:
+            in_size = latent_dim
+            self.is_conditional = False
+        else:
+            in_size = latent_dim + cond_dim
+            self.is_conditional = True
         
         # add the layers to the decoder
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
@@ -556,31 +582,40 @@ class VAE(nn.Module):
     def decode(self, z):
         return self.decoder(z)
 
-    def forward(self, x):
+    def forward(self, x, c=None):
+        assert (self.is_conditional) or (c is None)
+        
         x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
+        
+        # append the conditions to the latent point
+        if self.is_conditional:
+            if len(c.shape)==1:
+                c = c.unsqueeze(-1)
+            z = torch.cat((z, c), axis = 1)
+        
         x_recon_logit = self.decode(z)
         x_recon = self.logit_trafo_out(x_recon_logit)
         return x_recon
     
-    def reco_loss(self, x, compare_total_energy=False):
-        """Computes the reconstruction loss in the logit space"""          
+    def reco_loss(self, x, c=None):
+        """Computes the reconstruction loss in the logit space"""
+        assert (self.is_conditional) or (c is None)
         
         x_logit = self.logit_trafo_in(x)
         mu, logvar = self.encode(x_logit)
         z = self.reparameterize(mu, logvar)
-        x_recon_logit = self.decode(z)
         
+        # append the conditions to the latent point
+        if self.is_conditional:
+            if len(c.shape)==1:
+                c = c.unsqueeze(-1)
+            z = torch.cat((z, c), axis = 1)
+        
+        x_recon_logit = self.decode(z)
         x_recon = self.logit_trafo_out(x_recon_logit)
         
-        # append the total energy as a coparison criterion
-        if compare_total_energy:
-            energy = x_logit.sum(axis=1).unsqueeze(-1)
-            recon_energy = x_recon_logit.sum(axis=1).unsqueeze(-1)
-            
-            x_logit = torch.cat((x_logit, energy), axis=1)
-            x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
         
         MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
         MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x, reduction="mean")
@@ -589,51 +624,20 @@ class VAE(nn.Module):
         
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD 
     
-    
-class CVAE(VAE):
-    def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3):
-        super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta, gamma)
-        
-        # Have to change the decoder as it takes a larger input now!
-        self.decoder[0] = nn.Linear(latent_dim+cond_dim, hidden_sizes[-1])
-    
-    def forward(self, x, c,):
-        
-        # from VAE
-        x_logit = self.logit_trafo_in(x)
-        mu, logvar = self.encode(x_logit)
-        z = self.reparameterize(mu, logvar)
-        
-        # append the conditions to the latent point
-        if len(c.shape)==1:
-            c = c.unsqueeze(-1)
-        z = torch.cat((z, c), axis = 1)
-        
-        # from VAE
-        x_recon_logit = self.decode(z)
-        x_recon = self.logit_trafo_out(x_recon_logit)
-                
-        # Enforces the energy dimensions to match the input ones
-        # TODO: Remove and do it nicer
-        x_recon[:,-3] = deepcopy(x[:,-3])
-        x_recon[:,-2] = deepcopy(x[:,-2])
-        x_recon[:,-1] = deepcopy(x[:,-1])
-        
-        return x_recon
-    
-    def from_latent(self, latent, c, energy_dims=None):
-        # from VAE
+    def from_latent(self, latent, energy_dims=None, c=None):
+        assert (self.is_conditional) or (c is None)
         
         if energy_dims is not None:
             assert energy_dims.shape[1] == 3
             assert energy_dims.shape[0] == latent.shape[0]
         
         # append the conditions to the latent point
-        if len(c.shape)==1:
-            c = c.unsqueeze(-1)
-        z = torch.cat((latent, c), axis = 1)
+        if self.is_conditional:
+            if len(c.shape)==1:
+                c = c.unsqueeze(-1)
+            z = torch.cat((latent, c), axis = 1)
         
-        # from VAE
+        
         x_recon_logit = self.decode(z)
         x_recon = self.logit_trafo_out(x_recon_logit)
         
@@ -645,33 +649,21 @@ class CVAE(VAE):
         
         return x_recon
     
-    def reco_loss(self, x, c, compare_total_energy=False):
+
+# Just a proxy for the VAE with cond_dim != None
+class CVAE(VAE):
+    def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3, noise_width=None):
+        super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta, gamma, cond_dim, noise_width)
+        
+    def forward(self, x, c):
+        
+        return super().forward(x, c)
+    
+    def from_latent(self, latent, c, energy_dims=None):
+        
+        return super().from_latent(latent, energy_dims, c)
+    
+    def reco_loss(self, x, c):
         """Computes the reconstruction loss in the logit space"""          
         
-        x_logit = self.logit_trafo_in(x)
-        mu, logvar = self.encode(x_logit)
-        z = self.reparameterize(mu, logvar)
-        
-        # append the conditions to the latent point
-        if len(c.shape)==1:
-            c = c.unsqueeze(-1)
-        z = torch.cat((z, c), axis = 1)
-        
-        x_recon_logit = self.decode(z)
-        
-        x_recon = self.logit_trafo_out(x_recon_logit)
-        
-        # append the total energy as a coparison criterion
-        if compare_total_energy:
-            energy = x_logit.sum(axis=1).unsqueeze(-1)
-            recon_energy = x_recon_logit.sum(axis=1).unsqueeze(-1)
-            
-            x_logit = torch.cat((x_logit, energy), axis=1)
-            x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
-        
-        MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
-        MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x, reduction="mean")
-        KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
-            
-        
-        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD 
+        return super().reco_loss(x, c)
