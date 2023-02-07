@@ -489,6 +489,14 @@ class LogitTransformationVAE:
         else:
             z = torch.sigmoid(x)
             z = (z - self.alpha)/(1-2*self.alpha)
+        
+        # if self.rev:
+        #     z = torch.exp(x) - self.alpha
+        #     jac = torch.sum( x, dim=1)
+        # else:
+        #     z = torch.log(x + self.alpha)
+        #     jac = - torch.sum( z, dim=1)
+
         return z
         
     def __call__(self, x):
@@ -496,7 +504,7 @@ class LogitTransformationVAE:
   
     
 class VAE(nn.Module):
-    def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5):
+    def __init__(self, input_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3):
         super(VAE, self).__init__()
         
         # Create a logit preprocessing
@@ -533,6 +541,7 @@ class VAE(nn.Module):
         
         # the hyperparamter for the reco_loss
         self.beta = beta
+        self.gamma = gamma
 
     def encode(self, x):
         x = self.encoder(x)
@@ -563,6 +572,8 @@ class VAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         x_recon_logit = self.decode(z)
         
+        x_recon = self.logit_trafo_out(x_recon_logit)
+        
         # append the total energy as a coparison criterion
         if compare_total_energy:
             energy = x_logit.sum(axis=1).unsqueeze(-1)
@@ -571,18 +582,17 @@ class VAE(nn.Module):
             x_logit = torch.cat((x_logit, energy), axis=1)
             x_recon_logit = torch.cat((x_recon_logit, recon_energy), axis=1)
         
-        MSE = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
-        KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+        MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x, reduction="mean")
+        KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
             
         
-        return MSE + self.beta * KLD, MSE, KLD 
+        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD 
     
     
 class CVAE(VAE):
     def __init__(self, input_dim, cond_dim, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3):
-        super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta)
-        # TODO: Put gamma into base class
-        self.gamma = gamma
+        super().__init__(input_dim, latent_dim, hidden_sizes, alpha, beta, gamma)
         
         # Have to change the decoder as it takes a larger input now!
         self.decoder[0] = nn.Linear(latent_dim+cond_dim, hidden_sizes[-1])
@@ -602,14 +612,9 @@ class CVAE(VAE):
         # from VAE
         x_recon_logit = self.decode(z)
         x_recon = self.logit_trafo_out(x_recon_logit)
-        
-        # # Enforce the correct energies of the layers:                
-        # if layer_breakpoints is not None:
-        #     assert len(layer_breakpoints) == 3
-        #     for i in range(len(layer_breakpoints)):
-        #         #  x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] *= (x[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] + 1.e-7)
-        #         x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] = x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]] / (x_recon[:, layer_breakpoints[i,0]:layer_breakpoints[i,1]].sum(axis=1, keepdim=True)+1.e-7)
                 
+        # Enforces the energy dimensions to match the input ones
+        # TODO: Remove and do it nicer
         x_recon[:,-3] = deepcopy(x[:,-3])
         x_recon[:,-2] = deepcopy(x[:,-2])
         x_recon[:,-1] = deepcopy(x[:,-1])
@@ -632,6 +637,7 @@ class CVAE(VAE):
         x_recon_logit = self.decode(z)
         x_recon = self.logit_trafo_out(x_recon_logit)
         
+        # Makes it possible to overwrite the energy dimensions of the output
         if energy_dims is not None:
             x_recon[:,-3] = energy_dims[:,-3]
             x_recon[:,-2] = energy_dims[:,-2]
