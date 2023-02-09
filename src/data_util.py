@@ -531,11 +531,11 @@ def merge_datasets(sample, original):
     key_len_2 = np.array(key_len_2)
     
     # Make sure, that all entries in the dicts have the same length
-    assert np.all(key_len_1 == key_len_1[0])
-    assert np.all(key_len_2 == key_len_2[0])
+    assert np.all(key_len_1 == key_len_1[0]), f"{key_len_1}, {key_len_1[0]}"
+    assert np.all(key_len_2 == key_len_2[0]), f"{key_len_2}, {key_len_2[0]}"
     
     # Make sure that the dicts are equal sized
-    assert np.all(key_len_1 == key_len_2)
+    assert np.all(key_len_1 == key_len_2), f"{key_len_1}, {key_len_2}"
     assert len(sample) == len(original)
     
     # Shuffle the elements of the merged dataset
