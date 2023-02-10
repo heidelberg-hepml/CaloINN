@@ -733,7 +733,10 @@ class CVAE(nn.Module):
         self.norm_m_x = torch.diag(1 / std)
         self.norm_b_x = - mean/std
         
-        self.norm_x = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
+        self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
+        
+        # The decoder does not predict the conditions
+        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-cond.shape[1], :-cond.shape[1]], b=self.norm_b_x[:-cond.shape[1]])
         
         # TODO: Add
         # Set the normalization layer operating on the latent space (before the actual decoder)
@@ -763,7 +766,7 @@ class CVAE(nn.Module):
             return x_logit_noise
         
         else:
-            return self.norm_x( (x_logit_noise, ), rev=False)[0][0]
+            return self.norm_x_in( (x_logit_noise, ), rev=False)[0][0]
             
     def encode(self, x, c):
         """Takes a point in the dataspace and returns a point in the latent space before sampling.
@@ -808,7 +811,7 @@ class CVAE(nn.Module):
         x_recon_logit_noise = self.decoder(latent)
         
         # Undo normalization step (zero mean, unit variance)
-        x_recon_logit_noise = self.norm_x( (x_recon_logit_noise, ), rev=True)[0][0]
+        x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
         
         # Remove noise by thresholding, if needed
         if self.noise_width is not None:
