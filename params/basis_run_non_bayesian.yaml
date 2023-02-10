@@ -10,8 +10,8 @@ lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
 n_epochs: 200
-save_interval: 10
-keep_models: 100
+save_interval: 100
+keep_models: 1000
 
 # Bayesian Setup
 bayesian: False
