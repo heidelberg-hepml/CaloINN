@@ -1,0 +1,45 @@
+# Documenter information
+run_name: mae_on_both_-5_noise
+# block_name: Try_to_improve_recons
+
+# Data
+dtype: float32
+particle_type: piplus
+
+# VAE Training
+VAE_lr: 5.e-4
+VAE_batch_size: 256
+VAE_n_epochs: 500
+VAE_save_interval: 100
+VAE_keep_models: 1001
+
+# VAE Architecture
+VAE_hidden_sizes: [450, 300, 150]
+VAE_latent_dim: 20
+VAE_beta: 1.e-5
+VAE_gamma: 1.e+4
+
+
+# Preprocessing
+alpha: 1.e-6
+
+# Forced to 0. Needed for the VAE to work!!!
+# VAE_width_noise: 0
+
+# Classifier Test
+do_classifier_test: True
+# Classifier Training
+classifier_sigmoid_in_BCE: True
+classifier_lr: 2.e-4
+classifier_n_epochs: 100
+classifier_batch_size: 1000
+classifier_runs: 5
+# Classifier Architecture
+modes: ["DNN"]
+DNN_hidden_layers: 2
+DNN_hidden_neurons: 512
+DNN_dropout: 0.
+# Classifier Preprocessing
+classifier_threshold: True #needed
+classifier_normalize: False #needed
+classifier_use_logit: False #needed

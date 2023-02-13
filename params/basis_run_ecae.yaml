@@ -1,0 +1,82 @@
+# Documenter information
+run_name: add_inn
+block_name: test_runs
+# Data
+dtype: float32
+particle_type: piplus
+calo_layer: null
+data_resolution: full
+
+
+# VAE
+
+# VAE Preprocessing
+use_extra_dim: False
+use_extra_dims: True
+alpha: 1.e-6
+# VAE Training
+VAE_lr: 5.e-4
+VAE_batch_size: 256
+VAE_n_epochs: 500
+VAE_save_interval: 100
+VAE_keep_models: 1001
+# VAE Architecture
+VAE_conditional: True
+VAE_hidden_sizes: [450, 300, 150]
+VAE_latent_dim: 40
+VAE_beta: 1.e-1
+VAE_gamma: 1.e+4
+# Forced to 0. Needed for the VAE to work!!!
+# VAE_width_noise: 0
+
+
+# INN
+
+# Data
+fixed_noise: False
+latent_type: pre_sampling # post_sampling or pre_sampling
+# INN Preprocessing
+logit_transformation: False
+log_cond: True
+width_noise: 0
+# INN Training
+lr: 5.e-5
+max_lr: 5.e-4
+batch_size: 256
+lr_scheduler: one_cycle_lr
+weight_decay: 0.
+betas: [0.9, 0.999]
+n_epochs: 200
+save_interval: 50
+keep_models: 1000
+# Bayesian Setup
+bayesian: False
+# INN Architecture
+n_blocks: 18
+internal_size: 32
+layers_per_block: 3
+coupling_type: rational_quadratic
+bounds_init: 20
+permute_soft: False
+num_bins: 10
+dropout: 0.0
+
+
+# Classifier Test
+do_classifier_test: True
+# Classifier Training
+classifier_sigmoid_in_BCE: True
+classifier_lr: 2.e-4
+classifier_n_epochs: 100
+classifier_batch_size: 1000
+classifier_runs: 5
+# Classifier Architecture
+modes: ["DNN"]
+DNN_hidden_layers: 2
+DNN_hidden_neurons: 512
+DNN_dropout: 0.
+# Classifier Preprocessing
+classifier_threshold: True #needed
+classifier_normalize: False #needed
+classifier_use_logit: False #needed
+
