@@ -521,133 +521,85 @@ class noise_layer(nn.Module):
         assert (not logit_space) or (not data_space), "Logit space and data space are mutually exclusive!"
         self.data_space = data_space
         
-    def forward(self, input, c, energy_dimensions=None):
+    def forward(self, input, c):
         
         # Prevent inplace modifications on original data
-        input = deepcopy(input)
-        c = deepcopy(c)
+        input = torch.clone(input)
+        c = torch.clone(c)
         
-        if self.data_space:
-            if not self.rev:
-                torch.manual_seed(0)
-                noise = self.noise_distribution.sample(input.shape)*self.noise_width
-                noise = noise.to(input.device)
-                return input + noise.reshape(input.shape)
-            else:
-                input = torch.where(input<self.noise_width, 0, input)
-                return input
+        # get the layer shapes
+        size_layer_0, size_layer_1, size_layer_2 = data_util.get_layer_sizes(data_flattened=input)
+        l_0 = size_layer_0
+        l_01 = size_layer_0 + size_layer_1
+        
+        if not self.rev:
+            # Everything else is not implemented at the moment
+            assert self.data_space == True
+            assert self.logit_space == False
             
+            # add noise to the input
+            noise = self.noise_distribution.sample(input.shape)*self.noise_width
+            noise = noise.to(input.device)
+            input = input + noise.reshape(input.shape)
+            
+            # rescale the energy dimensions by the added noise
+            e_part = c[:, [0]]
+            u1     = c[:, [1]]
+            u2     = c[:, [2]]
+            u3     = c[:, [3]]
+            
+            e_tot = u1*e_part
+            e0 = u2*e_tot
+            e1 = u3*(e_tot-e0)
+            e2 = e_tot - e0 -e1
+            
+            e_part = e_part + noise.sum(axis=1, keepdims=True)
+            e0 = e0 + noise[:, :l_0].sum(axis=1, keepdims=True)
+            e1 = e1 + noise[:, l_0:l_01].sum(axis=1, keepdims=True)
+            e2 = e2 + noise[:, l_01:].sum(axis=1, keepdims=True)
+            
+            u1 = (e0+e1+e2)/e_part
+            u2 = e0/(e0+e1+e2)
+            u3 = e1/(e1+e2+1e-7)
+            
+            c = torch.cat((e_part, u1, u2, u3), axis=1)
+            
+            return input, c
+        
         else:
-            if not self.rev:
-                # Rescale the noise such that it is (almost) the same as if it was applied in the dataspace before normalization
-                
-                size_layer_0, size_layer_1, size_layer_2 = data_util.get_layer_sizes(data_flattened=input)
-                l_0 = size_layer_0
-                l_01 = size_layer_0 + size_layer_1
-                
+            # Everything else is not implemented at the moment
+            assert self.data_space == False
+            assert self.logit_space == True         
 
-                # Get the energy dimensions
-                u1 = input[:,[-3]]
-                u2 = input[:,[-2]]
-                u3 = input[:,[-1]]
-                e_tot = u1*c
-                e0 = u2*e_tot
-                e1 = u3*(e_tot-e0)
-                e2 = e_tot - e0 -e1
-                
-                # Reverse the data normalization
-                input[..., :l_0] = input[..., :l_0] * e0
-                input[..., l_0:l_01] = input[..., l_0:l_01] * e1
-                input[..., l_01:] = input[..., l_01:] * e2
+            # Get the energy dimensions
+            e_part = c[:, [0]]
+            u1     = c[:, [1]]
+            u2     = c[:, [2]]
+            u3     = c[:, [3]]
+            
+            e_tot = u1*e_part
+            e0 = u2*e_tot
+            e1 = u3*(e_tot-e0)
+            e2 = e_tot - e0 -e1
+            
+            # Approximate the noise here with its expectation value (/2) and do not resample!
+            noise_width = torch.ones_like(input)*self.noise_width
+            noise_width = noise_width.to(input.device)
 
-                # Sample the noise
-                noise_width = torch.ones_like(input[:, :-3])*self.noise_width
-                torch.manual_seed(0)
-                noise = self.noise_distribution.sample(input[:, :-3].shape)*noise_width
-                noise = noise.to(input.device)
-                noise = noise.reshape(input[:,:-3].shape)
-                
-                # Add the noise to the normalization factors
-                e0 = e0 + noise[..., :l_0].sum(axis=1, keepdims=True)
-                e1 = e1 + noise[..., l_0:l_01].sum(axis=1, keepdims=True)
-                e2 = e2 + noise[..., l_01:].sum(axis=1, keepdims=True)
+            # Add the noise approximation to the normalization factors
+            e0 = e0 + noise_width[..., :l_0].sum(axis=1, keepdims=True) / 2
+            e1 = e1 + noise_width[..., l_0:l_01].sum(axis=1, keepdims=True) / 2
+            e2 = e2 + noise_width[..., l_01:].sum(axis=1, keepdims=True) / 2
+            
+            # Apply the (approximate) layer transformation to the noise threshold
+            normalization = torch.cat((e0.repeat(1, size_layer_0), e1.repeat(1, size_layer_1), e2.repeat(1, size_layer_2)), axis=1).to(input.device)
+            threshold = self.noise_width / normalization
+            assert threshold.shape == input.shape
 
-                # Might be used if numerical problems happen. Should not be needed since the noise will
-                # regularize anyway!
-                eps = 0
-
-                # Renormalize noise and data with new energy factors
-                noise[..., :l_0] = noise[..., :l_0] / (e0 + eps) 
-                noise[..., l_0:l_01] = noise[..., l_0:l_01] / (e1 + eps)
-                noise[..., l_01:] = noise[..., l_01:]  / (e2 + eps)
+            # Apply the threshold in the logit space by using the monotonicity of the (shifted) logit function
+            input = torch.where(input<self.logit(threshold), self.logit(torch.tensor(0, device=input.device)), input)
                 
-                input[..., :l_0] = input[..., :l_0] / (e0 + eps)
-                input[..., l_0:l_01] = input[..., l_0:l_01] / (e1 + eps)
-                input[..., l_01:-3] = input[..., l_01:-3] / (e2 + eps)
-                
-                # TODO: Should I remove this?
-                # Update energy dimensions
-                u1 = (e0+e1+e2)/c
-                u2 = e0/(e0+e1+e2)
-                u3 = e1/(e1+e2)
-                input[..., -3] = u1[...,0]
-                input[..., -2] = u2[...,0]
-                input[..., -1] = u3[...,0]
-
-                # Add noise and data, return
-                input[:, :-3] = input[:, :-3] + noise.reshape(input[:,:-3].shape)
-                return input
-            else:
-                # TODO: Energy dimensions should also be modified, right???
-                # Might be a bug right now!
-                assert energy_dimensions is not None, "Need energy dimensions if reverse pass is used"
-                assert energy_dimensions.shape[1] == 3, "Must be exactly 3 extra dimensions!"
-                
-                # get the layer shapes
-                size_layer_0, size_layer_1, size_layer_2 = data_util.get_layer_sizes(data_flattened=input)
-                l_0 = size_layer_0
-                l_01 = size_layer_0 + size_layer_1
-                
-                # Get the energy dimensions
-                u1 = energy_dimensions[:,[0]]
-                u2 = energy_dimensions[:,[1]]
-                u3 = energy_dimensions[:,[2]]
-                e_tot = u1*c
-                e0 = u2*e_tot
-                e1 = u3*(e_tot-e0)
-                e2 = e_tot - e0 -e1
-                
-
-                # Sample the noise
-                noise_width = torch.ones_like(input[:, :-3])*self.noise_width
-                torch.manual_seed(0)
-                
-                # Approximate the noise here with its expectation value (/2) and do not resample!
-                # noise = self.noise_distribution.sample(input[:, :-3].shape)*noise_width
-                # noise = noise.to(input.device)
-                # noise = noise.reshape(input[:,:-3].shape)
-                
-                # Add the noise approximation to the normalization factors
-                e0 = e0 + noise[..., :l_0].sum(axis=1, keepdims=True) / 2
-                e1 = e1 + noise[..., l_0:l_01].sum(axis=1, keepdims=True) / 2
-                e2 = e2 + noise[..., l_01:].sum(axis=1, keepdims=True) / 2
-                
-                normalization = torch.cat((e0.repeat(1, size_layer_0), e1.repeat(1, size_layer_1), e2.repeat(1, size_layer_2)), axis=1).to(input.device)
-                
-                
-                threshold = self.noise_width / normalization
-                
-                assert threshold.shape == input[:, :-3].shape
-                
-                if not self.logit_space:
-                    input[:, :-3] = torch.where(input[:, :-3]<threshold, 0, input[:, :-3])
-                    
-                
-                else:
-                   
-                    input[:, :-3] = torch.where(input[:, :-3]<self.logit(threshold), self.logit(0), input[:, :-3])
-                    
-                return input
+            return input
         
     
 class CVAE(nn.Module):
@@ -665,9 +617,7 @@ class CVAE(nn.Module):
 
         # Add a noise adding layer
         if noise_width is not None:
-            # assert alpha >= noise_width
-            print("add noise adding layer")
-            self.noise_layer_in = noise_layer(noise_width, rev=False, data_space=False)
+            self.noise_layer_in = noise_layer(noise_width, rev=False, data_space=True, logit_space=False)
         
         # Create a logit preprocessing
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
@@ -677,9 +627,7 @@ class CVAE(nn.Module):
         
         # Add a noise removal layer
         if noise_width is not None:
-            assert alpha >= noise_width
-            print("add noise removal layer")
-            self.noise_layer_out = noise_layer(noise_width, rev=True, data_space=False, logit_function=self.logit_trafo_in)
+            self.noise_layer_out = noise_layer(noise_width, rev=True, data_space=False, logit_space=True, logit_function=self.logit_trafo_in)
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
@@ -748,15 +696,16 @@ class CVAE(nn.Module):
         """First part of the encoder function. Seperated such that it can be used by the
         initialization of the normalization to zero mean and unit variance"""
         
-        # TODO: Have to add modification of c s.t. normalize layers works properly
-        # Add noise, if needed
+        # Adds noise to the data and updates c s.t. the layer normalization will work.
+        # This c_noise values will only used for the layer normalization, not for the training!
         if self.noise_width is not None:
-            x_noise, c = self.noise_layer_in(x, c)
+            x_noise, c_noise = self.noise_layer_in(x, c)
         else:
             x_noise = x
+            c_noise = c
         
         # Prepares the data by normalizing it and appending the conditions
-        x_noise = data_util.normalize_layers(x_noise, c)
+        x_noise = data_util.normalize_layers(x_noise, c_noise)
         x_noise = torch.cat((x_noise, c/self.max_cond), axis=1)
         
         # Go to logit space
@@ -884,8 +833,10 @@ class CVAE(nn.Module):
         # print(x_0_1, x_recon, x_logit, x_recon_logit)
         
         # Compute the losses
-        MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        # MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit, x_logit, reduction="mean")
         MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x_0_1, reduction="mean")
+        # MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon, x_0_1, reduction="mean")
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
             
         
