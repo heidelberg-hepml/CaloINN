@@ -1,5 +1,5 @@
 # Documenter information
-run_name: mae_on_both_-5_noise
+run_name: -5_thresholding_no_noise
 # block_name: Try_to_improve_recons
 
 # Data
@@ -14,17 +14,15 @@ VAE_save_interval: 100
 VAE_keep_models: 1001
 
 # VAE Architecture
-VAE_hidden_sizes: [450, 300, 150]
-VAE_latent_dim: 20
+VAE_hidden_sizes: [4500, 1000, 150]
+VAE_latent_dim: 50
 VAE_beta: 1.e-5
 VAE_gamma: 1.e+4
 
 
 # Preprocessing
 alpha: 1.e-6
-
-# Forced to 0. Needed for the VAE to work!!!
-# VAE_width_noise: 0
+VAE_width_noise: 1.e-5
 
 # Classifier Test
 do_classifier_test: True

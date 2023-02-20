@@ -1,19 +1,19 @@
+# General
+
 # Documenter information
 run_name: add_inn
-block_name: test_runs
+# block_name: test_runs
+vae_dir: "/remote/gpu06/ernst/Master_Thesis/add_VAE/CaloINN/results/2023_02_15_105358_mae_on_both_-5_noise_much_larger"
 # Data
 dtype: float32
 particle_type: piplus
-calo_layer: null
-data_resolution: full
 
 
 # VAE
 
 # VAE Preprocessing
-use_extra_dim: False
-use_extra_dims: True
 alpha: 1.e-6
+VAE_width_noise: 1.e-5
 # VAE Training
 VAE_lr: 5.e-4
 VAE_batch_size: 256
@@ -21,24 +21,19 @@ VAE_n_epochs: 500
 VAE_save_interval: 100
 VAE_keep_models: 1001
 # VAE Architecture
-VAE_conditional: True
-VAE_hidden_sizes: [450, 300, 150]
-VAE_latent_dim: 40
-VAE_beta: 1.e-1
+VAE_hidden_sizes: [4500, 1000, 150]
+VAE_latent_dim: 50
+VAE_beta: 1.e-5
 VAE_gamma: 1.e+4
-# Forced to 0. Needed for the VAE to work!!!
-# VAE_width_noise: 0
 
 
 # INN
 
 # Data
-fixed_noise: False
 latent_type: pre_sampling # post_sampling or pre_sampling
 # INN Preprocessing
 logit_transformation: False
 log_cond: True
-width_noise: 0
 # INN Training
 lr: 5.e-5
 max_lr: 5.e-4
