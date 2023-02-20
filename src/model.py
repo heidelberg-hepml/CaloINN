@@ -547,11 +547,9 @@ class noise_layer(nn.Module):
             u1     = c[:, [1]]
             u2     = c[:, [2]]
             u3     = c[:, [3]]
-            
-            e_tot = u1*e_part
-            e0 = u2*e_tot
-            e1 = u3*(e_tot-e0)
-            e2 = e_tot - e0 -e1
+            e0     = c[:, [4]]
+            e1     = c[:, [5]]
+            e2     = c[:, [6]]
             
             e_part = e_part + noise.sum(axis=1, keepdims=True)
             e0 = e0 + noise[:, :l_0].sum(axis=1, keepdims=True)
@@ -562,7 +560,7 @@ class noise_layer(nn.Module):
             u2 = e0/(e0+e1+e2)
             u3 = e1/(e1+e2+1e-7)
             
-            c = torch.cat((e_part, u1, u2, u3), axis=1)
+            c = torch.cat((e_part, u1, u2, u3, e0, e1, e2), axis=1)
             
             return input, c
         
@@ -576,11 +574,9 @@ class noise_layer(nn.Module):
             u1     = c[:, [1]]
             u2     = c[:, [2]]
             u3     = c[:, [3]]
-            
-            e_tot = u1*e_part
-            e0 = u2*e_tot
-            e1 = u3*(e_tot-e0)
-            e2 = e_tot - e0 -e1
+            e0     = c[:, [4]]
+            e1     = c[:, [5]]
+            e2     = c[:, [6]]
             
             # Approximate the noise here with its expectation value (/2) and do not resample!
             noise_width = torch.ones_like(input)*self.noise_width
@@ -610,7 +606,7 @@ class CVAE(nn.Module):
         assert len(input.shape) == 2
         assert len(cond.shape) == 2
         assert cond.shape[0] == input.shape[0]
-        assert cond.shape[1] == 4
+        assert cond.shape[1] == 7
         
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
@@ -652,7 +648,7 @@ class CVAE(nn.Module):
         self.decoder = nn.Sequential()
         
         # Add the layers to the encoder
-        in_size = input_dim + cond_dim
+        in_size = input_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
@@ -660,7 +656,7 @@ class CVAE(nn.Module):
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
         # add the layers to the decoder
-        in_size = latent_dim + cond_dim
+        in_size = latent_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.decoder.add_module(f"relu{i}", nn.ReLU())
@@ -670,9 +666,10 @@ class CVAE(nn.Module):
     def __set_normalizations(self, data, cond):
         
         # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
-        # The other conditions should be effectively uneffected...
+        # The other conditions are allready between 0 and 1 and will not be modified
         # TODO: Problems if test set is more than 5% off
-        self.max_cond = cond.max(axis=0, keepdim=True)[0]*1.05
+        max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]*1.05
+        self.max_cond = torch.cat((max_cond_0, torch.ones(1, 6).to(max_cond_0.device)), axis=1)
         
         # Set the normalization layer operating on the x space (before the actual encoder)
         data = self.__preprocess_encoding(data, cond, without_norm=True)
@@ -683,8 +680,8 @@ class CVAE(nn.Module):
         
         self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
         
-        # The decoder does not predict the conditions
-        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-cond.shape[1], :-cond.shape[1]], b=self.norm_b_x[:-cond.shape[1]])
+        # The decoder does not predict the conditions (-4 instead of -7 since we did not pass the last 3 layer energies to the network -(7-3) = -4)
+        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-4, :-4], b=self.norm_b_x[:-4])
         
         # TODO: Add
         # Set the normalization layer operating on the latent space (before the actual decoder)
@@ -706,7 +703,7 @@ class CVAE(nn.Module):
         
         # Prepares the data by normalizing it and appending the conditions
         x_noise = data_util.normalize_layers(x_noise, c_noise)
-        x_noise = torch.cat((x_noise, c/self.max_cond), axis=1)
+        x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-3]), axis=1) # Normalize c and dont append the true layer energies!
         
         # Go to logit space
         x_logit_noise = self.logit_trafo_in(x_noise)
@@ -728,7 +725,7 @@ class CVAE(nn.Module):
         assert len(x.shape) == 2
         assert len(c.shape) == 2
         assert c.shape[0] == x.shape[0]
-        assert c.shape[1] == 4
+        assert c.shape[1] == 7
         
         # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
         x = self.__preprocess_encoding(x, c)
@@ -752,7 +749,7 @@ class CVAE(nn.Module):
         Output: Reconstructed image in logit-space """
         
         # Transform cond into logit space and append to latent results
-        c_logit = self.logit_trafo_in(c / self.max_cond)
+        c_logit = self.logit_trafo_in((c / self.max_cond)[:, :-3]) # Normalize c and dont append the true layer energies!
         # TODO: Might be useful to call a normalization layer here, too
         latent = torch.cat((latent, c_logit), axis=1)
         
@@ -838,6 +835,8 @@ class CVAE(nn.Module):
         MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x_0_1, reduction="mean")
         # MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon, x_0_1, reduction="mean")
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
+        
+        # print(MSE_logit, MSE_data, KLD)
             
         
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD

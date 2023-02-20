@@ -81,7 +81,7 @@ def plot_hist(
         ymax=None,
         ax=None,
         panel_ax=None,
-        panel_scale="log",
+        panel_scale="linear",
         density=True):
     data = data[np.isfinite(data)]
     reference = reference[np.isfinite(reference)]
@@ -137,7 +137,7 @@ def plot_hist(
         
         widths = 1.2*(bins_1[1:] - bins_1[:-1])
         
-        panel_ax.bar(bins_0[:-1], ns_0/ns_1, label='CaloINN/GEANT', width=widths)
+        panel_ax.bar(bins_0[:-1], ns_0/ns_1, label='VAE/GEANT', width=widths)
         
         panel_ax.plot([vmin, vmax],[1,1], color="red", ls="--", marker=None)
 
@@ -150,7 +150,7 @@ def plot_hist(
     ax.set_xlim([vmin,vmax])
     if panel_ax is not None:
         panel_ax.set_xlim([vmin,vmax])
-        # panel_ax.set_ylim([0.9, 1.1])
+        panel_ax.set_ylim([0.5, 1.5])
         
     if ymin is not None or ymax is not None:
         ax.set_ylim((ymin, ymax))

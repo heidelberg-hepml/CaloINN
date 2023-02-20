@@ -78,7 +78,7 @@ class DNNTrainer:
         
         dataloader_train, dataloader_val, dataloader_test = data_util.get_classifier_loaders(test_trainer,
             self.params, self.doc, self.device, drop_layers=layer_names,
-            postprocessing=self.postprocessing, data_resolution=params.get("data_resolution", "full"))
+            postprocessing=self.postprocessing)
              
         self.train_loader = dataloader_train
         self.val_loader = dataloader_val
@@ -131,9 +131,12 @@ class DNNTrainer:
                 
                 # Prepare the data of the current batch
                 input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
+                print(torch.argwhere(input_vector.isnan()))
+                # print(torch.argwhere(target_vector.isnan()))
                 output_vector = self.model(input_vector)
                 
                 # Do the gradient updates
+                # print(torch.argwhere(output_vector.isnan()))
                 self.optim.zero_grad()
                 loss = self.model.loss(output_vector, target_vector.unsqueeze(1))
                 loss.backward()
@@ -172,6 +175,7 @@ class DNNTrainer:
                     
                     input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
                     output_vector = self.model(input_vector)
+                    # print(output_vector)
                     
                     pred = output_vector.reshape(-1)
                     target = target_vector
@@ -193,10 +197,12 @@ class DNNTrainer:
                     result_pred = torch.sigmoid(result_pred).cpu().numpy()
                 else:
                     result_pred = result_pred.cpu().numpy()
+                    
+                print(result_pred)
                                         
                 result_true = result_true.cpu().numpy()
                 
-                # Compute the accuaracy over the training set
+                # Compute the accuaracy over the validation set
                 eval_acc = accuracy_score(result_true, np.round(result_pred))
                 eval_auc = roc_auc_score(result_true, result_pred)
                 JSD = - loss + np.log(2.)
@@ -489,7 +495,8 @@ class VAETrainer:
                           hidden_sizes = hidden_sizes,
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
-                          gamma = params.get("VAE_gamma", 1.e+3))
+                          gamma = params.get("VAE_gamma", 1.e+3),
+                          noise_width=params.get("VAE_width_noise", None))
         
         self.model = self.model.to(self.device)
         
@@ -644,64 +651,44 @@ class VAETrainer:
         return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss
 
     def get_reco(self, data, cond):
+        # Do not need batches. If the input fits on the GPU. The output should fit as well. (Consumption goes up by factor of 2)
+        self.model.eval()
         with torch.no_grad():
             reconstructed = self.model(data, cond)
             postprocessed = data_util.postprocess(reconstructed, cond)
         
         return postprocessed
         
+    def get_mu_logvar(self, data, cond):
+                    
+        mu, logvar = self.model.encode(data, cond)
+        mu_logvar = torch.cat((mu, logvar), axis=1)
+        return mu_logvar
+        
+    def get_latent(self, data, cond):
+        
+        mu, logvar = self.model.encode(x=data, c=cond)
+        latent = self.model.reparameterize(mu, logvar)
+        return latent
+            
     def generate_from_latent(self, latent, condition, batch_size = 10000):
-        assert 0 == 1
         self.model.eval()
         with torch.no_grad():
-            energies = condition
-            num_samples = energies.shape[0]
+            num_samples = condition.shape[0]
 
             # Prepares an "empty" container for the samples
             samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
             for batch in range((num_samples+batch_size-1)//batch_size):
                 start = batch_size*batch
                 stop = min(batch_size*(batch+1), num_samples)
-                energies_l = energies[start:stop].to(self.device)
+                condition_l = condition[start:stop].to(self.device)
                 latent_l = latent[start:stop].to(self.device)
-                samples[start:stop] = self.model.from_latent(latent=latent_l,c=energies_l).cpu()
-            
-            samples = samples.cpu().numpy()
-            energies = energies.cpu().numpy()
-            
-            # Postprocessing (Rescale the layers with the predicted energies)
-            data = data_util.postprocess(samples=samples,
-                                            energy=energies,
-                                            use_extra_dim=self.params.get("use_extra_dim", False),
-                                            use_extra_dims=self.params.get("use_extra_dims", False),
-                                            layer=self.params.get("calo_layer", None))
+                samples[start:stop] = self.model.decode(latent=latent_l, c=condition_l).cpu()
 
-            return data      
-
-    def generate(self, num_samples, batch_size = 10000, return_data=True, save_data=False):
-        
-        assert 0  == 1
-        self.model.eval()
-        with torch.no_grad():
-            # Creates the condition energies uniformly between 1 and 100
-            energies = 99.0*torch.rand((num_samples,1)) + 1.0
             
-            # Sample the latent from a normal distribution
-            latent =  torch.normal(0, 1, size=(num_samples, self.model.latent_dim))
-            
-            # generate from this latent space
-            data = self.generate_from_latent(latent=latent, condition=energies, batch_size=batch_size)
+            # Postprocessing (Reshape the layers and return a dict)
+            data = data_util.postprocess(samples, condition)
 
-
-        # Save the sampled data if requested
-        if save_data:
-            data_util.save_data(
-                data = data,
-                data_file = self.doc.get_file('samples.hdf5')
-            )
-            
-        # return the sampled data if requested
-        if return_data:
             return data      
     
     def plot_results(self, epoch):
@@ -719,7 +706,6 @@ class VAETrainer:
         plotting.plot_all_hist(
             self.doc.basedir,
             self.params['data_path_test'],
-            calo_layer=self.params.get("calo_layer", None),
             epoch=epoch,
             summary_plot=True, 
             single_plots=False,
@@ -768,17 +754,6 @@ class VAETrainer:
 
         print(f'maximum gradient: {max_grad}')
         sys.stdout.flush()
-    
-    def get_latent(self, data):
-        assert 0==1
-    
-    def get_mu_logvar(self, data):
-        assert 0 == 1
-        with torch.no_grad():
-            mu, logvar = self.model.encode(data)
-            latent = torch.cat([mu, logvar], axis=1)
-            
-        return latent
          
     def save(self, epoch="", name=None):
         """ Save the model, its optimizer, losses and the epoch """
@@ -806,7 +781,7 @@ class VAETrainer:
               
               
 class ECAETrainer():
-    def __init__(self, params, device, doc, vae_doc=None):
+    def __init__(self, params, device, doc, vae_dir=None):
         
         # Save some important paramters
         self.params = params
@@ -814,7 +789,7 @@ class ECAETrainer():
         self.doc = doc
         
         # Create a VAE trainer, train it and make sure, that the plots of the VAE are put in a different directory
-        if vae_doc is None:
+        if vae_dir is None:
             vae_basedir = os.path.join(doc.basedir, "VAE")
             vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_basedir, log_name="log_jupyter.txt", read_only=True)
             self.vae_trainer = VAETrainer(params, device, vae_doc)
@@ -823,8 +798,10 @@ class ECAETrainer():
             print("\n\nEnd training of CVAE\n\n")
         
         else:
+            vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_dir, log_name="log_jupyter.txt", read_only=True)
             self.vae_trainer = VAETrainer(params, device, vae_doc)
-            self.vae_trainer.load()
+        
+        self.vae_trainer.load("_best")
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
@@ -832,14 +809,8 @@ class ECAETrainer():
         # Save the dataloaders ("test" should rather be called validation...)
         self.train_loader, self.test_loader = self.get_loaders()
 
-        # Needed to show the classifier test, the the whole set was used...
+        # Needed to show the classifier test, that the whole set was used...
         self.voxels = None
-        
-        # Fix the noise of the dataloader if requested.
-        # Otherwise it will be sampled for each batch again!
-        if params.get("fixed_noise", False):
-            self.train_loader.fix_noise()
-            self.test_loader.fix_noise()
         
         # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
@@ -851,10 +822,7 @@ class ECAETrainer():
         print(f"Input dimension: {self.num_dim}")
 
         # Initialize the model with the full data to get the dimensions right
-        if params.get("fixed_noise", False):
-            data = torch.clone(self.train_loader.data)
-        else:
-            data = torch.clone(self.train_loader.add_noise(self.train_loader.data))
+        data = torch.clone(self.train_loader.data)
         cond = torch.clone(self.train_loader.cond)
         model = CINN(params, data, cond)
         self.model = model.to(device)
@@ -889,23 +857,26 @@ class ECAETrainer():
         batch_size = self.params.get('batch_size')
         width_noise = self.params.get("width_noise", 1e-7)
         
-        # Create training and test data:
-        if self.params.get("latent_type", "pre_sampling") == "post_sampling":
-            data_train = self.vae_trainer.get_latent(self.vae_trainer.train_loader.data).cpu().numpy()
-            data_test = self.vae_trainer.get_latent(self.vae_trainer.test_loader.data).cpu().numpy()
-        elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
-            data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data).cpu().numpy()
-            data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data).cpu().numpy()
-        else:
-            raise KeyError("Don't know this latent type")
+        # TODO: Might actually use shallow copy for the datasets.
+        # Could lead to memory problems for larger datasets otherwise
+        with torch.no_grad():
+            # Create training and test data:
+            if self.params.get("latent_type", "pre_sampling") == "post_sampling":
+                data_train = self.vae_trainer.get_latent(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+                data_test = self.vae_trainer.get_latent(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+            elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
+                data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+                data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+            else:
+                raise KeyError("Don't know this latent type")
         
-        # append the energy dimensions
-        data_train = np.append(data_train, self.vae_trainer.train_loader.data[:, -3:].cpu().numpy(), axis=1)
-        data_test = np.append(data_test, self.vae_trainer.test_loader.data[:, -3:].cpu().numpy(), axis=1)
+        # Append the energy dimensions
+        data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
+        data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
         
         # Create the conditioning data
-        cond_train = self.vae_trainer.train_loader.cond.cpu().numpy()
-        cond_test = self.vae_trainer.test_loader.cond.cpu().numpy()
+        cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
+        cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
         
         # Put into the dataloader
         data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
@@ -915,8 +886,8 @@ class ECAETrainer():
         cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
         
         # Create the dataloaders
-        loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
-        loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
+        loader_train = MyDataLoader(data_train, cond_train, batch_size)
+        loader_test = MyDataLoader(data_test, cond_test, batch_size)
         
         return loader_train, loader_test
                   
@@ -1188,13 +1159,11 @@ class ECAETrainer():
         plotting.plot_all_hist(
             self.doc.basedir,
             self.params['data_path_test'],
-            calo_layer=self.params.get("calo_layer", None),
             epoch=epoch,
             summary_plot=True, 
             single_plots=False,
             data=generated,
-            p_ref=self.params.get("particle_type", "piplus"),
-            data_resolution=self.params.get("data_resolution", "full"))  
+            p_ref=self.params.get("particle_type", "piplus"))  
         
         # Also in the VAE latent space in the last epoch
         
@@ -1359,11 +1328,6 @@ class ECAETrainer():
                     
             samples_latent = samples_latent[:,0,...]
             
-            # Subract the noise
-            # TODO: Set the default value in this class better to 0!
-            # (Noise is uniformly added and everything below 0 becomes 0 later)
-            samples_latent -= self.params.get("width_noise", 1e-7)
-            
             if return_in_training_space:
                 return samples_latent
             
@@ -1371,7 +1335,12 @@ class ECAETrainer():
             # 2) VAE Part
             # TODO: Nicer with the VAE generate_from_latent function!
 
-            # Slice of the needed data
+
+            # For the INN the energy dimensions are part of the training set.
+            # For the VAE they are part of the conditioning. So we have to slice them off and
+            # append them to the existing E_inc condition.
+            
+            # Furthermore, we might have to split into mu and sigma parts if we are in this space
             if self.params.get("latent_type", "pre_sampling") == "post_sampling":
                 samples_latent = samples_latent[:, :-3]
             elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
@@ -1381,14 +1350,25 @@ class ECAETrainer():
             
             energy_dims = samples_latent[:, -3:]
             
+            # Get layer energies needed as we also append them to the conditions for numerical stability
+            u1 = energy_dims[:, [0]]
+            u2 = energy_dims[:, [1]]
+            u3 = energy_dims[:, [2]]
+            e_tot = u1*energies[:, [0]]
+            e0 = u2*e_tot
+            e1 = u3*(e_tot-e0)
+            e2 = e_tot - e0 -e1
+            
+            # Create the correct condition container
+            condition = torch.cat((energies, energy_dims, e0, e1, e2), axis=1)
+            
             # Prepares an "empty" container for the samples
             samples = torch.zeros((num_samples,self.vae_trainer.train_loader.data.shape[1]))
             for batch in range((num_samples+batch_size-1)//batch_size):
                 start = batch_size*batch
                 stop = min(batch_size*(batch+1), num_samples)
-                energies_l = energies[start:stop].to(self.device)
                 
-                energy_dims_l = energy_dims[start:stop].to(self.device)
+                condition_l = condition[start:stop].to(self.device)
                 
                 # Do the reparametrization if needed
                 if self.params.get("latent_type", "pre_sampling") == "post_sampling":
@@ -1399,22 +1379,11 @@ class ECAETrainer():
                     reparametrized_samples_latent_l = self.vae_trainer.model.reparameterize(mu_l, logvar_l)
                     
                 # Samples using the VAE
-                samples[start:stop] = self.vae_trainer.model.from_latent(latent=reparametrized_samples_latent_l, 
-                                                                         c=energies_l, 
-                                                                         energy_dims=energy_dims_l).cpu()
+                samples[start:stop] = self.vae_trainer.model.decode(latent=reparametrized_samples_latent_l, c=condition_l).cpu()
+
             
-            samples = samples.cpu().numpy()
-            energies = energies.cpu().numpy()
-            
-            # Postprocessing (Rescale the layers with the predicted energies)
-            data = data_util.postprocess(samples=samples,
-                                            energy=energies,
-                                            use_extra_dim=self.params.get("use_extra_dim", False),
-                                            use_extra_dims=self.params.get("use_extra_dims", False),
-                                            layer=self.params.get("calo_layer", None))
-            
-        
-        
+            # Postprocessing (Reshape the layers and return a dict)
+            data = data_util.postprocess(samples, condition)
       
         # Save the sampled data if requested
         if save_data:

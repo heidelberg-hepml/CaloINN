@@ -15,7 +15,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.calibration import calibration_curve
 
 from model import CINN
-from trainer import INNTrainer
+from trainer import ECAETrainer
 import data_util
 from documenter import Documenter
 from plotter import Plotter
@@ -40,21 +40,21 @@ def load_trainer(directory, use_cuda=True):
     
     particle = params.get("particle_type", "piplus")
 
-    data_path_train = os.path.join("..","..", "Datasets", particle , "train_" + particle + ".hdf5")
+    data_path_train = os.path.join("..","..","..", "Datasets", particle , "train_" + particle + ".hdf5")
     params["data_path_train"] = data_path_train
 
-    data_path_test = os.path.join("..","..", "Datasets", particle , "test_" + particle + ".hdf5")
+    data_path_test = os.path.join("..","..","..", "Datasets", particle , "test_" + particle + ".hdf5")
     params["data_path_test"] = data_path_test
 
-    classification_set = os.path.join("..","..", "Datasets", particle , "cls_" + particle + ".hdf5")
+    classification_set = os.path.join("..","..","..", "Datasets", particle , "cls_" + particle + ".hdf5")
     params["classification_set"] = classification_set
     
-    trainer = INNTrainer(params, device, doc)
+    trainer = ECAETrainer(params, device, doc, vae_dir=params.get("vae_dir", None))
     
     return trainer, params, device, doc
 
 def main():
-    directory = "/remote/gpu06/ernst/Master_Thesis/Increase_energy_dimensions/CaloINN/results/2023_01_21_small_resolution_dataset/8_neurons_18_blocks_-4_prior_extra_dims"
+    directory = "/remote/gpu06/ernst/Master_Thesis/add_VAE/CaloINN/results/2023_02_16_Test_ECAE/piplus_pre_sampling"
     trainer, params, device, doc = load_trainer(directory)
     trainer.load("_best")
 
