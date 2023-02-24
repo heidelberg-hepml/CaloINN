@@ -29,6 +29,8 @@ class MyDataLoader:
         self.drop_last = drop_last
         self.shuffle = shuffle
         
+        self.vae_resampling = False
+        
         if self.drop_last:
             self.max_batch = len(self.data) // self.batch_size
         else:
@@ -37,6 +39,24 @@ class MyDataLoader:
     def drop_last_batch(self) -> None:
         self.drop_last = True
         self.max_batch = len(self.data) // self.batch_size
+
+    def activate_vae_resampling(self) -> None:
+        
+        if self.vae_resampling == False:
+            
+            assert (self.data.shape[1] - 3) % 2 == 0, "The latent space cannot be partitioned equally into mu and sigma!"
+            size_latent_space = (self.data.shape[1] - 3) // 2
+            print(f"Assuming latent space of dimension {size_latent_space}.")
+            self.mu = torch.clone(self.data[:, :size_latent_space])
+            self.logvar = torch.clone(self.data[:, size_latent_space:-3])
+            self.energy_dims = torch.clone(self.data[:, -3:])
+            
+            std = torch.exp(0.5*self.logvar)
+            eps = torch.randn_like(std)
+            
+            self.data = torch.cat((eps * std + self.mu, self.energy_dims), axis=1)
+        
+        self.vae_resampling = True
 
     def __len__(self) -> int:
         return self.max_batch
@@ -58,7 +78,17 @@ class MyDataLoader:
         idx = self.index[first:last]
         self.batch += 1
         
-        data = torch.clone(self.data[idx])
-        cond = torch.clone(self.cond[idx])
+        if not self.vae_resampling:
+        
+            data = torch.clone(self.data[idx])
+            cond = torch.clone(self.cond[idx])
+            
+        else:
+            
+            std = torch.exp(0.5*self.logvar[idx])
+            eps = torch.randn_like(std)
+            
+            data = torch.cat((eps * std + self.mu[idx], self.energy_dims[idx]), axis=1)
+            cond = torch.clone(self.cond[idx])
         
         return data, cond

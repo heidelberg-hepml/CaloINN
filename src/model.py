@@ -748,8 +748,11 @@ class CVAE(nn.Module):
         """Takes a point in the latent space after sampling and returns a point in the logit space.
         Output: Reconstructed image in logit-space """
         
+        # Normalize c, clip it (needed for stability in generation) and dont append the true layer energies!
+        c_clipped = torch.clamp((c / self.max_cond)[:, :-3], min=0, max=1)
+        
         # Transform cond into logit space and append to latent results
-        c_logit = self.logit_trafo_in((c / self.max_cond)[:, :-3]) # Normalize c and dont append the true layer energies!
+        c_logit = self.logit_trafo_in(c_clipped)
         # TODO: Might be useful to call a normalization layer here, too
         latent = torch.cat((latent, c_logit), axis=1)
         
@@ -803,7 +806,7 @@ class CVAE(nn.Module):
         # Decode
         return self.decode(latent=latent, c=c)
     
-    def reco_loss(self, x, c):
+    def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
         
@@ -830,13 +833,26 @@ class CVAE(nn.Module):
         # print(x_0_1, x_recon, x_logit, x_recon_logit)
         
         # Compute the losses
-        # MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
-        MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit, x_logit, reduction="mean")
-        MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x_0_1, reduction="mean")
-        # MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon, x_0_1, reduction="mean")
+        
+        if not MAE_logit:
+            MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
+        else:
+            MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit, x_logit, reduction="mean")
+            
+        if not MAE_data:
+            MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x_0_1, reduction="mean")
+        else:
+            MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon, x_0_1, reduction="mean")
+            
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
         
         # print(MSE_logit, MSE_data, KLD)
+
+        if zero_logit:
+            MSE_logit = torch.tensor(0).to(MSE_logit.device)
+            
+        if zero_data:
+            MSE_data = torch.tensor(0).to(MSE_logit.device)
             
         
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD

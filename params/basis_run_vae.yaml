@@ -1,5 +1,5 @@
 # Documenter information
-run_name: -5_thresholding_no_noise
+run_name: default
 # block_name: Try_to_improve_recons
 
 # Data
@@ -12,6 +12,11 @@ VAE_batch_size: 256
 VAE_n_epochs: 500
 VAE_save_interval: 100
 VAE_keep_models: 1001
+VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
+VAE_MAE_data: False # Use MAE instead of MSE for data loss
+VAE_zero_logit: False # Set the logit loss to 0
+VAE_zero_data: False # Set the data loss to 0
+
 
 # VAE Architecture
 VAE_hidden_sizes: [4500, 1000, 150]

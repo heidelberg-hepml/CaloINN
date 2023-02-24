@@ -131,7 +131,7 @@ class DNNTrainer:
                 
                 # Prepare the data of the current batch
                 input_vector, target_vector = self.__preprocess(batch_data, dtype=torch.get_default_dtype())
-                print(torch.argwhere(input_vector.isnan()))
+                # print(torch.argwhere(input_vector.isnan()))
                 # print(torch.argwhere(target_vector.isnan()))
                 output_vector = self.model(input_vector)
                 
@@ -577,7 +577,11 @@ class VAETrainer:
             self.optim.zero_grad()
             
             # Get the reconstruction loss
-            loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c)
+            loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c,
+                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
+                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
+                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
+                                                                            zero_data=self.params.get("VAE_zero_data", False))
                 
             # Calculate the gradients
             loss.backward()
@@ -628,7 +632,11 @@ class VAETrainer:
             for x, c in self.test_loader:
                 
                 # Get the reconstruction loss
-                loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c)
+                loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c,
+                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
+                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
+                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
+                                                                            zero_data=self.params.get("VAE_zero_data", False))
                 
                 # Save the losses
                 test_loss += loss.item() * len(x)
@@ -664,6 +672,11 @@ class VAETrainer:
         mu, logvar = self.model.encode(data, cond)
         mu_logvar = torch.cat((mu, logvar), axis=1)
         return mu_logvar
+    
+    def get_mu(self, data, cond):
+                    
+        mu, logvar = self.model.encode(data, cond)
+        return mu
         
     def get_latent(self, data, cond):
         
@@ -775,12 +788,13 @@ class VAETrainer:
         self.losses_train = state_dicts.get("losses_train", {})
         self.epoch = state_dicts.get("epoch", 0)
         self.max_grad = state_dicts.get("grads", [])
-        self.epoch_offset = state_dicts.get("epoch", 0)
+        if update_offset:
+            self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
               
               
-class ECAETrainer():
+class ECAETrainer:
     def __init__(self, params, device, doc, vae_dir=None):
         
         # Save some important paramters
@@ -855,42 +869,81 @@ class ECAETrainer():
     def get_loaders(self):
         
         batch_size = self.params.get('batch_size')
-        width_noise = self.params.get("width_noise", 1e-7)
         
-        # TODO: Might actually use shallow copy for the datasets.
-        # Could lead to memory problems for larger datasets otherwise
-        with torch.no_grad():
-            # Create training and test data:
-            if self.params.get("latent_type", "pre_sampling") == "post_sampling":
-                data_train = self.vae_trainer.get_latent(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-                data_test = self.vae_trainer.get_latent(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-            elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
+        if not self.params.get("Resample_by_VAE", False):
+            # TODO: Might actually use shallow copy for the datasets.
+            # Could lead to memory problems for larger datasets otherwise
+            with torch.no_grad():
+                latent_type = self.params.get("latent_type", "pre_sampling")
+                # Create training and test data:
+                if latent_type == "post_sampling":
+                    data_train = self.vae_trainer.get_latent(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+                    data_test = self.vae_trainer.get_latent(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+                elif latent_type == "pre_sampling":
+                    data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+                    data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+                # MAP approach
+                elif latent_type == "only_means":
+                    data_train = self.vae_trainer.get_mu(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+                    data_test = self.vae_trainer.get_mu(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+                else:
+                    raise KeyError("Don't know this latent type")
+            
+            # Append the energy dimensions
+            data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
+            data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
+            
+            # Create the conditioning data
+            cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
+            cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
+            
+            # Put into the dataloader
+            data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
+            cond_train = torch.tensor(cond_train, device=self.device, dtype=torch.get_default_dtype())
+
+            data_test = torch.tensor(data_test, device=self.device, dtype=torch.get_default_dtype())
+            cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
+            
+            # Create the dataloaders
+            loader_train = MyDataLoader(data_train, cond_train, batch_size)
+            loader_test = MyDataLoader(data_test, cond_test, batch_size)
+            
+            return loader_train, loader_test
+        
+        else:
+            
+            assert self.params.get("latent_type", "pre_sampling") == "post_sampling", "If Resample_by_VAE is used, we need to sample => post_sampling must be true!"
+            
+            with torch.no_grad():
+                # Create training and test data:
                 data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
                 data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-            else:
-                raise KeyError("Don't know this latent type")
-        
-        # Append the energy dimensions
-        data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
-        data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
-        
-        # Create the conditioning data
-        cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
-        cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
-        
-        # Put into the dataloader
-        data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
-        cond_train = torch.tensor(cond_train, device=self.device, dtype=torch.get_default_dtype())
 
-        data_test = torch.tensor(data_test, device=self.device, dtype=torch.get_default_dtype())
-        cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
-        
-        # Create the dataloaders
-        loader_train = MyDataLoader(data_train, cond_train, batch_size)
-        loader_test = MyDataLoader(data_test, cond_test, batch_size)
-        
-        return loader_train, loader_test
-                  
+            # Append the energy dimensions
+            data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
+            data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, -6:-3].cpu().numpy(), axis=1)
+            
+            # Create the conditioning data
+            cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
+            cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
+            
+            # Put into the dataloader
+            data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
+            cond_train = torch.tensor(cond_train, device=self.device, dtype=torch.get_default_dtype())
+
+            data_test = torch.tensor(data_test, device=self.device, dtype=torch.get_default_dtype())
+            cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
+            
+            # Create the dataloaders
+            loader_train = MyDataLoader(data_train, cond_train, batch_size)
+            loader_test = MyDataLoader(data_test, cond_test, batch_size)
+            
+            
+            loader_train.activate_vae_resampling()
+            loader_test.activate_vae_resampling()
+            
+            return loader_train, loader_test       
+               
     def train(self):
         """ Trains the model. """
 
@@ -1147,8 +1200,7 @@ class ECAETrainer():
                 num_samples = 10000
                 num_rand = 30
         else:
-            # TODO: Change to 100000
-            num_samples = 10000
+            num_samples = 100000
             num_rand = 30
         
         # Now start the plotting
@@ -1270,7 +1322,7 @@ class ECAETrainer():
     def load(self, epoch="", update_offset=True):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
         
-        self.vae_trainer.load(epoch, update_offset)
+        self.vae_trainer.load(epoch)
         
         name = self.doc.get_file(f"model{epoch}.pt")
         state_dicts = torch.load(name, map_location=self.device)
@@ -1341,9 +1393,11 @@ class ECAETrainer():
             # append them to the existing E_inc condition.
             
             # Furthermore, we might have to split into mu and sigma parts if we are in this space
-            if self.params.get("latent_type", "pre_sampling") == "post_sampling":
+            latent_type = self.params.get("latent_type", "pre_sampling")
+            
+            if (latent_type == "post_sampling") or (latent_type == "only_means"):
                 samples_latent = samples_latent[:, :-3]
-            elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
+            elif latent_type == "pre_sampling":
                 latent_dim = self.vae_trainer.model.latent_dim
                 mu = samples_latent[:, :latent_dim]
                 logvar = samples_latent[:, latent_dim:-3]
@@ -1371,9 +1425,9 @@ class ECAETrainer():
                 condition_l = condition[start:stop].to(self.device)
                 
                 # Do the reparametrization if needed
-                if self.params.get("latent_type", "pre_sampling") == "post_sampling":
+                if (latent_type == "post_sampling") or (latent_type == "only_means"):
                     reparametrized_samples_latent_l = samples_latent[start:stop].to(self.device)
-                elif self.params.get("latent_type", "pre_sampling") == "pre_sampling":
+                elif latent_type == "pre_sampling":
                     mu_l = mu[start:stop].to(self.device)
                     logvar_l = logvar[start:stop].to(self.device)
                     reparametrized_samples_latent_l = self.vae_trainer.model.reparameterize(mu_l, logvar_l)
