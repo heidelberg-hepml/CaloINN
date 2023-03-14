@@ -18,6 +18,11 @@ def load_data(data_file, threshold=1e-5):
     overflow = full_file['overflow'][:] / 1e0
     full_file.close()
 
+    print("load_data() layer_0.shape:", layer_0.shape); 
+    print("load_data() layer_1.shape:", layer_1.shape); 
+    print("load_data() layer_2.shape:", layer_2.shape); 
+    print("load_data() energy.shape:", energy.shape); 
+
     data = {
         'layer_0': layer_0,
         'layer_1': layer_1,
@@ -169,6 +174,11 @@ def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, 
     layer1 = layer_1.reshape(layer_1.shape[0], -1)
     layer2 = layer_2.reshape(layer_2.shape[0], -1)
 
+    print("preprocess() type(layer):" , type(layer)); 
+    print("preprocess() layer0.shape:", layer0.shape);
+    print("preprocess() layer1.shape:", layer1.shape);
+    print("preprocess() layer2.shape:", layer2.shape);
+
     # Mask to filter the events (e.g. ensure energy conservation and prevent divisions by zero)
     binary_mask = np.full(len(energy), True)
     
@@ -179,12 +189,16 @@ def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, 
     else:
         x = np.concatenate((layer0, layer1, layer2), 1)
 
+    print("preprocess() x.shape:", x.shape); 
     # Ensure energy conservation
     binary_mask &= np.sum(x, axis=1) < energy[:,0]
 
     # Apply these two conditions
     x = x[binary_mask]
     c = energy[binary_mask]
+
+    print("preprocess() x.shape:", x.shape); 
+    print("preprocess() c.shape:", x.shape); 
 
     # Warning in case of extra_dims and not all layers
     if use_extra_dims and (layer is not None):
@@ -304,6 +318,10 @@ def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
     data_train, cond_train = preprocess(load_data(data_file_train),
         use_extra_dim, use_extra_dims, layer=layer, data_resolution=data_resolution)
 
+    print("get_loaders() data_train.shape:", data_train.shape); 
+    print("get_loaders() cond_train.shape:", cond_train.shape); 
+    print("EXITING"); 
+    #quit(); 
     # Create the test loader
     data_test, cond_test = preprocess(load_data(data_file_test),
         use_extra_dim, use_extra_dims, layer=layer, data_resolution=data_resolution)
