@@ -4,6 +4,9 @@ import torch
 from copy import deepcopy
 from myDataLoader import MyDataLoader
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
+
+from calc_obs import *
+
 import os
 import warnings
 
@@ -99,6 +102,15 @@ def preprocess(data):
 
     # adds the "energy dims", variables that represent the layer energies to the conditions.
     c = get_energy_dims(data=x, e_part=c)
+    
+    # Also add the sparsity as a condtion
+    funcs = [calc_sparsity, calc_sparsity, calc_sparsity]
+    params = [{'layer': 0}, {'layer': 1}, {'layer': 2}]
+    
+    more_conditions = get_further_conditions(funcs, data, params)[binary_mask]    
+    
+    # Append the new conditions between the energy conditions and the true, unnormalized layer energies
+    c = np.concatenate((c[:, :4], more_conditions, c[:, 4:]), axis=1)
 
     return x, c
 
@@ -158,7 +170,17 @@ def get_energy_dims(data, e_part):
     
     # Save the actual layer energies for numerical stability!
     return np.concatenate((e_part, u1, u2, u3, e0, e1, e2), axis=1)
+
+def get_further_conditions(funcs, data, params):
     
+    conds = []
+    
+    for i, func in enumerate(funcs):
+        conds.append(func(deepcopy(data), **(params[i])))
+        
+    return np.array(conds).T
+        
+
 def normalize_layers(data_flattened, conditions):
     
     # Prevent inplace operations
@@ -171,9 +193,9 @@ def normalize_layers(data_flattened, conditions):
     l_01 = size_layer_0 + size_layer_1    
     
     # Use the exact layer energies for numerical stability
-    e0 = conditions[:, [4]]
-    e1 = conditions[:, [5]]
-    e2 = conditions[:, [6]]
+    e0 = conditions[:, [-3]]
+    e1 = conditions[:, [-2]]
+    e2 = conditions[:, [-1]]
 
     # Normalize each layer by the layer energy
     data_flattened[..., :l_0] = data_flattened[..., :l_0] / (e0 + 1.e-7)
@@ -182,30 +204,29 @@ def normalize_layers(data_flattened, conditions):
     
     return data_flattened
 
-def unnormalize_layers(data_flattened, conditions):
+def unnormalize_layers(data_flattened, conditions, clone=True):
     # Prevent inplace operations
-    data_flattened = torch.clone(data_flattened)
-    conditions = torch.clone(conditions)
     
+    if clone:
+        output = torch.clone(data_flattened)
+        conditions = torch.clone(conditions)
+        
+    output = torch.zeros_like(data_flattened).to(data_flattened.device)
     # Get the layer sizes
     size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data_flattened)
     l_0 = size_layer_0
     l_01 = size_layer_0 + size_layer_1 
     
     # Use the exact layer energies for numerical stability
-    e0 = conditions[:, [4]]
-    e1 = conditions[:, [5]]
-    e2 = conditions[:, [6]]
+    e0 = conditions[:, [-3]]
+    e1 = conditions[:, [-2]]
+    e2 = conditions[:, [-1]]
     
     # Normalize the layers to the correct energies
-    data_flattened[..., :l_0]    = data_flattened[..., :l_0] / (torch.sum(data_flattened[..., :l_0], axis=1, keepdims=True) + 1e-7)
-    data_flattened[..., l_0:l_01] = data_flattened[..., l_0:l_01] / (torch.sum(data_flattened[..., l_0:l_01], axis=1, keepdims=True) + 1e-7)
-    data_flattened[..., l_01:]    = data_flattened[..., l_01:] / (torch.sum(data_flattened[..., l_01:], axis=1, keepdims=True) + 1e-7)
-    data_flattened[..., :l_0]    = data_flattened[..., :l_0] * e0
-    data_flattened[..., l_0:l_01] = data_flattened[..., l_0:l_01] * e1
-    data_flattened[..., l_01:]    = data_flattened[..., l_01:] * e2
-    
-    return data_flattened
+    output[..., :l_0]    = data_flattened[..., :l_0] / (torch.sum(data_flattened[..., :l_0], axis=1, keepdims=True) + 1e-7) * e0
+    output[..., l_0:l_01] = data_flattened[..., l_0:l_01] / (torch.sum(data_flattened[..., l_0:l_01], axis=1, keepdims=True) + 1e-7) * e1
+    output[..., l_01:]    = data_flattened[..., l_01:] / (torch.sum(data_flattened[..., l_01:], axis=1, keepdims=True) + 1e-7) * e2
+    return output
 
 def get_loaders(data_file_train, data_file_test, batch_size, device='cpu', drop_last=False, shuffle=True):
     """Returns the dataloaders for the training of the CVAE"""
@@ -508,7 +529,7 @@ def split_dataset(input_dataset, val_fraction=0.2, test_fraction=0.2, save_dir=N
         val_file = h5py.File(val_path, 'w')
         test_file = h5py.File(test_path, 'w')
 
-        for key in input_dataset():
+        for key in input_dataset:
             val_file.create_dataset(key, data=input_dataset[key][:cut_index_val])
             test_file.create_dataset(key, data=input_dataset[key][cut_index_val:cut_index_test])
             train_file.create_dataset(key, data=input_dataset[key][cut_index_test:])

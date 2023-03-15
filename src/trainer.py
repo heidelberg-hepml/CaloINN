@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 import data_util
-from model import CINN, DNN, CVAE
+from model import CINN, DNN, CVAE, CAE
 import plotting
 from plotter import Plotter
 
@@ -793,7 +793,306 @@ class VAETrainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
               
-              
+   
+class AETrainer:
+    def __init__(self, params, device, doc):
+        
+        self.params = params
+        self.device = device
+        print(self.device)
+        self.doc = doc
+
+        # Load the data  
+        self.train_loader, self.test_loader = data_util.get_loaders(
+            data_file_train=params.get('data_path_train'),
+            data_file_test=params.get('data_path_test'),
+            batch_size=params.get('VAE_batch_size'),
+            device=device,
+            drop_last=False,
+            shuffle=True)
+        
+        data = self.train_loader.data
+        cond = self.train_loader.cond
+        
+        # Create the VAE
+        self.latent_dim = params["VAE_latent_dim"]
+        hidden_sizes = params["VAE_hidden_sizes"]
+        self.model = CAE(input = data,
+                          cond = cond,
+                          latent_dim = self.latent_dim,
+                          hidden_sizes = hidden_sizes,
+                          alpha = params.get("alpha", 1.e-6),
+                          gamma = params.get("VAE_gamma", 1.e+3),
+                          noise_width=params.get("VAE_width_noise", None))
+        
+        self.model = self.model.to(self.device)
+        
+        
+        # Set the optimizer
+        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("lr", 1.e-4))
+        
+        # Print the model
+        print(self.model)
+        sys.stdout.flush()
+        
+        # Needed for documentation (printing & plotting)
+        self.losses_train = {'mse': [], 'mse_logit': [],'kl': [], 'total': []}
+        self.losses_test = {'mse': [], 'mse_logit': [], 'kl': [], 'total': []}
+        self.learning_rates = []
+        self.max_grad = []
+        
+        # Nedded for printing if the model was loaded
+        self.epoch_offset = 0
+        
+    def train(self):
+        for epoch in range(self.epoch_offset+1, self.params['VAE_n_epochs']+1):
+            
+            # Save the latest epoch of the training (just the number)
+            self.epoch = epoch
+            
+            # Initialize the best validation loss
+            min_test_loss = np.inf
+            
+            # Do training and validation for the current epoch
+            max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss = self.__train_one_epoch()
+            test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss = self.__do_validation()
+
+            # Remember the best model so far
+            if test_loss < min_test_loss:
+                min_test_loss = test_loss
+                self.save("_best")
+                
+            # Print the data saved for documentation
+            self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_loss,
+                              test_mse_loss, test_mse_loss_logit, test_kl_loss, test_loss, max_grad)
+            
+            # Plot the losses as well
+            if epoch >= 1:
+                self.plot_losses()
+                
+            # If we reach the save interval, create all histograms for the observables,
+            # plot the latent distribution and save the model
+            if epoch % self.params.get("VAE_keep_models", self.params["VAE_n_epochs"]+1) == 0:
+                self.save(epoch=epoch)
+            
+            if epoch%self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
+                self.save()
+                
+                self.plot_results(epoch) 
+         
+    def __train_one_epoch(self):
+        """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
+        """
+        # Initialize the loss values for the documentation
+        train_loss = 0
+        train_mse_loss = 0
+        train_mse_loss_logit = 0
+        train_kl_loss = 0
+        max_grad = 0.0
+
+        # Set model to training mode
+        self.model.train()
+        
+        # Iterate over all batches
+        # x=data, c=condition
+        for x, c in self.train_loader:
+            
+            # Initialize the gradient value for the documentation
+            max_grad_batch = 0.0
+            
+            # Reset the optimizer
+            self.optim.zero_grad()
+            
+            # Get the reconstruction loss
+            loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c,
+                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
+                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
+                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
+                                                                            zero_data=self.params.get("VAE_zero_data", False))
+                
+            # Calculate the gradients
+            loss.backward()
+            
+            # Update the parameters
+            self.optim.step()
+
+            # Save the losses for documentation
+            self.losses_train['mse'].append(mse_loss.item())
+            self.losses_train['mse_logit'].append(mse_loss_logit.item())
+            self.losses_train['total'].append(loss.item())
+            self.losses_train['kl'].append(kl_loss.item())
+            
+            train_loss += loss.item()*len(x)
+            train_mse_loss += mse_loss.item()*len(x)
+            train_mse_loss_logit += mse_loss_logit.item()*len(x)
+            train_kl_loss += kl_loss.item()*len(x)
+
+            # Save the maximum gradient for documentation
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
+            max_grad = max(max_grad_batch, max_grad)
+            self.max_grad.append(max_grad_batch)
+                
+        # Normalize the losses to the dataset length and return them.
+        # We need a different normalization here compared to the plotting because we summed over the whole epoch!
+        train_mse_loss /= len(self.train_loader.data)
+        train_mse_loss_logit /= len(self.train_loader.data)
+        train_kl_loss /= len(self.train_loader.data)
+        train_loss /= len(self.train_loader.data)                
+
+        return max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss
+                       
+    def __do_validation(self):
+        """Evaluates the model on the test set.
+        Saves the losses inplace for plotting and returns the losses that are needed for printing.
+        """
+        # Initialize the loss values for the documentation
+        test_loss = 0
+        test_mse_loss = 0
+        test_mse_loss_logit = 0
+        test_kl_loss = 0
+        
+        # Evaluate the model on the test dataset and save the losses
+        self.model.eval()
+        with torch.no_grad():
+            for x, c in self.test_loader:
+                
+                # Get the reconstruction loss
+                loss, mse_loss_logit, mse_loss, kl_loss  = self.model.reco_loss(x, c,
+                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
+                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
+                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
+                                                                            zero_data=self.params.get("VAE_zero_data", False))
+                
+                # Save the losses
+                test_loss += loss.item() * len(x)
+                test_mse_loss += mse_loss.item() * len(x)
+                test_mse_loss_logit += mse_loss_logit.item() * len(x)
+                test_kl_loss += kl_loss.item() * len(x)
+                
+        
+        # Normalize the losses for printing and plotting and store them also in the corresponding dict
+        test_mse_loss /= len(self.test_loader.data)
+        test_mse_loss_logit /= len(self.test_loader.data)
+        test_loss /= len(self.test_loader.data)
+        test_kl_loss /= len(self.test_loader.data)
+               
+        self.losses_test['mse'].append(test_mse_loss)
+        self.losses_test['mse_logit'].append(test_mse_loss_logit)
+        self.losses_test['total'].append(test_loss)
+        self.losses_test['kl'].append(test_kl_loss)
+
+        return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss
+
+    def get_reco(self, data, cond):
+        # Do not need batches. If the input fits on the GPU. The output should fit as well. (Consumption goes up by factor of 2)
+        self.model.eval()
+        with torch.no_grad():
+            reconstructed = self.model(data, cond)
+            postprocessed = data_util.postprocess(reconstructed, cond)
+        
+        return postprocessed
+                
+    def get_latent(self, data, cond):
+        
+        latent = self.model.encode(x=data, c=cond)
+        return latent
+            
+    def generate_from_latent(self, latent, condition, batch_size = 10000):
+        self.model.eval()
+        with torch.no_grad():
+            num_samples = condition.shape[0]
+
+            # Prepares an "empty" container for the samples
+            samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
+            for batch in range((num_samples+batch_size-1)//batch_size):
+                start = batch_size*batch
+                stop = min(batch_size*(batch+1), num_samples)
+                condition_l = condition[start:stop].to(self.device)
+                latent_l = latent[start:stop].to(self.device)
+                samples[start:stop] = self.model.decode(latent=latent_l, c=condition_l).cpu()
+
+            
+            # Postprocessing (Reshape the layers and return a dict)
+            data = data_util.postprocess(samples, condition)
+
+            return data      
+    
+    def plot_results(self, epoch):
+        """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
+        """
+        
+        self.model.eval
+        
+        # Generate the reconstructions
+        data = self.test_loader.data
+        cond = self.test_loader.cond
+        generated = self.get_reco(data, cond)
+                    
+        # Now create the no-errorbar histograms
+        plotting.plot_all_hist(
+            self.doc.basedir,
+            self.params['data_path_test'],
+            epoch=epoch,
+            summary_plot=True, 
+            single_plots=False,
+            data=generated,
+            p_ref=self.params.get("particle_type", "piplus"))
+      
+    def plot_losses(self):
+        # Plot the losses
+        plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
+        plotting.plot_loss(self.doc.get_file('loss_mse_data.pdf'), self.losses_train['mse'], self.losses_test['mse'])
+        plotting.plot_loss(self.doc.get_file('loss_mse_logit.pdf'), self.losses_train['mse_logit'], self.losses_test['mse_logit'])
+        plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
+        
+        # Plot the gradients
+        plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
+
+    def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_loss, max_grad):
+        print('')
+        print(f'=== epoch {epoch} ===')
+        
+        print(f'mse data-loss (train): {train_mse_loss}')
+        print(f'mse logit-loss (train): {train_mse_loss_logit}')
+        print(f'kl loss (train): {train_kl_loss}')
+        print(f'total loss (train): {train_loss}')
+        
+        print(f'mse data-loss (test): {test_mse_loss}')
+        print(f'mse logit-loss (test): {test_mse_loss_logit}')
+        print(f'kl loss (test): {test_kl_loss}')
+        print(f'total loss (test): {test_loss}')
+
+        print(f'maximum gradient: {max_grad}')
+        sys.stdout.flush()
+         
+    def save(self, epoch="", name=None):
+        """ Save the model, its optimizer, losses and the epoch """
+        torch.save({"opt": self.optim.state_dict(),
+                    "net": self.model.state_dict(),
+                    "losses_test": self.losses_test,
+                    "losses_train": self.losses_train,
+                    "grads": self.max_grad,
+                    "epoch": self.epoch,}, 
+                   
+                   self.doc.get_file(f"model{epoch}.pt"))
+                         
+    def load(self, epoch="", update_offset=True):
+        """ Load the model, its optimizer, losses and the epoch """
+        name = self.doc.get_file(f"model{epoch}.pt")
+        state_dicts = torch.load(name, map_location=self.device)
+        self.model.load_state_dict(state_dicts["net"])
+        self.losses_test = state_dicts.get("losses_test", {})
+        self.losses_train = state_dicts.get("losses_train", {})
+        self.epoch = state_dicts.get("epoch", 0)
+        self.max_grad = state_dicts.get("grads", [])
+        if update_offset:
+            self.epoch_offset = state_dicts.get("epoch", 0)
+        self.optim.load_state_dict(state_dicts["opt"])
+        self.model.to(self.device)
+         
+               
 class ECAETrainer:
     def __init__(self, params, device, doc, vae_dir=None):
         
