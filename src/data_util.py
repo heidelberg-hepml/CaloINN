@@ -5,7 +5,7 @@ from copy import deepcopy
 from myDataLoader import MyDataLoader
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
 
-from calc_obs import *
+from calc_obs import calc_sparsity
 
 import os
 import warnings
@@ -109,6 +109,14 @@ def preprocess(data):
     
     more_conditions = get_further_conditions(funcs, data, params)[binary_mask]    
     
+    # Also add the centroids as condition (here x is already masked!)
+    more_conditions = (more_conditions.T).tolist()
+    for dir in ["phi", "eta"]:
+        means = calc_centroids(data=x, dir=dir, numpy=True)
+        for mean in means:
+            more_conditions.append(mean)
+    more_conditions = np.array(more_conditions).T
+    
     # Append the new conditions between the energy conditions and the true, unnormalized layer energies
     c = np.concatenate((c[:, :4], more_conditions, c[:, 4:]), axis=1)
 
@@ -171,6 +179,63 @@ def get_energy_dims(data, e_part):
     # Save the actual layer energies for numerical stability!
     return np.concatenate((e_part, u1, u2, u3, e0, e1, e2), axis=1)
 
+def calc_centroids(data, dir, numpy=False):
+    
+    def get_bin_centers(dir, data, layer, numpy):
+        
+        shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=data)
+        
+        if dir == 'phi':
+            cells = (shape_layer_0[0], shape_layer_1[0], shape_layer_2[0])[layer]
+        elif dir == 'eta':
+            cells = (shape_layer_0[1], shape_layer_1[1], shape_layer_2[1])[layer]
+        else:
+            raise ValueError(f"dir={dir} not in ['eta', 'phi']")
+        bins = np.linspace(0, 1, cells + 1)
+        
+        if not numpy:
+            bins = torch.from_numpy(bins).to(data.device)
+            
+        return (bins[1:] + bins[:-1]) / 2.
+    
+    # Reshape the data array to the original shape
+    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data)
+    shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=data)
+    
+    l_0 = size_layer_0
+    l_01 = size_layer_0 + size_layer_1
+    
+    layer_0 = data[:, :l_0].reshape(-1, shape_layer_0[0], shape_layer_0[1])
+    layer_1 = data[:, l_0:l_01].reshape(-1, shape_layer_1[0], shape_layer_1[1])
+    layer_2 = data[:, l_01:].reshape(-1, shape_layer_2[0], shape_layer_2[1])
+
+    means = []
+    
+    for layer_index, layer in enumerate([layer_0, layer_1, layer_2]):
+    
+        bin_centers = get_bin_centers(dir, data, layer_index, numpy)
+        
+        # In order to handle numpy arrays and pytorch tensors
+        if numpy:
+            energies = np.sum(layer, axis=(1, 2))
+        else:
+            energies = torch.sum(layer, axis=(1, 2)).to(data.device)
+
+        if dir == 'phi':
+            value = bin_centers.reshape(-1, 1)
+        elif dir == 'eta':
+            value = bin_centers.reshape(1, -1)
+
+        if numpy:
+            mean = np.sum(layer * value, axis=(1, 2))/(energies+1e-10)
+        else:
+            mean = torch.sum(layer * value, axis=(1, 2))/(energies+1e-10)
+        # std = np.sqrt(np.sum(layer * (value - mean[:,None, None])**2, axis=(1, 2))/(energies+1e-10))
+        
+        means.append(mean)
+
+    return means
+
 def get_further_conditions(funcs, data, params):
     
     conds = []
@@ -179,7 +244,6 @@ def get_further_conditions(funcs, data, params):
         conds.append(func(deepcopy(data), **(params[i])))
         
     return np.array(conds).T
-        
 
 def normalize_layers(data_flattened, conditions):
     

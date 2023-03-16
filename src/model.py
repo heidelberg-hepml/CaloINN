@@ -852,8 +852,20 @@ class CVAE(nn.Module):
         if zero_data:
             MSE_data = torch.tensor(0).to(MSE_logit.device)
             
+        # Calc high-level centroid loss:
+        high_level_loss = 0
+        x_recon = data_util.unnormalize_layers(x_recon_0_1, c, clone=False)
         
-        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
+        for dir in ["phi", "eta"]:
+            means_true = data_util.calc_centroids(x, dir=dir)
+            means_fake = data_util.calc_centroids(x_recon, dir=dir)
+            
+            for mean_true, mean_fake in zip(means_true, means_fake):
+                high_level_loss +=  nn.functional.mse_loss(mean_true, mean_fake, reduction="mean")
+                
+        high_level_loss *= 200
+        
+        return MSE_logit + MSE_data + KLD + high_level_loss, MSE_logit, MSE_data, high_level_loss
     
     
 class CAE(nn.Module):
