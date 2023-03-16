@@ -1,5 +1,5 @@
 # Documenter information
-run_name: default
+run_name: Default
 # block_name: Try_to_improve_recons
 
 # Data
@@ -27,7 +27,7 @@ VAE_gamma: 1.e+4
 
 # Preprocessing
 alpha: 1.e-6
-VAE_width_noise: 1.e-5
+VAE_width_noise: 1.e-6
 
 # Classifier Test
 do_classifier_test: True
