@@ -4,13 +4,17 @@ run_name: Default
 
 # Data
 dtype: float32
-particle_type: piplus
+particle_type: pion
+val_frac: 0.2
+eps: 1.e-10
 
 # VAE Training
 VAE_lr: 5.e-4
 VAE_batch_size: 256
 VAE_n_epochs: 500
+# VAE_n_epochs: 2
 VAE_save_interval: 100
+# VAE_save_interval: 1
 VAE_keep_models: 1001
 VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
 VAE_MAE_data: False # Use MAE instead of MSE for data loss
@@ -20,6 +24,7 @@ VAE_zero_data: False # Set the data loss to 0
 
 # VAE Architecture
 VAE_hidden_sizes: [4500, 1000, 150]
+# VAE_hidden_sizes: [300, 100, 100]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
 VAE_gamma: 1.e+4
@@ -27,7 +32,7 @@ VAE_gamma: 1.e+4
 
 # Preprocessing
 alpha: 1.e-6
-VAE_width_noise: 1.e-6
+VAE_width_noise: 1.e-7
 
 # Classifier Test
 do_classifier_test: True

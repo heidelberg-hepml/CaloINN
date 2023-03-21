@@ -505,7 +505,7 @@ class LogitTransformationVAE:
   
 # Create noise layer
 class noise_layer(nn.Module):
-    def __init__(self, noise_width, rev, logit_space=False, data_space=False, logit_function=None):
+    def __init__(self, noise_width, layer_boundaries, rev, logit_space=False, data_space=False, logit_function=None):
         super().__init__()
         
         self.noise_width = noise_width
@@ -521,16 +521,14 @@ class noise_layer(nn.Module):
         assert (not logit_space) or (not data_space), "Logit space and data space are mutually exclusive!"
         self.data_space = data_space
         
+        self.layer_boundaries = layer_boundaries
+        self.num_detector_layers = len(self.layer_boundaries) - 1
+        
     def forward(self, input, c):
         
         # Prevent inplace modifications on original data
         input = torch.clone(input)
         c = torch.clone(c)
-        
-        # get the layer shapes
-        size_layer_0, size_layer_1, size_layer_2 = data_util.get_layer_sizes(data_flattened=input)
-        l_0 = size_layer_0
-        l_01 = size_layer_0 + size_layer_1
         
         if not self.rev:
             # Everything else is not implemented at the moment
@@ -542,26 +540,22 @@ class noise_layer(nn.Module):
             noise = noise.to(input.device)
             input = input + noise.reshape(input.shape)
             
-            # rescale the energy dimensions by the added noise
-            e_part = c[:, [0]]
-            u1     = c[:, [1]]
-            u2     = c[:, [2]]
-            u3     = c[:, [3]]
+            # rescale the energy dimensions and layer energies by the added noise
+            incident_energy = c[..., [0]]
+            extra_dims = c[..., 1:self.num_detector_layers+1] # will be overwritten
+            layer_energies = c[..., -self.num_detector_layers:]
             
-            e0     = c[:, [-3]]
-            e1     = c[:, [-2]]
-            e2     = c[:, [-1]]
+            # Update the true layer energies
+            for layer_index, (layer_start, layer_end) in enumerate(zip(self.layer_boundaries[:-1], self.layer_boundaries[1:])):
+                layer_energies[..., [layer_index]] = layer_energies[..., [layer_index]] + noise[..., layer_start:layer_end].sum(axis=1, keepdims=True)
             
-            e_part = e_part + noise.sum(axis=1, keepdims=True)
-            e0 = e0 + noise[:, :l_0].sum(axis=1, keepdims=True)
-            e1 = e1 + noise[:, l_0:l_01].sum(axis=1, keepdims=True)
-            e2 = e2 + noise[:, l_01:].sum(axis=1, keepdims=True)
-            
-            u1 = (e0+e1+e2)/e_part
-            u2 = e0/(e0+e1+e2)
-            u3 = e1/(e1+e2+1e-7)
-            
-            c = torch.cat((e_part, u1, u2, u3, c[:, 4:-3], e0, e1, e2), axis=1)
+            # Recompute extra dims (Actually not use anywhere!)
+            # Dont need eps here. Regularized by the noise!
+            extra_dims[..., [0]] = layer_energies.sum(axis=1, keepdims=True) / incident_energy
+            for layer_index in range(self.num_detector_layers-1):
+                extra_dims[..., [layer_index+1]] = layer_energies[..., [layer_index]] / (layer_energies[..., layer_index:]).sum(axis=1, keepdims=True)
+
+            c = torch.cat((incident_energy, extra_dims, c[:, self.num_detector_layers+1:-self.num_detector_layers], layer_energies), axis=1)
             
             return input, c
         
@@ -571,26 +565,28 @@ class noise_layer(nn.Module):
             assert self.logit_space == True         
 
             # Get the energy dimensions
-            e_part = c[:, [0]]
-            u1     = c[:, [1]]
-            u2     = c[:, [2]]
-            u3     = c[:, [3]]
-            
-            e0     = c[:, [-3]]
-            e1     = c[:, [-2]]
-            e2     = c[:, [-1]]
+            incident_energy = c[..., [0]]
+            extra_dims = c[..., 1:self.num_detector_layers+1]
+            layer_energies = c[..., -self.num_detector_layers:]
             
             # Approximate the noise here with its expectation value (/2) and do not resample!
             noise_width = torch.ones_like(input)*self.noise_width
             noise_width = noise_width.to(input.device)
 
             # Add the noise approximation to the normalization factors
-            e0 = e0 + noise_width[..., :l_0].sum(axis=1, keepdims=True) / 2
-            e1 = e1 + noise_width[..., l_0:l_01].sum(axis=1, keepdims=True) / 2
-            e2 = e2 + noise_width[..., l_01:].sum(axis=1, keepdims=True) / 2
+            for layer_index, (layer_start, layer_end) in enumerate(zip(self.layer_boundaries[:-1], self.layer_boundaries[1:])):
+                layer_energies[..., [layer_index]] = layer_energies[..., [layer_index]] + (noise_width[..., layer_start:layer_end].sum(axis=1, keepdims=True)/2)
+                
             
             # Apply the (approximate) layer transformation to the noise threshold
-            normalization = torch.cat((e0.repeat(1, size_layer_0), e1.repeat(1, size_layer_1), e2.repeat(1, size_layer_2)), axis=1).to(input.device)
+            all_layer_energies = []
+            layer_sizes = self.layer_boundaries[1:] - self.layer_boundaries[:-1]
+            for layer_index in range(self.num_detector_layers):
+                all_layer_energies = all_layer_energies + [
+                    layer_energies[..., [layer_index]].repeat(1, layer_sizes[layer_index])
+                    ]     
+                
+            normalization = torch.cat(all_layer_energies, axis=1).to(input.device)
             threshold = self.noise_width / normalization
             assert threshold.shape == input.shape
 
@@ -601,7 +597,8 @@ class noise_layer(nn.Module):
         
     
 class CVAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, alpha=1.e-6, beta=1.e-5, gamma=1.e3, noise_width=None):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, alpha=1.e-6, beta=1.e-5, gamma=1.e3, noise_width=None):
+        # TODO: eps is not passed in the normalize and unnormalize funcs. -> Not using the params value
         super(CVAE, self).__init__()
         
         # Input and cond sanity check
@@ -614,7 +611,11 @@ class CVAE(nn.Module):
 
         # Add a noise adding layer
         if noise_width is not None:
-            self.noise_layer_in = noise_layer(noise_width, rev=False, data_space=True, logit_space=False)
+            self.noise_layer_in = noise_layer(noise_width, layer_boundaries_detector, rev=False, data_space=True, logit_space=False)
+        
+        # Save the layer boundaries and the number of layers (both for the dataset). Needed for the layer normalization
+        self.layer_boundaries = layer_boundaries_detector
+        self.num_detector_layers = len(self.layer_boundaries) - 1
         
         # Create a logit preprocessing
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
@@ -624,7 +625,7 @@ class CVAE(nn.Module):
         
         # Add a noise removal layer
         if noise_width is not None:
-            self.noise_layer_out = noise_layer(noise_width, rev=True, data_space=False, logit_space=True, logit_function=self.logit_trafo_in)
+            self.noise_layer_out = noise_layer(noise_width, layer_boundaries_detector, rev=True, data_space=False, logit_space=True, logit_function=self.logit_trafo_in)
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
@@ -649,7 +650,7 @@ class CVAE(nn.Module):
         self.decoder = nn.Sequential()
         
         # Add the layers to the encoder
-        in_size = input_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
+        in_size = input_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
@@ -657,7 +658,7 @@ class CVAE(nn.Module):
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
         # add the layers to the decoder
-        in_size = latent_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
+        in_size = latent_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.decoder.add_module(f"relu{i}", nn.ReLU())
@@ -681,8 +682,10 @@ class CVAE(nn.Module):
         
         self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
         
-        # The decoder does not predict the conditions (-(len(c)-3) instead of -len(c) since we did not pass the last 3 true layer energies to the network)
-        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-(cond.shape[1]-3), :-(cond.shape[1]-3)], b=self.norm_b_x[:-(cond.shape[1]-3)])
+        # The decoder does not predict the conditions (-(len(c)-num_layers) instead of -len(c) since we did not pass the last true layer energies to the network)
+        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-(cond.shape[1]-self.num_detector_layers), 
+                                                                                       :-(cond.shape[1]-self.num_detector_layers)], 
+                                                  b=self.norm_b_x[:-(cond.shape[1]-self.num_detector_layers)])
         
         # TODO: Add
         # Set the normalization layer operating on the latent space (before the actual decoder)
@@ -703,8 +706,8 @@ class CVAE(nn.Module):
             c_noise = c
         
         # Prepares the data by normalizing it and appending the conditions
-        x_noise = data_util.normalize_layers(x_noise, c_noise)
-        x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-3]), axis=1) # Normalize c and dont append the true layer energies!
+        x_noise = data_util.normalize_layers(x_noise, c_noise, self.layer_boundaries)
+        x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-self.num_detector_layers]), axis=1) # Normalize c and dont append the true layer energies!
         
         # Go to logit space
         x_logit_noise = self.logit_trafo_in(x_noise)
@@ -749,7 +752,7 @@ class CVAE(nn.Module):
         Output: Reconstructed image in logit-space """
         
         # Normalize c, clip it (needed for stability in generation) and dont append the true layer energies!
-        c_clipped = torch.clamp((c / self.max_cond)[:, :-3], min=0, max=1)
+        c_clipped = torch.clamp((c / self.max_cond)[:, :-self.num_detector_layers], min=0, max=1)
         
         # Transform cond into logit space and append to latent results
         c_logit = self.logit_trafo_in(c_clipped)
@@ -780,7 +783,7 @@ class CVAE(nn.Module):
         x_recon = self.logit_trafo_out(x_recon_logit)
         
         # Revert to original normalization
-        x_recon = data_util.unnormalize_layers(x_recon, c)
+        x_recon = data_util.unnormalize_layers(x_recon, c, self.layer_boundaries)
         
         return x_recon
         
@@ -811,12 +814,10 @@ class CVAE(nn.Module):
         
         
         # For data part
-        x_0_1 = data_util.normalize_layers(x, c)
+        x_0_1 = data_util.normalize_layers(x, c, self.layer_boundaries)
         
         # For logit loss part
         x_logit = self.logit_trafo_in(x_0_1)
-        
-        
         
         # Encode
         mu, logvar = self.encode(x=x, c=c)
@@ -829,8 +830,10 @@ class CVAE(nn.Module):
         
         # Leave the logit space
         x_recon_0_1 = self.logit_trafo_out(x_recon_logit)
-               
-        # print(x_0_1, x_recon_0_1, x_logit, x_recon_logit)
+        
+        # print()
+        # print("recos & originals")
+        # print(x_0_1, x_logit, latent, x_recon_logit, x_recon_0_1)
         
         # Compute the losses
         
@@ -852,260 +855,27 @@ class CVAE(nn.Module):
         if zero_data:
             MSE_data = torch.tensor(0).to(MSE_logit.device)
             
-        # Calc high-level centroid loss:
-        high_level_loss = 0
-        x_recon = data_util.unnormalize_layers(x_recon_0_1, c, clone=False)
-        
-        for dir in ["phi", "eta"]:
-            means_true = data_util.calc_centroids(x, dir=dir)
-            means_fake = data_util.calc_centroids(x_recon, dir=dir)
-            
-            for mean_true, mean_fake in zip(means_true, means_fake):
-                high_level_loss +=  nn.functional.mse_loss(mean_true, mean_fake, reduction="mean")
-                
-        high_level_loss *= 200
-        
-        return MSE_logit + MSE_data + KLD + high_level_loss, MSE_logit, MSE_data, high_level_loss
-    
-    
-class CAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, alpha=1.e-6, gamma=1.e3, noise_width=None):
-        super(CAE, self).__init__()
-        
-        # Input and cond sanity check
-        assert len(input.shape) == 2
-        assert len(cond.shape) == 2
-        assert cond.shape[0] == input.shape[0]
-        
-        input_dim = input.shape[1]
-        cond_dim = cond.shape[1]
-
-        # Add a noise adding layer
-        if noise_width is not None:
-            self.noise_layer_in = noise_layer(noise_width, rev=False, data_space=True, logit_space=False)
-        
-        # Create a logit preprocessing
-        self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
-        
-        # Create encoder and decoder model as DNNs
-        self.__set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes)
-        
-        # Add a noise removal layer
-        if noise_width is not None:
-            self.noise_layer_out = noise_layer(noise_width, rev=True, data_space=False, logit_space=True, logit_function=self.logit_trafo_in)
-        
-        # Add sigmoid layer
-        self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
-        
-        # the hyperparamters for the reco_loss
-        self.gamma = gamma
-        
-        # Save whether noise layers were used
-        self.noise_width = noise_width
-        
-        # Save the latent dimension
-        self.latent_dim = latent_dim
-               
-        # get normalization for normalization layer and to ensure that the incident energy parameter is
-        # between 0 and 1:
-        self.__set_normalizations(input, cond)
-
-    def __set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes):
-        # Create decoder and encoder
-        self.encoder = nn.Sequential()
-        self.decoder = nn.Sequential()
-        
-        # Add the layers to the encoder
-        in_size = input_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
-        for i, hidden_size in enumerate(hidden_sizes):
-            self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
-            self.encoder.add_module(f"relu{i}", nn.ReLU())
-            in_size = hidden_size
-        self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim))
-    
-        # add the layers to the decoder
-        in_size = latent_dim + cond_dim-3 # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
-        for i, hidden_size in enumerate(reversed(hidden_sizes)):
-            self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
-            self.decoder.add_module(f"relu{i}", nn.ReLU())
-            in_size = hidden_size
-        self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
-    
-    def __set_normalizations(self, data, cond):
-        
-        # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
-        # The other conditions are allready between 0 and 1 and will not be modified
-        # TODO: Problems if test set is more than 5% off
-        max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]*1.05
-        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)
-        
-        # Set the normalization layer operating on the x space (before the actual encoder)
-        data = self.__preprocess_encoding(data, cond, without_norm=True)
-        mean = torch.mean(data, dim=0)
-        std = torch.std(data, dim=0)      
-        self.norm_m_x = torch.diag(1 / std)
-        self.norm_b_x = - mean/std
-        
-        self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
-        
-        # The decoder does not predict the conditions (-(len(c)-3) instead of -len(c) since we did not pass the last 3 true layer energies to the network)
-        self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-(cond.shape[1]-3), :-(cond.shape[1]-3)], b=self.norm_b_x[:-(cond.shape[1]-3)])
-        
-        # TODO: Add
-        # Set the normalization layer operating on the latent space (before the actual decoder)
-        # There one has to normalize the conditions that are appended
-        
-        return
-        
-    def __preprocess_encoding(self, x, c, without_norm=False):
-        """First part of the encoder function. Seperated such that it can be used by the
-        initialization of the normalization to zero mean and unit variance"""
-        
-        # Adds noise to the data and updates c s.t. the layer normalization will work.
-        # This c_noise values will only used for the layer normalization, not for the training!
-        if self.noise_width is not None:
-            x_noise, c_noise = self.noise_layer_in(x, c)
-        else:
-            x_noise = x
-            c_noise = c
-        
-        # Prepares the data by normalizing it and appending the conditions
-        x_noise = data_util.normalize_layers(x_noise, c_noise)
-        x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-3]), axis=1) # Normalize c and dont append the true layer energies!
-        
-        # Go to logit space
-        x_logit_noise = self.logit_trafo_in(x_noise)
-        
-        if without_norm:
-            return x_logit_noise
-        
-        else:
-            return self.norm_x_in( (x_logit_noise, ), rev=False)[0][0]
-            
-    def encode(self, x, c):
-        """Takes a point in the dataspace and returns a point in the latent space before sampling.
-        Does apply the logit preprocessing and the layer normalization
-        noise=True decides, if the noise layer should be used (if it exists)
-    
-        Output: mu, logvar"""
-        
-        # Input sanity check
-        assert len(x.shape) == 2
-        assert len(c.shape) == 2
-        assert c.shape[0] == x.shape[0]
-        
-        # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
-        x = self.__preprocess_encoding(x, c)
-        
-        # Call the encoder
-        return self.encoder(x)
-
-    def __decode_to_logit(self, latent, c):
-        """Takes a point in the latent space after sampling and returns a point in the logit space.
-        Output: Reconstructed image in logit-space """
-        
-        # Normalize c, clip it (needed for stability in generation) and dont append the true layer energies!
-        c_clipped = torch.clamp((c / self.max_cond)[:, :-3], min=0, max=1)
-        
-        # Transform cond into logit space and append to latent results
-        c_logit = self.logit_trafo_in(c_clipped)
-        # TODO: Might be useful to call a normalization layer here, too
-        latent = torch.cat((latent, c_logit), axis=1)
-        
-        # decode
-        x_recon_logit_noise = self.decoder(latent)
-        
-        # Undo normalization step (zero mean, unit variance)
-        x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
-        
-        # Remove noise by thresholding, if needed
-        if self.noise_width is not None:
-            x_recon_logit = self.noise_layer_out(x_recon_logit_noise, c)
-        else:
-            x_recon_logit = x_recon_logit_noise
-            
-        return x_recon_logit
-            
-    def decode(self, latent, c):
-        """Takes a point in the latent space after sampling and returns a point in the dataspace.
-        Output: Reconstructed image in data-space """
-        
-        x_recon_logit = self.__decode_to_logit(latent, c)
-            
-        # Leave the logit space
-        x_recon = self.logit_trafo_out(x_recon_logit)
-        
-        # Revert to original normalization
-        x_recon = data_util.unnormalize_layers(x_recon, c)
-        
-        return x_recon
-        
-    def forward(self, x, c):
-        """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
-        the model will apply noise to the data and remove it in the logit-space by thresholding.
-
-        Args:
-            x (torch.tensor): Input data of dimension (#points, features). The features must contain the energy dimensions as last feature
-            c (torch.tensor): Input data of dimension (#points, 1)
-            noise (bool, optional): Whether noise should be added
-
-        Returns:
-            torch.tensor: reconstructed data
-        """
-
-        # Encode
-        latent = self.encode(x=x, c=c)
-        
-        # Decode
-        return self.decode(latent=latent, c=c)
-    
-    def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
-        """Computes the reconstruction loss in the logit space and in the data space"""
-        
-        
-        # For data part
-        x_0_1 = data_util.normalize_layers(x, c)
-        
-        # For logit loss part
-        x_logit = self.logit_trafo_in(x_0_1)
-        
-        
-        
-        # Encode
-        latent = self.encode(x=x, c=c)
-                
-        # Decode into logit space
-        x_recon_logit = self.__decode_to_logit(latent=latent, c=c)
-        
-        # Leave the logit space
-        x_recon = self.logit_trafo_out(x_recon_logit)
-        
-        # print(x_0_1, x_recon, x_logit, x_recon_logit)
-        
-        # Compute the losses
-        
-        if not MAE_logit:
-            MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
-        else:
-            MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit, x_logit, reduction="mean")
-            
-        if not MAE_data:
-            MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon, x_0_1, reduction="mean")
-        else:
-            MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon, x_0_1, reduction="mean")
-        
-        # print(MSE_logit, MSE_data)
-
-        if zero_logit:
-            MSE_logit = torch.tensor(0).to(MSE_logit.device)
-            
-        if zero_data:
-            MSE_data = torch.tensor(0).to(MSE_logit.device)
+        # print()
+        # print("losses")
+        # print(MSE_logit, MSE_data, KLD)
             
         
-        return MSE_logit + MSE_data, MSE_logit, MSE_data, torch.tensor(0).to(MSE_logit.device)
+        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
     
 
+
+# # Calc high-level centroid loss:
+# high_level_loss = 0
+# x_recon = data_util.unnormalize_layers(x_recon_0_1, c, clone=False)
+
+# for dir in ["phi", "eta"]:
+#     means_true = data_util.calc_centroids(x, dir=dir)
+#     means_fake = data_util.calc_centroids(x_recon, dir=dir)
+    
+#     for mean_true, mean_fake in zip(means_true, means_fake):
+#         high_level_loss +=  nn.functional.mse_loss(mean_true, mean_fake, reduction="mean")
+        
+# high_level_loss *= 200
 
 # Sparsity loss
 

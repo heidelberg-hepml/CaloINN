@@ -27,20 +27,11 @@ def main():
     device = 'cuda:0' if use_cuda else 'cpu'
 
     # set default parameters for the file locations using the particle type parameter
-    if "data_path_train" not in params:
-        particle = params.get("particle_type", "piplus")
-        data_path_train = os.path.join("..", "..", "..", "Datasets", particle , "train_" + particle + ".hdf5")
-        params["data_path_train"] = data_path_train
-        
-    if "data_path_test" not in params:
-        particle = params.get("particle_type", "piplus")
-        data_path_test = os.path.join("..", "..", "..", "Datasets", particle , "test_" + particle + ".hdf5")
-        params["data_path_test"] = data_path_test
+    if "data_path" not in params:
+        particle_type = params.get("particle_type", "pion")
+        data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
+        params["data_path"] = data_path
 
-    if "classification_set" not in params:
-        particle = params.get("particle_type", "piplus")
-        classification_set = os.path.join("..", "..", "..", "Datasets", particle , "cls_" + particle + ".hdf5")
-        params["classification_set"] = classification_set
 
     # Initialize the documenter class
     # Sends all outputs to a log file and manages the file system of the output folder
