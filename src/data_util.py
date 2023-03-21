@@ -4,318 +4,282 @@ import torch
 from copy import deepcopy
 from myDataLoader import MyDataLoader
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
-
-from calc_obs import calc_sparsity
+from XMLHandler import XMLHandler
+import HighLevelFeatures as HLF
+import pickle
 
 import os
 import warnings
 
-def load_data(data_file):
-    """load the requested h5py file and return it as dict"""
-    full_file = h5py.File(data_file, 'r')
-    layer_0 = full_file['layer_0'][:] / 1e3
-    layer_1 = full_file['layer_1'][:] / 1e3
-    layer_2 = full_file['layer_2'][:] / 1e3
-    energy = full_file['energy'][:] / 1e0
-    # TODO: Use correct normalization (here and in save data!)
-    overflow = full_file['overflow'][:] / 1e0
-    full_file.close()
 
-    data = {
-        'layer_0': layer_0,
-        'layer_1': layer_1,
-        'layer_2': layer_2,
-        'energy': energy,
-        'overflow': overflow
-    }
-
-    return data
-
-def save_data(data, data_file):
-    """saves the given dict as h5py file. Has to satisfy the syntax of the original dataset"""
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-    overflow = data['overflow']
-
-    save_file = h5py.File(data_file, 'w')
-    save_file.create_dataset('layer_0', data=layer_0*1e3)
-    save_file.create_dataset('layer_1', data=layer_1*1e3)
-    save_file.create_dataset('layer_2', data=layer_2*1e3)
-    save_file.create_dataset('energy', data=energy*1e0)
-    save_file.create_dataset('overflow', data=overflow*1e0)
-    save_file.close()
-
-def get_layer_sizes(data_flattened):
-
-    if data_flattened.shape[1] >= 504:
-        return 288, 144, 72
-    elif data_flattened.shape[1] >= 288:
-        return 72, 144, 72
-    elif data_flattened.shape[1] >= 90:
-        return 18, 36, 36
-    elif data_flattened.shape[1] >= 45:
-        return 18, 18, 9
-    elif data_flattened.shape[1] >= 12:
-        return 3, 6, 3
+def load_data(filename, particle_type):
+    """Loads the data for a dataset 1 from the calo challenge"""
     
-def get_layer_shapes(data_flattened):
+    # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
+    xml_handler = XMLHandler(particle_name=particle_type, 
+    filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml')
     
-    if data_flattened.shape[1] >= 504:
-        return [3, 96], [12, 12], [12, 6]
-    elif data_flattened.shape[1] >= 288:
-        return [3, 24], [12, 12], [12, 6]
-    elif data_flattened.shape[1] >= 90:
-        return [3, 6], [6, 6], [6, 6]
-    elif data_flattened.shape[1] >= 45:
-        return [3, 6], [6, 3], [3, 3]
-    elif data_flattened.shape[1] >= 12:
-        return [1, 3], [6, 1], [3, 1]
+    layer_boundaries = np.unique(xml_handler.GetBinEdges())
 
-def preprocess(data):
-    """Preprocessing of the given data dict. Returns two numpy arrays containing the features and the conditions."""
+    # Prepare a container for the loaded data
+    data = {}
+
+    # Load and store the data. Make sure to slice according to the layers.
+    # Also normalize to 100 GeV (The scale of the original data is MeV)
+    data_file = h5py.File(filename, 'r')
+    data["energy"] = data_file["incident_energies"][:] / 1.e5
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+    data_file.close()
+    
+    return data, layer_boundaries
+
+def get_energy_and_sorted_layers(data):
+    """returns the energy and the sorted layers from the data dict"""
+    
+    # Get the incident energies
+    energy = data["energy"]
+
+    # Get the number of layers layers from the keys of the data array
+    number_of_layers = len(data)-1
+    
+    # Create a container for the layers
+    layers = []
+
+    # Append the layers such that they are sorted.
+    for layer_index in range(number_of_layers):
+        layer = f"layer_{layer_index}"
         
-    # Extract the arrays from the dict
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-    
-    # flatten the arrays
-    layer0 = layer_0.reshape(layer_0.shape[0], -1)
-    layer1 = layer_1.reshape(layer_1.shape[0], -1)
-    layer2 = layer_2.reshape(layer_2.shape[0], -1)
+        layers.append(data[layer])
+        
+            
+    return energy, layers
 
+def save_data(data, filename):
+    """Saves the data with the same format as dataset 1 from the calo challenge"""
     
-    # If we use a single layer, make sure that the total energy is larger than the threshold
-    x = np.concatenate((layer0, layer1, layer2), 1)
+    # extract the needed data
+    incident_energies, layers = get_energy_and_sorted_layers(data)
+    
+    # renormalize the energies
+    incident_energies *= 1.e5
+    
+    # concatenate the layers and renormalize them, too           
+    showers = np.concatenate(layers, axis=1) * 1.e5
+            
+    save_file = h5py.File(filename, 'w')
+    save_file.create_dataset('incident_energies', data=incident_energies)
+    save_file.create_dataset('showers', data=showers)
+    save_file.close()            
+  
+def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
+    """Appends the extra dimensions and the layer energies to the conditions
+    The layer energies will always be the last #layers entries, the extra dims will
+    be the #layers entries directly after the first entry - the incident energy.
+    Inbetween additional features might be appended as further conditions"""
+    
+    x = np.copy(x)
+    c = np.copy(c)
 
-    # Mask to filter the events (e.g. ensure energy conservation)
+    layer_energies = []
+
+    for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
+        
+        # Compute total energy of current layer
+        layer_energy = np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True)
+        
+        # Normalize current layer
+        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energy + eps)
+        
+        # Store its energy for later
+        layer_energies.append(layer_energy)
+        
+    layer_energies_np = np.array(layer_energies).T[0]
+        
+    # Compute the generalized extra dimensions
+    extra_dims = [np.sum(layer_energies_np, axis=1, keepdims=True) / c]
+
+    for layer_index in range(len(layer_boundaries)-2):
+        extra_dim = layer_energies_np[..., [layer_index]] / (np.sum(layer_energies_np[..., layer_index:], axis=1, keepdims=True) + eps)
+        extra_dims.append(extra_dim)
+        
+    # Collect all the conditions
+    all_conditions = [c] + extra_dims + layer_energies
+    c = np.concatenate(all_conditions, axis=1)
+    
+    return c
+
+def preprocess(data, layer_boundaries, eps=1.e-10):
+    """Transforms the dict 'data' into the ndarray 'x'. Furthermore, the events
+    are masked and the extra dims are appended to the incident energies"""
+    energy, layers = get_energy_and_sorted_layers(data)
+
+    # Concatenate the layers
+    x = np.concatenate(layers, axis=1)
+
     binary_mask = np.full(len(energy), True)
+
+    # TODO: We loose about 5% of our events this way. Might reconsider the masking here...
     # Ensure energy conservation
     binary_mask &= np.sum(x, axis=1) < energy[:,0]
+    # Remove all no-interaction events (only 0.7%)
+    binary_mask &= np.sum(x, axis=1) > 0
 
-    # Apply these two conditions
     x = x[binary_mask]
     c = energy[binary_mask]
 
-    # adds the "energy dims", variables that represent the layer energies to the conditions.
-    c = get_energy_dims(data=x, e_part=c)
+    c = get_energy_dims(x, c, layer_boundaries, eps)
     
-    # Also add the sparsity as a condtion
-    funcs = [calc_sparsity, calc_sparsity, calc_sparsity]
-    params = [{'layer': 0}, {'layer': 1}, {'layer': 2}]
-    
-    more_conditions = get_further_conditions(funcs, data, params)[binary_mask]    
-    
-    # Also add the centroids as condition (here x is already masked!)
-    more_conditions = (more_conditions.T).tolist()
-    for dir in ["phi", "eta"]:
-        means = calc_centroids(data=x, dir=dir, numpy=True)
-        for mean in means:
-            more_conditions.append(mean)
-    more_conditions = np.array(more_conditions).T
-    
-    # Append the new conditions between the energy conditions and the true, unnormalized layer energies
-    c = np.concatenate((c[:, :4], more_conditions, c[:, 4:]), axis=1)
-
     return x, c
 
-def postprocess(data_flattened, conditions, threshold=1e-5, overflow=None):
-    """Reverses the precprocessing and returns an dict that e.g. could be used for save_data."""
+def postprocess(x, c, layer_boundaries, threshold=1e-10):
+    """Reverses the effect of the preprocess funtion"""
     
     # Input sanity checks
-    assert len(data_flattened) == len(conditions)
-    assert len(data_flattened.shape) == 2
-    assert len(conditions.shape) == 2
+    assert len(x) == len(c)
+    assert len(x.shape) == 2
+    assert len(x.shape) == 2
     
     # Makes sure, that the original set is not modified inplace
-    data_flattened = torch.clone(data_flattened)
-    conditions = torch.clone(conditions)
+    x = torch.clone(x)
+    c = torch.clone(c)
 
-    # Set all energies samller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
+    # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
     # the logit preprocessing
-    data_flattened[data_flattened < threshold] = 0.
+    # TODO: Pipe to params
+    x[x < threshold] = 0.
+    
+    # Create a new dict 'data' for the output
+    data = {}
+    data["energy"] = c[..., [0]].cpu().numpy()
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        data[f"layer_{layer_index}"] = x[..., layer_start:layer_end].cpu().numpy()
 
-    # Reshape the layers to their original shape
-    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data_flattened)
-    shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=data_flattened)
-    l_0 = size_layer_0
-    l_01 = size_layer_0 + size_layer_1
-    
-    layer_0 = data_flattened[:, :l_0].reshape(-1, shape_layer_0[0], shape_layer_0[1]).cpu().numpy()
-    layer_1 = data_flattened[:, l_0:l_01].reshape(-1, shape_layer_1[0], shape_layer_1[1]).cpu().numpy()
-    layer_2 = data_flattened[:, l_01:].reshape(-1, shape_layer_2[0], shape_layer_2[1]).cpu().numpy()
-    energy = conditions[:, [0]].cpu().numpy()
-    
-    # Adds an empty overflow to the dataset, if overflow is not specified
-    if overflow is None:
-        overflow = np.zeros((len(data_flattened), 3))
-    else:
-        overflow = overflow.cpu().numpy()
+    return data
 
-    return {
-        'layer_0': layer_0,
-        'layer_1': layer_1,
-        'layer_2': layer_2,
-        'energy': energy,
-        'overflow': overflow
-    }
-
-def get_energy_dims(data, e_part):
-    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data)
-    l_0 = size_layer_0
-    l_01 = size_layer_0 + size_layer_1
-    
-    e0 = np.sum(data[..., :l_0], axis=1, keepdims=True)
-    e1 = np.sum(data[..., l_0:l_01], axis=1, keepdims=True)
-    e2 = np.sum(data[..., l_01:], axis=1, keepdims=True)
-    # print(e0.min(), e1.min(), e2.min())
-    u1 = (e0+e1+e2)/e_part
-    u2 = e0/(e0+e1+e2)
-    u3 = e1/(e1+e2+1e-7)
-    
-    # Save the actual layer energies for numerical stability!
-    return np.concatenate((e_part, u1, u2, u3, e0, e1, e2), axis=1)
-
-def calc_centroids(data, dir, numpy=False):
-    
-    def get_bin_centers(dir, data, layer, numpy):
-        
-        shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=data)
-        
-        if dir == 'phi':
-            cells = (shape_layer_0[0], shape_layer_1[0], shape_layer_2[0])[layer]
-        elif dir == 'eta':
-            cells = (shape_layer_0[1], shape_layer_1[1], shape_layer_2[1])[layer]
-        else:
-            raise ValueError(f"dir={dir} not in ['eta', 'phi']")
-        bins = np.linspace(0, 1, cells + 1)
-        
-        if not numpy:
-            bins = torch.from_numpy(bins).to(data.device)
-            
-        return (bins[1:] + bins[:-1]) / 2.
-    
-    # Reshape the data array to the original shape
-    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data)
-    shape_layer_0, shape_layer_1, shape_layer_2 = get_layer_shapes(data_flattened=data)
-    
-    l_0 = size_layer_0
-    l_01 = size_layer_0 + size_layer_1
-    
-    layer_0 = data[:, :l_0].reshape(-1, shape_layer_0[0], shape_layer_0[1])
-    layer_1 = data[:, l_0:l_01].reshape(-1, shape_layer_1[0], shape_layer_1[1])
-    layer_2 = data[:, l_01:].reshape(-1, shape_layer_2[0], shape_layer_2[1])
-
-    means = []
-    
-    for layer_index, layer in enumerate([layer_0, layer_1, layer_2]):
-    
-        bin_centers = get_bin_centers(dir, data, layer_index, numpy)
-        
-        # In order to handle numpy arrays and pytorch tensors
-        if numpy:
-            energies = np.sum(layer, axis=(1, 2))
-        else:
-            energies = torch.sum(layer, axis=(1, 2)).to(data.device)
-
-        if dir == 'phi':
-            value = bin_centers.reshape(-1, 1)
-        elif dir == 'eta':
-            value = bin_centers.reshape(1, -1)
-
-        if numpy:
-            mean = np.sum(layer * value, axis=(1, 2))/(energies+1e-10)
-        else:
-            mean = torch.sum(layer * value, axis=(1, 2))/(energies+1e-10)
-        # std = np.sqrt(np.sum(layer * (value - mean[:,None, None])**2, axis=(1, 2))/(energies+1e-10))
-        
-        means.append(mean)
-
-    return means
-
-def get_further_conditions(funcs, data, params):
-    
-    conds = []
-    
-    for i, func in enumerate(funcs):
-        conds.append(func(deepcopy(data), **(params[i])))
-        
-    return np.array(conds).T
-
-def normalize_layers(data_flattened, conditions):
+def normalize_layers(x, c, layer_boundaries, eps=1.e-10):
+    """Normalizes each layer by its energy"""
     
     # Prevent inplace operations
-    data_flattened = torch.clone(data_flattened)
-    conditions = torch.clone(conditions)
+    x = torch.clone(x)
+    c = torch.clone(c)
     
-    # Get the layer sizes
-    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data_flattened)
-    l_0 = size_layer_0
-    l_01 = size_layer_0 + size_layer_1    
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+    extra_dims = c[..., 1:number_of_layers+1]
+    layer_energies = c[..., -number_of_layers:]
     
     # Use the exact layer energies for numerical stability
-    e0 = conditions[:, [-3]]
-    e1 = conditions[:, [-2]]
-    e2 = conditions[:, [-1]]
-
-    # Normalize each layer by the layer energy
-    data_flattened[..., :l_0] = data_flattened[..., :l_0] / (e0 + 1.e-7)
-    data_flattened[..., l_0:l_01] = data_flattened[..., l_0:l_01] / (e1 + 1e-7)
-    data_flattened[..., l_01:] = data_flattened[..., l_01:] / (e2 + 1e-7)
-    
-    return data_flattened
-
-def unnormalize_layers(data_flattened, conditions, clone=True):
-    # Prevent inplace operations
-    
-    if clone:
-        output = torch.clone(data_flattened)
-        conditions = torch.clone(conditions)
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energies[..., [layer_index]] + eps)
         
-    output = torch.zeros_like(data_flattened).to(data_flattened.device)
-    # Get the layer sizes
-    size_layer_0, size_layer_1, size_layer_2 = get_layer_sizes(data_flattened=data_flattened)
-    l_0 = size_layer_0
-    l_01 = size_layer_0 + size_layer_1 
+    return x
+
+def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
+    """Reverses the effect of the normalize_layers function"""
     
-    # Use the exact layer energies for numerical stability
-    e0 = conditions[:, [-3]]
-    e1 = conditions[:, [-2]]
-    e2 = conditions[:, [-1]]
+    # Here we should not use clone, since it might result
+    # in a memory leak, if this functions is used on tensors
+    # with gradients. Instead, we use a different output tensor
+    # to prevent inplace operations.
+    output = torch.zeros_like(x).to(x.device)
     
-    # Normalize the layers to the correct energies
-    output[..., :l_0]    = data_flattened[..., :l_0] / (torch.sum(data_flattened[..., :l_0], axis=1, keepdims=True) + 1e-7) * e0
-    output[..., l_0:l_01] = data_flattened[..., l_0:l_01] / (torch.sum(data_flattened[..., l_0:l_01], axis=1, keepdims=True) + 1e-7) * e1
-    output[..., l_01:]    = data_flattened[..., l_01:] / (torch.sum(data_flattened[..., l_01:], axis=1, keepdims=True) + 1e-7) * e2
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+    extra_dims = c[..., 1:number_of_layers+1]
+    layer_energies = c[..., -number_of_layers:]
+    
+    # Normalize each layer and multiply it with its original energy
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]] / \
+                                             (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+
     return output
 
-def get_loaders(data_file_train, data_file_test, batch_size, device='cpu', drop_last=False, shuffle=True):
-    """Returns the dataloaders for the training of the CVAE"""
+def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-10):
+    "returns a hlf class needed for plotting"
+    x = x.cpu()
+    c = c.cpu()
     
-    # Create the train loader
-    data_train, cond_train = preprocess(load_data(data_file_train))
-
-    # Create the test loader
-    data_test, cond_test = preprocess(load_data(data_file_test))
-
-    # Convert the ndarrays into torch.tensors
-    data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-    cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
-
-    data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-    cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
+    hlf = HLF.HighLevelFeatures(particle_type,
+                                f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml")
     
-    # Just to check that the function is not returning an error
-    postprocess(data_train, cond_train)
-    postprocess(data_test, cond_test)
+    # Maybe we will do more than just thresholding in postprocess someday. So, we should call it here as well.
+    data = postprocess(x, c, layer_boundaries, threshold)
+    
+    # like in save function:
+    # extract the needed data
+    incident_energies, layers = get_energy_and_sorted_layers(data)
+    
+    # renormalize the energies
+    incident_energies *= 1.e5
+    
+    # concatenate the layers and renormalize them, too           
+    showers = np.concatenate(layers, axis=1) * 1.e5
+    
+    
+    hlf.CalculateFeatures(showers)
+    hlf.Einc = incident_energies
+    return hlf
+
+def save_hlf(hlf, filename):
+    """ Saves high-level features class to file """
+    print("Saving file with high-level features.")
+    #filename = os.path.splitext(os.path.basename(ref_name))[0] + '.pkl'
+    with open(filename, 'wb') as file:
+        pickle.dump(hlf, file)
+    print("Saving file with high-level features DONE.")
+
+def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=True):
+    """Creates the dataloaders used to train the VAE model."""
+    
+    # load the data from the hdf5 file
+    data, layer_boundaries = load_data(filename, particle_type)
+
+    # preprocess the data and append the extra dims
+    x, c = preprocess(data, layer_boundaries, eps)
+    
+    # Create an index array, used for splitting into train and val set
+    number_of_samples = len(x)
+    if shuffle:
+        full_index = np.random.choice(number_of_samples, number_of_samples, replace=False)
+    else:
+        full_index = np.arange(number_of_samples)
+
+    # Split the data
+    number_of_val_samples = int(number_of_samples * val_frac)
+    number_of_trn_samples = number_of_samples - number_of_val_samples
+
+    trn_index = full_index[:number_of_trn_samples]
+    val_index = full_index[number_of_trn_samples:]
+    
+    x_trn = x[trn_index]
+    c_trn = c[trn_index]
+    
+    x_val = x[val_index]
+    c_val = c[val_index]  
+    
+    # Cast into torch tensors
+    x_trn = torch.tensor(x_trn, device=device, dtype=torch.get_default_dtype())
+    c_trn = torch.tensor(c_trn, device=device, dtype=torch.get_default_dtype())
+    x_val = torch.tensor(x_val, device=device, dtype=torch.get_default_dtype())
+    c_val = torch.tensor(c_val, device=device, dtype=torch.get_default_dtype())
+
+    # Call the postprocess func to make sure that it runs through
+    _ = postprocess(x_trn, c_trn, layer_boundaries)
+    _ = postprocess(x_val, c_val, layer_boundaries)
     
     # Create the dataloaders
-    loader_train = MyDataLoader(data_train, cond_train, batch_size, drop_last, shuffle)
-    loader_test = MyDataLoader(data_test, cond_test, batch_size, drop_last, shuffle)
-    return loader_train, loader_test
+    trn_loader = MyDataLoader(x_trn, c_trn, batch_size, drop_last, shuffle)
+    val_loader = MyDataLoader(x_val, c_val, batch_size, drop_last, shuffle)
+    return trn_loader, val_loader, layer_boundaries
+
 
 # Dataset for the classifier test:
 class CaloDataset(Dataset):
