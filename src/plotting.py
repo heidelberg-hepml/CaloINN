@@ -215,6 +215,7 @@ def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot
         plot_ECPhis(hlf_fake, hlf_true, args)
         plot_ECWidthEtas(hlf_fake, hlf_true, args)
         plot_ECWidthPhis(hlf_fake, hlf_true, args)
+        # plot_cell_dist(hlf_fake, hlf_true, args)
         if args.dataset[0] == '1':
             plot_Etot_Einc_discrete(hlf_fake, hlf_true, args)
             
