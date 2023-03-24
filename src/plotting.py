@@ -10,7 +10,7 @@ from matplotlib import cm
 # from matplotlib.transforms import Bbox
 
 import data_util
-# from calc_obs import *
+from calc_obs import *
 import math
 import torch
 
@@ -68,6 +68,114 @@ def plot_average_table(data, save_file):
     plt.savefig(save_file)
     plt.close()
 
+def plot_hist(
+        file_name,
+        data,
+        reference,
+        p_ref='photon',
+        axis_label=None,
+        xscale='linear',
+        yscale='log',
+        vmin=None,
+        vmax=None,
+        n_bins=100,
+        ymin=None,
+        ymax=None,
+        ax=None,
+        panel_ax=None,
+        panel_scale="linear",
+        density=True):
+    data = data[np.isfinite(data)]
+    reference = reference[np.isfinite(reference)]
+
+    if vmin is None:
+        vmin = min(np.min(data), np.min(reference))
+    if vmax is None:
+        vmax = max(np.max(data), np.max(reference))
+    if xscale=='log':
+        if vmin==0:
+            vmin = min(np.min(data[data>1e-7]), np.min(reference[reference>1e-7]))
+        if isinstance(n_bins, int):
+            bins = np.logspace(np.log10(vmin), np.log10(vmax), n_bins)
+        else:
+            bins = n_bins
+    else:
+        if isinstance(n_bins, int):
+            bins = np.linspace(vmin, vmax, n_bins)
+        else:
+            bins = n_bins
+    
+    colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
+    if p_ref == 'electron':
+        color = colors[0]
+    elif p_ref == 'photon':
+        color = colors[1]
+    elif p_ref == 'pion':
+        color = colors[2]
+    else:
+        color = 'blue'
+        
+    create_fig = False
+    if ax is None:
+        create_fig = True
+        fig, ax = plt.subplots(1,1,figsize=(6,6))
+
+    ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
+        alpha=1, color=color, density=density, label='VAE')
+
+    ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
+            alpha=0.5, color=color, density=density, label='GEANT')
+
+    if panel_ax is not None:
+        assert len(bins_0) == len(bins_1)
+        assert (bins_0 - bins_1 < 1.e-7).all()
+        
+        # prevent divisions by 0! Set these bars to 0
+        mask = ns_1 == 0
+        ns_1[mask] = 1
+        panel_data = ns_0/ns_1
+        
+        panel_data[mask] = float("nan")
+        
+        widths = 1.2*(bins_1[1:] - bins_1[:-1])
+        
+        panel_ax.bar(bins_0[:-1], ns_0/ns_1, label='VAE/GEANT', width=widths)
+        
+        panel_ax.plot([vmin, vmax],[1,1], color="red", ls="--", marker=None)
+
+    ax.set_yscale(yscale)
+    ax.set_xscale(xscale)
+    if panel_ax is not None:
+        panel_ax.set_yscale(panel_scale)
+        panel_ax.set_xscale(xscale)
+
+    ax.set_xlim([vmin,vmax])
+    if panel_ax is not None:
+        panel_ax.set_xlim([vmin,vmax])
+        panel_ax.set_ylim([0.5, 1.5])
+        
+    if ymin is not None or ymax is not None:
+        ax.set_ylim((ymin, ymax))
+
+    if panel_ax is not None:
+        panel_ax.legend()
+
+    if axis_label:
+        if panel_ax is None:
+            ax.set_xlabel(axis_label, fontproperties=axislabelfont)
+        else:
+            panel_ax.set_xlabel(axis_label, fontproperties=axislabelfont)
+            
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
+
+    if create_fig:
+        fig.tight_layout()
+        fig.savefig(file_name, bbox_inches='tight')
+        
+    if panel_ax is None:
+        plt.close()
+    
 def plot_loss(
         file_name,
         loss_train,
@@ -184,8 +292,162 @@ def plot_logsig(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
-  
-def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-10):
+ 
+def get_all_plot_parameters(hlf, params):
+    plots = []
+
+    particle_type = params.get("particle_type", "pion")
+    min_energy = params.get("min_energy", 10)
+
+    # total energy plots
+    plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
+                {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}}$', "p_ref": particle_type,
+                "vmin": 0.5, "vmax": 1.5, "yscale": "linear"}))
+
+    # layer energy plots
+    for layer in hlf.GetElayers().keys():
+        plots.append((E_layers, f'E_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": f"Energy deposited in layer {layer} [MeV]", "p_ref": particle_type,
+                    "vmin": min_energy, 'xscale': 'log', "n_bins": 40}))
+        
+    # eta centroid plots mean
+    for layer in hlf.GetECEtas().keys():
+        # TODO: different for dataset 2,3
+        if layer in [12, 13]:
+            vmin, vmax = (-500., 500.)
+        else:
+            vmin, vmax = (-100., 100.)
+            
+        plots.append((ECEtas, f'ECEta_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": r"Center of Energy in $\Delta\eta$ in layer" + f" {layer} [mm]", 
+                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+        
+    # phi centroid plots mean
+    for layer in hlf.GetECPhis().keys():
+        # TODO: different for dataset 2,3
+        if layer in [12, 13]:
+            vmin, vmax = (-500., 500.)
+        else:
+            vmin, vmax = (-100., 100.)
+            
+        plots.append((ECEtas, f'ECPhi_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": r"Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
+                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+        
+    # eta centroid plots width
+    for layer in hlf.GetWidthEtas().keys():
+        # TODO: different for dataset 2,3
+        if layer in [12, 13]:
+            vmin, vmax = (0., 400.)
+        else:
+            vmin, vmax = (0., 100.)
+            
+        plots.append((ECWidthEtas, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": r"Width of Center of Energy in $\Delta\eta$ in layer" + f" {layer} [mm]", 
+                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+
+    # phi centroid plots width
+    for layer in hlf.GetWidthPhis().keys():
+        # TODO: different for dataset 2,3
+        if layer in [12, 13]:
+            vmin, vmax = (0., 400.)
+        else:
+            vmin, vmax = (0., 100.)
+            
+        plots.append((ECWidthPhis, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": r"Width of Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
+                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
+
+    # All voxel energies flattened
+    plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
+                {"axis_label": r'Voxel energy distribution', "p_ref": particle_type,
+                "vmin": min_energy, "vmax": 1.5, "xscale": "log"}))
+    
+    return plots
+ 
+def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-10,
+                  single_plots=False, summary_plot=True):
+    
+    # Load the hlf classes
+    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold)
+    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold)
+    
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    plots = get_all_plot_parameters(hlf_true, params)
+ 
+    # Plot every histrogramn in its own file
+    if single_plots:
+        for function, name, args1, args2 in plots:
+            plot_hist(
+                file_name=os.path.join(plot_dir, name),
+                data=function(hlf_fake, **args1),
+                reference=function(hlf_true, **args1),
+                **args2
+            )
+
+    # Plot all the histogramms in one file
+    if summary_plot:
+        number_of_plots = len(plots)
+        rows = number_of_plots // 6
+        if number_of_plots%6 != 0:
+            rows += 1
+        heights = [1, 0.3, 0.3]*rows
+
+        fig, axs = plt.subplots(rows*3,6, dpi=500, figsize=(6*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
+
+        iteration = 0
+        for i in range(rows*3):
+            
+            if i%3 == 1:
+                iteration -= 6
+                
+            for j in range(6):
+                
+                if i % 3 == 2:
+                    # Add one (small) invisible plot as whitespace
+                    axs[i,j].set_visible(False)
+                    continue
+                
+                elif iteration >= number_of_plots:
+                        # Plots are empty remove them
+                        axs[i,j].set_visible(False)
+                        iteration += 1
+                        continue
+                
+                
+                # Select the correct plot input for this axis
+                function, name, args1, args2 = plots[iteration]
+                
+                
+                if i % 3 == 0:
+                    # plot the main data
+                    plot_hist(
+                            file_name=None,
+                            data=function(hlf_fake, **args1),
+                            reference=function(hlf_true, **args1),
+                            ax=axs[i,j],
+                            panel_ax=axs[i+1,j],
+                            **args2)
+                    
+                    # Hide the (shared) x-axis
+                    axs[i,j].xaxis.set_visible(False)
+                    
+                    # Hide the first tick label
+                    plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
+                    iteration += 1
+
+                if i % 3 == 1:
+                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
+                    iteration += 1             
+
+        fig.subplots_adjust(hspace=0)
+        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        fig.savefig(plot_dir+"/summary.pdf", bbox_inches='tight', dpi=500)
+        # Dont use tight_layout!
+        plt.close() 
+
+def plot_all_hist_old(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-10):
     
     os.makedirs(plot_dir, exist_ok=False)
     
@@ -220,8 +482,8 @@ def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot
             plot_Etot_Einc_discrete(hlf_fake, hlf_true, args)
             
     args = get_args_for_plotting(params, plot_dir=plot_dir)
-    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=1.e-10)
-    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=1.e-10)
+    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold)
+    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold)
     
     plot(hlf_true, hlf_fake, args)
           

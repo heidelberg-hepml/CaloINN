@@ -226,6 +226,8 @@ def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-10):
     
     hlf.CalculateFeatures(showers)
     hlf.Einc = incident_energies
+    hlf.showers = showers
+    
     return hlf
 
 def save_hlf(hlf, filename):

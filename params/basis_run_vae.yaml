@@ -2,6 +2,7 @@
 run_name: Default
 # block_name: Try_to_improve_recons
 
+
 # Data
 dtype: float32
 particle_type: pion
@@ -34,20 +35,6 @@ VAE_gamma: 1.e+4
 alpha: 1.e-6
 VAE_width_noise: 1.e-7
 
-# Classifier Test
-do_classifier_test: True
-# Classifier Training
-classifier_sigmoid_in_BCE: True
-classifier_lr: 2.e-4
-classifier_n_epochs: 100
-classifier_batch_size: 1000
-classifier_runs: 5
-# Classifier Architecture
-modes: ["DNN"]
-DNN_hidden_layers: 2
-DNN_hidden_neurons: 512
-DNN_dropout: 0.
-# Classifier Preprocessing
-classifier_threshold: True #needed
-classifier_normalize: False #needed
-classifier_use_logit: False #needed
+
+# Plotting
+min_energy: 10
