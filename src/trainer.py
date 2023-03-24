@@ -1069,12 +1069,6 @@ class ECAETrainer:
                 
             # Calculate the gradients
             loss.backward()
-            
-            # TODO: Commented out. Delete with next update
-            # Use gradient clipping if requested
-            # Maybe add to params file
-            # if 'grad_clip' in self.params:
-            #     torch.nn.utils.clip_grad_norm_(self.model.params_trainable, self.params['grad_clip'], 2)
                 
             # Update the parameters
             self.optim.step()
