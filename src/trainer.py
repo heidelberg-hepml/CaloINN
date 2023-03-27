@@ -723,7 +723,7 @@ class VAETrainer:
         subdir = os.path.join("plots", f'epoch_{epoch:03d}')
         plot_dir = self.doc.get_file(subdir)
         plotting.plot_all_hist(
-            generated, cond, data, cond, self.params,
+            data, cond, generated, cond, self.params,
             self.layer_boundaries, plot_dir)
 
         
