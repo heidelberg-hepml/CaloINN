@@ -132,7 +132,7 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
     
     return x, c
 
-def postprocess(x, c, layer_boundaries, threshold=1e-10):
+def postprocess(x, c, layer_boundaries, threshold=1e-4):
     """Reverses the effect of the preprocess funtion"""
     
     # Input sanity checks
@@ -202,7 +202,7 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
 
     return output
 
-def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-10):
+def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4):
     "returns a hlf class needed for plotting"
     x = x.cpu()
     c = c.cpu()
@@ -224,7 +224,7 @@ def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-10):
     showers = np.concatenate(layers, axis=1) * 1.e5
     
     
-    hlf.CalculateFeatures(showers)
+    hlf.CalculateFeatures(showers, threshold * 1.e5)
     hlf.Einc = incident_energies
     hlf.showers = showers
     
