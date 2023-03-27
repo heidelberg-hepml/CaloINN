@@ -36,6 +36,7 @@ class HighLevelFeatures:
         self.EC_phis = {}
         self.width_etas = {}
         self.width_phis = {}
+        self.sparsity = {}
         self.particle = particle
 
         self.num_voxel = []
@@ -62,7 +63,11 @@ class HighLevelFeatures:
         phi_width = np.sqrt((phi_width - phi_EC**2).clip(min=0.))
         return eta_EC, phi_EC, eta_width, phi_width
 
-    def CalculateFeatures(self, data):
+    def _calculate_sparsity(self, layer_data, threshold):
+        """ Computes the sparsity of the given layer"""
+        return (layer_data > threshold).mean(axis=1)
+
+    def CalculateFeatures(self, data, sparsity_threshold=10):
         """ Computes all high-level features for the given data """
         self.E_tot = data.sum(axis=-1)
 
@@ -78,6 +83,8 @@ class HighLevelFeatures:
                         self.eta_all_layers[l],
                         self.phi_all_layers[l],
                         data[:, self.bin_edges[l]:self.bin_edges[l+1]])
+                    
+                self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], sparsity_threshold)
 
     def _DrawSingleLayer(self, data, layer_nr, filename, title=None, fig=None, subplot=(1, 1, 1),
                          vmax=None, colbar='alone'):
@@ -215,6 +222,9 @@ class HighLevelFeatures:
         """ returns dictionary of widths of centers of energy in phi for each layer """
         return self.width_phis
 
+    def GetSparsity(self):
+        return self.sparsity
+    
     def DrawAverageShower(self, data, filename=None, title=None):
         """ plots average of provided showers """
         self._DrawShower(data.mean(axis=0), filename=filename, title=title)

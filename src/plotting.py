@@ -343,7 +343,7 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (0., 100.)
             
         plots.append((ECWidthEtas, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": r"Width of Center of Energy in $\Delta\eta$ in layer" + f" {layer} [mm]", 
+                    {"axis_label": f"Width of Center of Energy in \n$\\Delta\\eta$ in layer {layer} [mm]", 
                     "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
 
     # phi centroid plots width
@@ -355,17 +355,22 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (0., 100.)
             
         plots.append((ECWidthPhis, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": r"Width of Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
+                    {"axis_label": f"Width of Center of Energy in \n$\\Delta\\phi$ in layer {layer} [mm]", 
                     "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
 
     # All voxel energies flattened
     plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
-                {"axis_label": r'Voxel energy distribution', "p_ref": particle_type,
-                "vmin": min_energy, "vmax": 1.5, "xscale": "log"}))
+                {"axis_label": r'Voxel energy distribution', "p_ref": particle_type, "xscale": "log"}))
+    
+    # Sparsity
+    for layer in hlf.GetSparsity().keys():
+        plots.append((sparsity, f'Sparsity_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": f"Sparsity of layer {layer}", "p_ref": particle_type, "yscale": "linear", 
+                     'n_bins': np.linspace(0, 1, 20), 'vmin': -0.05, 'vmax': 1.05}))
     
     return plots
  
-def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-10,
+def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-4,
                   single_plots=False, summary_plot=True):
     
     # Load the hlf classes
@@ -447,7 +452,7 @@ def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot
         # Dont use tight_layout!
         plt.close() 
 
-def plot_all_hist_old(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-10):
+def plot_all_hist_old(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-4):
     
     os.makedirs(plot_dir, exist_ok=False)
     
