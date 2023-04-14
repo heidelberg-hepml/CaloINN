@@ -495,17 +495,19 @@ class VAETrainer:
                           cond = cond,
                           latent_dim = self.latent_dim,
                           hidden_sizes = hidden_sizes,
-                          layer_boundaries_detector=self.layer_boundaries,
+                          layer_boundaries_detector = self.layer_boundaries,
+                          dropout = params.get("VAE_dropout", 0.0),
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
+                          eps = params.get("eps", 1.e-10),
                           noise_width=params.get("VAE_width_noise", None))
         
         self.model = self.model.to(self.device)
         
         
         # Set the optimizer
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("lr", 1.e-4))
+        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("VAE_lr", 1.e-4))
         
         # Print the model
         print(self.model)
@@ -686,31 +688,31 @@ class VAETrainer:
         latent = self.model.reparameterize(mu, logvar)
         return latent
             
-    def generate_from_latent(self, latent, condition, batch_size = 10000):
-        self.model.eval()
-        with torch.no_grad():
-            num_samples = condition.shape[0]
+    # def generate_from_latent(self, latent, condition, batch_size = 10000):
+    #     self.model.eval()
+    #     with torch.no_grad():
+    #         num_samples = condition.shape[0]
 
-            # Prepares an "empty" container for the samples
-            samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
-            for batch in range((num_samples+batch_size-1)//batch_size):
-                start = batch_size*batch
-                stop = min(batch_size*(batch+1), num_samples)
-                condition_l = condition[start:stop].to(self.device)
-                latent_l = latent[start:stop].to(self.device)
-                samples[start:stop] = self.model.decode(latent=latent_l, c=condition_l).cpu()
+    #         # Prepares an "empty" container for the samples
+    #         samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
+    #         for batch in range((num_samples+batch_size-1)//batch_size):
+    #             start = batch_size*batch
+    #             stop = min(batch_size*(batch+1), num_samples)
+    #             condition_l = condition[start:stop].to(self.device)
+    #             latent_l = latent[start:stop].to(self.device)
+    #             samples[start:stop] = self.model.decode(latent=latent_l, c=condition_l).cpu()
 
             
-            # Postprocessing (Reshape the layers and return a dict)
-            data = data_util.postprocess(samples, condition)
+    #         # Postprocessing (Reshape the layers and return a dict)
+    #         data = data_util.postprocess(samples, condition)
 
-            return data      
+    #         return data      
     
     def plot_results(self, epoch):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
         
-        self.model.eval
+        self.model.eval()
         
         # Generate the reconstructions
         data = self.test_loader.data
@@ -718,8 +720,6 @@ class VAETrainer:
         generated = self.get_reco(data, cond)
                     
         # Now create the no-errorbar histograms
-        # TODO: Watch out for threshold!
-            
         subdir = os.path.join("plots", f'epoch_{epoch:03d}')
         plot_dir = self.doc.get_file(subdir)
         plotting.plot_all_hist(
@@ -794,7 +794,8 @@ class VAETrainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
                  
-               
+
+# OLD: Not updated to the new dataset           
 class ECAETrainer:
     def __init__(self, params, device, doc, vae_dir=None):
         

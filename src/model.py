@@ -597,7 +597,8 @@ class noise_layer(nn.Module):
         
     
 class CVAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, alpha=1.e-6, beta=1.e-5, gamma=1.e3, noise_width=None):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, dropout=0,
+                 alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, noise_width=None):
         # TODO: eps is not passed in the normalize and unnormalize funcs. -> Not using the params value
         super(CVAE, self).__init__()
         
@@ -621,7 +622,7 @@ class CVAE(nn.Module):
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
-        self.__set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes)
+        self.__set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
         
         # Add a noise removal layer
         if noise_width is not None:
@@ -634,6 +635,9 @@ class CVAE(nn.Module):
         self.beta = beta
         self.gamma = gamma
         
+        # parameters for layer normalization stability
+        self.eps = eps
+        
         # Save whether noise layers were used
         self.noise_width = noise_width
         
@@ -644,7 +648,7 @@ class CVAE(nn.Module):
         # between 0 and 1:
         self.__set_normalizations(input, cond)
 
-    def __set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes):
+    def __set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout):
         # Create decoder and encoder
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
@@ -654,6 +658,7 @@ class CVAE(nn.Module):
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
+            self.encoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
@@ -662,6 +667,7 @@ class CVAE(nn.Module):
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.decoder.add_module(f"relu{i}", nn.ReLU())
+            self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
     
@@ -706,7 +712,7 @@ class CVAE(nn.Module):
             c_noise = c
         
         # Prepares the data by normalizing it and appending the conditions
-        x_noise = data_util.normalize_layers(x_noise, c_noise, self.layer_boundaries)
+        x_noise = data_util.normalize_layers(x_noise, c_noise, self.layer_boundaries, eps=self.eps)
         x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-self.num_detector_layers]), axis=1) # Normalize c and dont append the true layer energies!
         
         # Go to logit space
@@ -783,7 +789,7 @@ class CVAE(nn.Module):
         x_recon = self.logit_trafo_out(x_recon_logit)
         
         # Revert to original normalization
-        x_recon = data_util.unnormalize_layers(x_recon, c, self.layer_boundaries)
+        x_recon = data_util.unnormalize_layers(x_recon, c, self.layer_boundaries, eps=self.eps)
         
         return x_recon
         
@@ -814,7 +820,7 @@ class CVAE(nn.Module):
         
         
         # For data part
-        x_0_1 = data_util.normalize_layers(x, c, self.layer_boundaries)
+        x_0_1 = data_util.normalize_layers(x, c, self.layer_boundaries, eps=self.eps)
         
         # For logit loss part
         x_logit = self.logit_trafo_in(x_0_1)

@@ -192,17 +192,17 @@ def plot_loss(
     # nested np.mins needed for the case of different length
     # print(len(loss_test))
     if len(loss_test) <= 10 or (not skip_epochs):
-        y_min = np.min(np.min(np.array([loss_train, loss_test], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train, loss_test], dtype=object)))
+        y_min = np.min( [ np.min(loss_train), np.min(loss_test) ] )
+        y_max = np.max( [ np.max(loss_train), np.max(loss_test) ] )
     elif len(loss_test) <= 20:
         train_idx = 10 * len(loss_train) // len(loss_test)
-        y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
+        y_min = np.min( [ np.min(loss_train[train_idx:]), np.min(loss_test[10:]) ] )
+        y_max = np.max( [ np.max(loss_train[train_idx:]), np.max(loss_test[10:]) ] )
     # elif len(loss_test) <= 20:
     else:
         train_idx = 20 * len(loss_train) // len(loss_test)
-        y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
+        y_min = np.min( [ np.min(loss_train[train_idx:]), np.min(loss_test[20:]) ] )
+        y_max = np.max( [ np.max(loss_train[train_idx:]), np.max(loss_test[20:]) ] )
         
     # print(y_min, y_max)
     if y_min > 0:
@@ -370,8 +370,11 @@ def get_all_plot_parameters(hlf, params):
     
     return plots
  
-def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-4,
+def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir,
                   single_plots=False, summary_plot=True):
+    
+    
+    threshold = params.get("threshold", 1.e-4)
     
     # Load the hlf classes
     hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold)

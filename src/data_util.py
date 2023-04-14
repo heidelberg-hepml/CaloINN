@@ -146,7 +146,6 @@ def postprocess(x, c, layer_boundaries, threshold=1e-4):
 
     # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
     # the logit preprocessing
-    # TODO: Pipe to params
     x[x < threshold] = 0.
     
     # Create a new dict 'data' for the output

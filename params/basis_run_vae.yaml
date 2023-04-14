@@ -1,5 +1,5 @@
 # Documenter information
-run_name: Default_photons
+run_name: try_dropout_3_gamma_0.01
 # block_name: Try_to_improve_recons
 
 
@@ -8,9 +8,10 @@ dtype: float32
 particle_type: photon
 val_frac: 0.2
 eps: 1.e-10
+threshold: 1.e-4
 
 # VAE Training
-VAE_lr: 5.e-4
+VAE_lr: 1.e-4
 VAE_batch_size: 256
 VAE_n_epochs: 500
 VAE_save_interval: 100
@@ -25,7 +26,8 @@ VAE_zero_data: False # Set the data loss to 0
 VAE_hidden_sizes: [4500, 1000, 150]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
-VAE_gamma: 1.e+2
+VAE_gamma: 1.e+3
+VAE_dropout: 0.01
 
 
 # Preprocessing
