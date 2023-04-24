@@ -119,7 +119,12 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
 
     binary_mask = np.full(len(energy), True)
 
-    # TODO: We loose about 5% of our events this way. Might reconsider the masking here...
+    # TODO: We loose about 20% of our events this way. Might reconsider the masking here...
+    # EDIT: Rescale the energies by an arbitrary factor of 2 -> Only loose 10 showers instead of ~20 000
+    # Has to be reversed in the postprocess loop
+    x = x/2
+    
+    
     # Ensure energy conservation
     binary_mask &= np.sum(x, axis=1) < energy[:,0]
     # Remove all no-interaction events (only 0.7%)
@@ -147,6 +152,9 @@ def postprocess(x, c, layer_boundaries, threshold=1e-4):
     # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
     # the logit preprocessing
     x[x < threshold] = 0.
+    
+    # Reverse the rescaling that was used before
+    x = x*2
     
     # Create a new dict 'data' for the output
     data = {}
@@ -237,7 +245,7 @@ def save_hlf(hlf, filename):
         pickle.dump(hlf, file)
     print("Saving file with high-level features DONE.")
 
-def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=True):
+def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False):
     """Creates the dataloaders used to train the VAE model."""
     
     # load the data from the hdf5 file
