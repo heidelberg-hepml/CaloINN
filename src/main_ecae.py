@@ -8,7 +8,7 @@ import torch
 import os
 
 from documenter import Documenter
-from trainer import ECAETrainer, DNNTrainer
+from trainer import ECAETrainer
 
 from copy import deepcopy
 
@@ -55,29 +55,6 @@ def main():
     ecae_trainer = ECAETrainer(params, device, doc, vae_dir=params.get("vae_dir", None))
     ecae_trainer.train()
     
-    # Do the classifier test if required
-    
-    # Want a higher precision for the test
-    old_default_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(torch.float64)
-    
-    # TODO: Maybe pass the samples as file
-    # TODO: Could also run over different "modes" here...
-    if params.get('do_classifier_test', False):
-        print("\n\nstarting classifier test")
-        sys.stdout.flush()
-        dnn_trainer = DNNTrainer(ecae_trainer, params, device, doc)
-        for _ in range(params["classifier_runs"]):
-            dnn_trainer.train()
-            # TODO: Pass as params parameter
-            dnn_trainer.do_classifier_test(do_calibration=True)
-            dnn_trainer.reset_model()
-        
-        # Return the results
-        dnn_trainer.clean_up()
-        
-    # Revert to the previous precision
-    torch.set_default_dtype(old_default_dtype)
 
 if __name__=='__main__':
     main()

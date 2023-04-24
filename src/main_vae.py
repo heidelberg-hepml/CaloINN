@@ -8,7 +8,7 @@ import torch
 import os
 
 from documenter import Documenter
-from trainer import VAETrainer, DNNTrainer
+from trainer import VAETrainer
 
 from copy import deepcopy
 
