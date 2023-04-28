@@ -459,7 +459,6 @@ class LogitTransformationVAE:
         return self.forward(x)
  
   
-# Create noise layer
 class noise_layer(nn.Module):
     def __init__(self, noise_width, layer_boundaries, rev, logit_space=False, data_space=False, logit_function=None):
         super().__init__()
@@ -494,7 +493,7 @@ class noise_layer(nn.Module):
             # add noise to the input
             noise = self.noise_distribution.sample(input.shape)*self.noise_width
             noise = noise.to(input.device)
-            input = input + noise.reshape(input.shape)
+            input = input + noise.view(input.shape)
             
             # rescale the energy dimensions and layer energies by the added noise
             incident_energy = c[..., [0]]
@@ -553,9 +552,9 @@ class noise_layer(nn.Module):
         
     
 class CVAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, dropout=0,
-                 alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, noise_width=None,
-                 smearing_self=1.0, smearing_share=0.0):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, 
+                 particle_type="photon",dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
+                 noise_width=None, smearing_self=1.0, smearing_share=0.0):
         # TODO: eps is not passed in the normalize and unnormalize funcs. -> Not using the params value
         super(CVAE, self).__init__()
         
@@ -579,7 +578,7 @@ class CVAE(nn.Module):
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
-        self.__set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
+        self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
         
         # Add a noise removal layer
         if noise_width is not None:
@@ -592,6 +591,9 @@ class CVAE(nn.Module):
         self.beta = beta
         self.gamma = gamma
         
+        # needed for the smearing matrix (geometry info)
+        self.particle_type = particle_type
+        
         # parameters for layer normalization stability
         self.eps = eps
         
@@ -603,11 +605,11 @@ class CVAE(nn.Module):
                
         # get normalization for normalization layer and to ensure that the incident energy parameter is
         # between 0 and 1:
-        self.__set_normalizations(input, cond)
+        self._set_normalizations(input, cond)
         
-        self.smearing_matrix = self.__get_smearing_matrix(input, cond, smearing_self, smearing_share)
+        self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
 
-    def __set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout):
+    def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout):
         # Create decoder and encoder
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
@@ -630,7 +632,7 @@ class CVAE(nn.Module):
             in_size = hidden_size
         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
     
-    def __set_normalizations(self, data, cond):
+    def _set_normalizations(self, data, cond):
         
         # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
         # The other conditions are allready between 0 and 1 and will not be modified
@@ -639,7 +641,7 @@ class CVAE(nn.Module):
         self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)
         
         # Set the normalization layer operating on the x space (before the actual encoder)
-        data = self.__preprocess_encoding(data, cond, without_norm=True)
+        data = self._preprocess_encoding(data, cond, without_norm=True)
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)      
         self.norm_m_x = torch.diag(1 / std)
@@ -658,38 +660,73 @@ class CVAE(nn.Module):
         
         return
      
-    def __get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
+    def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
         
         def get_neighboring_indices(index, num_alpha, num_radial):
+            
             i, j = divmod(index, num_radial)
 
             neighbors = []
 
-            # links (zyklisch)
             left_neighbor = index - num_radial if i > 0 else index + num_radial * (num_alpha - 1)
             if left_neighbor != index:
+                
+                # links (zyklisch)
                 neighbors.append(left_neighbor)
+                
+                i_l, j_l = divmod(left_neighbor, num_radial)
+                
+                # unten links
+                if j_l > 0:
+                    neighbors.append(left_neighbor-1)
+                else:
+                    neighbor = left_neighbor + num_alpha//2 * num_radial
+                    neighbors.append(neighbor % (num_alpha * num_radial))
+                    
+                # oben links
+                if j_l < num_radial - 1:
+                    neighbors.append(left_neighbor+1)
 
-            # rechts (zyklisch)
+
             right_neighbor = index + num_radial if i < num_alpha - 1 else index - num_radial * (num_alpha - 1)
             if right_neighbor != index:
+                
+                # rechts (zyklisch)
                 neighbors.append(right_neighbor)
-
+                
+                i_r, j_r = divmod(right_neighbor, num_radial)
+                
+                # unten rechts
+                if j_r > 0:
+                    neighbors.append(right_neighbor-1)
+                else:
+                    neighbor = right_neighbor + num_alpha//2 * num_radial
+                    neighbors.append(neighbor % (num_alpha * num_radial))
+            
+                # oben rechts
+                if j_r < num_radial - 1:
+                    neighbors.append(right_neighbor+1)
+                
             # unten
             if j > 0:
                 neighbors.append(index - 1)
+            else:
+                neighbor = index + num_alpha//2 * num_radial
+                neighbors.append(neighbor % (num_alpha * num_radial))
             # oben
             if j < num_radial - 1:
                 neighbors.append(index + 1)
-
+            
             return neighbors
 
         # TODO: Adjust the particle type
-        hlf_true = data_util.get_hlf(x, c, "photon", self.layer_boundaries, threshold=1.e-10)
+        hlf_true = data_util.get_hlf(x, c, self.particle_type, self.layer_boundaries, threshold=1.e-10)
 
         smearing_matrix = np.zeros((len(hlf_true.showers[0]), len(hlf_true.showers[0])))
         smearing_matrix.shape
 
+        self.num_alphas = []
+        self.num_radials = []
         for layer_nr in range(len(self.layer_boundaries)-1):
             
             # needed since we are working with sliced data arrays
@@ -702,6 +739,9 @@ class CVAE(nn.Module):
             reduced_data = reduced_data.reshape(int(hlf_true.num_alpha[layer_nr]), -1)
             num_alpha = int(hlf_true.num_alpha[layer_nr])
             num_radial = reduced_data.shape[1]
+            
+            self.num_alphas.append(num_alpha)
+            self.num_radials.append(num_radial)
             
             # use old shape again
             reduced_data = reduced_data.reshape(-1)
@@ -717,13 +757,15 @@ class CVAE(nn.Module):
 
         # hlf_true.DrawSingleShower(smearing_matrix @ hlf_true.showers[0])
         # hlf_true.DrawSingleShower(hlf_true.showers[0])
+        
+        
         return torch.tensor(smearing_matrix, dtype=torch.get_default_dtype(), device=x.device)
     
     def update_smearing_matrix(self, x, c, self_weight, share_weight):
         
-        self.smearing_matrix = self.__get_smearing_matrix(x, c, self_weight, share_weight)
+        self.smearing_matrix = self._get_smearing_matrix(x, c, self_weight, share_weight)
         
-    def __preprocess_encoding(self, x, c, without_norm=False):
+    def _preprocess_encoding(self, x, c, without_norm=False):
         """First part of the encoder function. Seperated such that it can be used by the
         initialization of the normalization to zero mean and unit variance"""
         
@@ -761,7 +803,7 @@ class CVAE(nn.Module):
         assert c.shape[0] == x.shape[0]
         
         # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
-        x = self.__preprocess_encoding(x, c)
+        x = self._preprocess_encoding(x, c)
         
         # Call the encoder
         mu_logvar = self.encoder(x)
@@ -777,7 +819,7 @@ class CVAE(nn.Module):
         eps = torch.randn_like(std)
         return eps * std + mu
 
-    def __decode_to_logit(self, latent, c):
+    def _decode_to_logit(self, latent, c):
         """Takes a point in the latent space after sampling and returns a point in the logit space.
         Output: Reconstructed image in logit-space """
         
@@ -807,7 +849,7 @@ class CVAE(nn.Module):
         """Takes a point in the latent space after sampling and returns a point in the dataspace.
         Output: Reconstructed image in data-space """
         
-        x_recon_logit = self.__decode_to_logit(latent, c)
+        x_recon_logit = self._decode_to_logit(latent, c)
             
         # Leave the logit space
         x_recon = self.logit_trafo_out(x_recon_logit)
@@ -856,7 +898,7 @@ class CVAE(nn.Module):
         latent = self.reparameterize(mu, logvar)
         
         # Decode into logit space
-        x_recon_logit = self.__decode_to_logit(latent=latent, c=c)
+        x_recon_logit = self._decode_to_logit(latent=latent, c=c)
         
         # Leave the logit space
         x_recon_0_1 = self.logit_trafo_out(x_recon_logit)
@@ -891,289 +933,370 @@ class CVAE(nn.Module):
             
         
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
-   
-      
-# class CVCAE(nn.Module):
-#     def __init__(self, input, cond, layer_boundaries_detector, dropout=0,
-#                  alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, noise_width=None):
-        
-#         super(CVAE, self).__init__()
-        
-#         # Input and cond sanity check
-#         assert len(input.shape) == 2
-#         assert len(cond.shape) == 2
-#         assert cond.shape[0] == input.shape[0]
-        
-#         input_dim = input.shape[1]
-#         cond_dim = cond.shape[1]
-        
-#         # Save the layer boundaries and the number of layers (both for the dataset). Needed for the layer normalization
-#         self.layer_boundaries = layer_boundaries_detector
-#         self.num_detector_layers = len(self.layer_boundaries) - 1
 
-#         # Add a noise adding layer
-#         if noise_width is not None:
-#             self.noise_layer_in = noise_layer(noise_width, layer_boundaries_detector, rev=False, data_space=True, logit_space=False)
+
+class cyclic_padding(nn.Module):
+    
+    def __init__(self, padding):
+        super().__init__()
+        self.padding = padding
         
-#         # Create a logit preprocessing
-#         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
+    def forward(self, tensor):
+        # shifted mirror padding for lower boundary
+        bottom = torch.roll(torch.flip(tensor[:, :, :self.padding], dims=[2]), (tensor.shape[3] // 2), dims=[3])
         
-#         # Create encoder and decoder model as DNNs
-#         self.__set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
+        # TODO: could be faster by just allocating once in __init__()!
+        top = torch.zeros_like(bottom, device=tensor.device)
         
-#         # Add a noise removal layer
-#         if noise_width is not None:
-#             self.noise_layer_out = noise_layer(noise_width, layer_boundaries_detector, rev=True, data_space=False, logit_space=True, logit_function=self.logit_trafo_in)
+        tensor = torch.cat((bottom, tensor, top), dim=2)
+
+        # Cyclic padding on right and left boundary
+        if self.padding>0:
+            left = tensor[:, :, :, -self.padding:]
+        else:
+            left = tensor[:, :, :, :0]
+        right = tensor[:, :, :, :self.padding]
+        tensor = torch.cat((left, tensor, right), dim=3)
         
-#         # Add sigmoid layer
-#         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
+        return tensor
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(padding={self.padding})'
+
+
+class CCVAE(CVAE):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, kernel_size, channel_list, padding,
+                 particle_type="photon", dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None,
+                 smearing_self=1.0, smearing_share=0.0):
+                
+        cond_dim = cond.shape[1]
+        input_dim = input.shape[1]
         
-#         # the hyperparamters for the reco_loss
-#         self.beta = beta
-#         self.gamma = gamma
+        # Initialize CVAE
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, 
+                         dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share)
         
-#         # parameters for layer normalization stability
-#         self.eps = eps
+        # Unroll the data and seperate the detector layers (only take the first 10 points for speedup just need the shapes
+        # of the other axes)
+        x = self._preprocess_encoding(input, cond)
+        unrolled_data = self._unroll_data(x[0:10].to("cpu"))
         
-#         # Save whether noise layers were used
-#         self.noise_width = noise_width
+        # Add the small convolutional networks
+        self._add_convolutional_overhead(unrolled_data, kernel_size, channel_list, padding)
         
-#         # Save the latent dimension
-#         self.latent_dim = latent_dim
+        # print(self.convolutional_heads_encode)
+        # print(self.convolutional_heads_decode)
+        
+        convoluted_data = self._conv_encode(unrolled_data)
+        
+        self.conv_shapes = []
+        
+        for conv_output in convoluted_data[:-1]:
+            self.conv_shapes.append(conv_output.shape[1:])
+                
+        x = torch.cat([x.view(x.shape[0], -1) for x in convoluted_data], axis=1)
+        
+        self.encoder[0] = nn.Linear(x.shape[1], hidden_sizes[0]) 
+        # TODO: Will only work as long as we keep the number of conditions fixed in the small fc network
+        # self.decoder[-1] = nn.Linear(hidden_sizes[0], x.shape[1]-(cond_dim-self.num_detector_layers)*channel_list[-1])
+        self.decoder[-1] = nn.Linear(hidden_sizes[0], input_dim) 
+                   
+    def _unroll_data(self, data):
+        """Unrolls and slices the input data such that the conv operations can use the data"""
+        
+        unrolled_data_list = []
+        for layer_nr in range(self.num_detector_layers):
+            
+            # Load the data for the current layer
+            reduced_data = data[..., self.layer_boundaries[layer_nr]:self.layer_boundaries[layer_nr+1]]
+            
+            # reshape the data
+            if self.num_alphas[layer_nr] > 1:
+                unrolled_data_list.append(reduced_data.view(-1, self.num_alphas[layer_nr], self.num_radials[layer_nr]))
+            else:
+                unrolled_data_list.append(reduced_data)
+                
+        # append the conditions as another layer:
+        unrolled_data_list.append(data[..., self.layer_boundaries[layer_nr+1]:])
+            
+        return unrolled_data_list
+    
+    def _add_convolutional_overhead(self, input, kernel_size, channel_list, padding):
+        """Adds convoultional networks to the beginning and the end of the model"""
+        
+        # Add the conv nets for the encoder
+        convolutional_heads_encode = []
+        
+        for layer_data in input:
+            
+            input_channels = 1
+            convolutional_heads_encode.append(nn.Sequential())
+            
+            # Add a convoutional net if we a 2 dimensional data (3 because of batch dim)
+            if len(layer_data.shape) == 3:
+                for i, num_channels in enumerate(channel_list):
+                    convolutional_heads_encode[-1].add_module(f"{padding}-padding_{i}", cyclic_padding(padding))
+                    convolutional_heads_encode[-1].add_module(f"conv_{i}", nn.Conv2d(input_channels, num_channels, kernel_size=kernel_size, stride=1, padding=0))
+                    convolutional_heads_encode[-1].add_module(f"relu_{i}", nn.ReLU())
+                    
+                    input_channels = num_channels
+            
+            # Add a FC net if we a 1 dimensional data (2 because of batch dim)
+            elif len(layer_data.shape) == 2:
+                num_channels_prev = 1
+                for i, num_channels in enumerate(channel_list):
+                    in_dim = layer_data.shape[1]
+                    convolutional_heads_encode[-1].add_module(f"fc_{i}", nn.Linear(in_dim*num_channels_prev, in_dim*num_channels))
+                    convolutional_heads_encode[-1].add_module(f"relu_{i}", nn.ReLU())
+                    num_channels_prev = num_channels
+                    
+            # In this case something went wrong. Should not happen...
+            else:
+                raise RuntimeError("Invalid shape for layer data array!")
+        
+        self.convolutional_heads_encode = nn.ModuleList(convolutional_heads_encode)
+        
+        
+        # Add the conv nets for the decoder
+        convolutional_heads_decode = []
+        
+        for layer_data in input:
+            
+            input_channels = channel_list[-1]
+            convolutional_heads_decode.append(nn.Sequential())
+            
+            # Add a convoutional net if we a 2 dimensional data (3 because of batch dim)
+            if len(layer_data.shape) == 3:
+                for i, num_channels in enumerate(channel_list[1::-1]):
+                    convolutional_heads_decode[-1].add_module(f"{padding}-padding_{i}", cyclic_padding(kernel_size - 1 - padding))
+                    # TODO: Think about the transpose conv again...
+                    convolutional_heads_decode[-1].add_module(f"tranpose_conv_{i}", nn.ConvTranspose2d(input_channels, num_channels, kernel_size=kernel_size, stride=1, padding=kernel_size-1))
+                    convolutional_heads_decode[-1].add_module(f"relu_{i}", nn.ReLU())
+                    
+                    input_channels = num_channels
+                    
+                convolutional_heads_decode[-1].add_module(f"{padding}-padding_{i+1}", cyclic_padding(kernel_size - 1 - padding))
+                # TODO: Think about the transpose conv again...
+                convolutional_heads_decode[-1].add_module(f"tranpose_conv_out", nn.ConvTranspose2d(input_channels, 1, kernel_size=kernel_size, stride=1, padding=kernel_size-1))
+            
+            
+            # Add a FC net if we a 1 dimensional data (2 because of batch dim)
+            elif len(layer_data.shape) == 2:
+                    
+                num_channels_prev = channel_list[-1]
+                for i, num_channels in enumerate(channel_list[1::-1]):
+                    in_dim = layer_data.shape[1]
+                    convolutional_heads_decode[-1].add_module(f"fc_{i}", nn.Linear(in_dim*num_channels_prev, in_dim*num_channels))
+                    convolutional_heads_decode[-1].add_module(f"relu_{i}", nn.ReLU())
+                    num_channels_prev = num_channels
+                    
+                convolutional_heads_decode[-1].add_module(f"fc_out", nn.Linear(in_dim*num_channels_prev, in_dim*1))
+                
+            # In this case something went wrong. Should not happen...
+            else:
+                raise RuntimeError("Invalid shape for layer data array!")
+            
+        
+        self.convolutional_heads_decode = nn.ModuleList(convolutional_heads_decode)
+    
+    def _conv_encode(self, unrolled_data):
+        """"Encoder pass through convolutional networks"""
+        
+        output = []
+        
+        for layer_data, subnet in zip(unrolled_data, self.convolutional_heads_encode):
+            
+            if len(layer_data.shape) == 3:
+                x = subnet(layer_data.unsqueeze(1))
+            else:
+                x = subnet(layer_data)
+            
+                
+            output.append(x)
+        
+        return output
+    
+    def _conv_decode(self, unrolled_data):
+        """"Decoder pass through convolutional networks"""
+        
+        output = []
+        
+        for layer_data, subnet in zip(unrolled_data, self.convolutional_heads_decode):
+            
+            if len(layer_data.shape) == 3:
+                x = subnet(layer_data.unsqueeze(1))
+            else:
+                x = subnet(layer_data)
+            
+                
+            output.append(x)
+        
+        return output
+    
+    def encode(self, x, c):
+        """Upates this step to include the call of the convolutions. Rest: compare base function"""
+        
+        # Input sanity check
+        assert len(x.shape) == 2
+        assert len(c.shape) == 2
+        assert c.shape[0] == x.shape[0]
+        
+        # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
+        x = self._preprocess_encoding(x, c)
+
+        # 1) Reshape x into matrix shape "data.reshape(num_alpha, num_radial)"
+        unrolled_data = self._unroll_data(x)
+
+        # 2) Put x into encoder conv overhead
+        convoluted_data = self._conv_encode(unrolled_data)
+        
+        # 3) concatenate everything back together
                
-#         # get normalization for normalization layer and to ensure that the incident energy parameter is
-#         # between 0 and 1:
-#         self.__set_normalizations(input, cond)
+        x = torch.cat([x.view(x.shape[0], -1) for x in convoluted_data], axis=1)      
         
-#         # self.smearing_matrix = self.__get_smearing_matrix(input, cond)
+        # Call the encoder
+        mu_logvar = self.encoder(x)
 
-#     def __set_submodels(self, num_filters_list, num_angular_bins, kernel_size=3):
-#         # Create decoder and encoder
-#         self.encoder = []
-#         self.decoder = []
+        mu, logvar = mu_logvar[:, :self.latent_dim], mu_logvar[:, self.latent_dim:]
         
-#         input_channels = 1
+
         
-#         for num_filters in num_filters_list:
-#             self.encoder.append([])
-#             for detector_layer in self.num_detector_layers:
-#                 self.encoder[-1].append(nn.Conv2d(input_channels, num_filters, kernel_size=kernel_size, stride=1, padding=0))
-                
-#             input_channels = num_filters
-                
+        return mu, logvar     
         
-#         # Add the layers to the encoder
-#         in_size = input_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
-#         for i, hidden_size in enumerate(hidden_sizes):
-#             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
-#             self.encoder.add_module(f"relu{i}", nn.ReLU())
-#             self.encoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
-#             in_size = hidden_size
-#         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
+    def _decode_to_logit(self, latent, c):
+        """Upates this step to include the call of the convolutions. Rest: compare base function"""      
+        
+        # Normalize c, clip it (needed for stability in generation) and dont append the true layer energies!
+        c_clipped = torch.clamp((c / self.max_cond)[:, :-self.num_detector_layers], min=0, max=1)
+        
+        # Transform cond into logit space and append to latent results
+        c_logit = self.logit_trafo_in(c_clipped)
+        # TODO: Might be useful to call a normalization layer here, too
+        latent = torch.cat((latent, c_logit), axis=1)
+        
+        # decode
+        x_recon_logit_noise = self.decoder(latent)
+        
+        
+        # # TODO:
+        # # 1) Slice output to the layers
+        # x_unrolled = []
+        # start = 0
+        # for conv_shape in self.conv_shapes:
+        #     end = start + np.product(conv_shape)
+        #     x_unrolled.append(x_recon_logit_noise[:, start:end].view(-1, *conv_shape))
+        #     start = end
+            
+        # # 2) Put in decoder conv overhead
+        # x_up_convoluted = self._conv_decode(x_unrolled)
+
+        # # 3) Reshape and put together
+        # x_recon_logit_noise = torch.cat([x.view(x.shape[0], -1) for x in x_up_convoluted], axis=1)
+        
+        # Undo normalization step (zero mean, unit variance)
+        x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
+        
+        
+        
+        # Remove noise by thresholding, if needed
+        if self.noise_width is not None:
+            x_recon_logit = self.noise_layer_out(x_recon_logit_noise, c)
+        else:
+            x_recon_logit = x_recon_logit_noise
+            
+        return x_recon_logit
     
-#         # add the layers to the decoder
-#         in_size = latent_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
-#         for i, hidden_size in enumerate(reversed(hidden_sizes)):
-#             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
-#             self.decoder.add_module(f"relu{i}", nn.ReLU())
-#             self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
-#             in_size = hidden_size
-#         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
+
+class CAE(CVAE):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type="photon", dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0):
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share)
+        
+        self.encoder[-1] = nn.Linear(hidden_sizes[-1], latent_dim)
     
-#     def __set_normalizations(self, data, cond):
-        
-#         # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
-#         # The other conditions are allready between 0 and 1 and will not be modified
-#         # TODO: Problems if test set is more than 5% off
-#         max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]*1.05
-#         self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)
-        
-#         # Set the normalization layer operating on the x space (before the actual encoder)
-#         data = self.__preprocess_encoding(data, cond, without_norm=True)
-#         mean = torch.mean(data, dim=0)
-#         std = torch.std(data, dim=0)      
-#         self.norm_m_x = torch.diag(1 / std)
-#         self.norm_b_x = - mean/std
-        
-#         self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
-        
-#         # The decoder does not predict the conditions (-(len(c)-num_layers) instead of -len(c) since we did not pass the last true layer energies to the network)
-#         self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-(cond.shape[1]-self.num_detector_layers), 
-#                                                                                        :-(cond.shape[1]-self.num_detector_layers)], 
-#                                                   b=self.norm_b_x[:-(cond.shape[1]-self.num_detector_layers)])
-        
-#         # TODO: Add
-#         # Set the normalization layer operating on the latent space (before the actual decoder)
-#         # There one has to normalize the conditions that are appended
-        
-#         return    
+    def encode(self, x, c):
+        """Takes a point in the dataspace and returns a point in the latent space before sampling.
+        Does apply the logit preprocessing and the layer normalization
+        noise=True decides, if the noise layer should be used (if it exists)
     
-#     def __preprocess_encoding(self, x, c, without_norm=False):
-#         """First part of the encoder function. Seperated such that it can be used by the
-#         initialization of the normalization to zero mean and unit variance"""
+        Output: latent"""
         
-#         # Adds noise to the data and updates c s.t. the layer normalization will work.
-#         # This c_noise values will only used for the layer normalization, not for the training!
-#         if self.noise_width is not None:
-#             x_noise, c_noise = self.noise_layer_in(x, c)
-#         else:
-#             x_noise = x
-#             c_noise = c
+        # Input sanity check
+        assert len(x.shape) == 2
+        assert len(c.shape) == 2
+        assert c.shape[0] == x.shape[0]
         
-#         # Prepares the data by normalizing it and appending the conditions
-#         x_noise = data_util.normalize_layers(x_noise, c_noise, self.layer_boundaries, eps=self.eps)
-#         x_noise = torch.cat((x_noise, (c/self.max_cond)[:, :-self.num_detector_layers]), axis=1) # Normalize c and dont append the true layer energies!
+        # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
+        x = self._preprocess_encoding(x, c)
         
-#         # Go to logit space
-#         x_logit_noise = self.logit_trafo_in(x_noise)
+        # Call the encoder
+        latent = self.encoder(x)
         
-#         if without_norm:
-#             return x_logit_noise
-        
-#         else:
-#             return self.norm_x_in( (x_logit_noise, ), rev=False)[0][0]
-            
-#     def encode(self, x, c):
-#         """Takes a point in the dataspace and returns a point in the latent space before sampling.
-#         Does apply the logit preprocessing and the layer normalization
-#         noise=True decides, if the noise layer should be used (if it exists)
+        return latent
     
-#         Output: mu, logvar"""
-        
-#         # Input sanity check
-#         assert len(x.shape) == 2
-#         assert len(c.shape) == 2
-#         assert c.shape[0] == x.shape[0]
-        
-#         # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
-#         x = self.__preprocess_encoding(x, c)
-        
-#         # Call the encoder
-#         mu_logvar = self.encoder(x)
+    def forward(self, x, c):
+        """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
+        the model will apply noise to the data and remove it in the logit-space by thresholding.
 
-#         mu, logvar = mu_logvar[:, :self.latent_dim], mu_logvar[:, self.latent_dim:]
-        
+        Args:
+            x (torch.tensor): Input data of dimension (#points, features). The features must contain the energy dimensions as last feature
+            c (torch.tensor): Input data of dimension (#points, 1)
+            noise (bool, optional): Whether noise should be added
 
-        
-#         return mu, logvar
+        Returns:
+            torch.tensor: reconstructed data
+        """
 
-#     def reparameterize(self, mu, logvar):
-#         std = torch.exp(0.5*logvar)
-#         eps = torch.randn_like(std)
-#         return eps * std + mu
-
-#     def __decode_to_logit(self, latent, c):
-#         """Takes a point in the latent space after sampling and returns a point in the logit space.
-#         Output: Reconstructed image in logit-space """
+        # Encode
+        latent = self.encode(x=x, c=c)
         
-#         # Normalize c, clip it (needed for stability in generation) and dont append the true layer energies!
-#         c_clipped = torch.clamp((c / self.max_cond)[:, :-self.num_detector_layers], min=0, max=1)
         
-#         # Transform cond into logit space and append to latent results
-#         c_logit = self.logit_trafo_in(c_clipped)
-#         # TODO: Might be useful to call a normalization layer here, too
-#         latent = torch.cat((latent, c_logit), axis=1)
-        
-#         # decode
-#         x_recon_logit_noise = self.decoder(latent)
-        
-#         # Undo normalization step (zero mean, unit variance)
-#         x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
-        
-#         # Remove noise by thresholding, if needed
-#         if self.noise_width is not None:
-#             x_recon_logit = self.noise_layer_out(x_recon_logit_noise, c)
-#         else:
-#             x_recon_logit = x_recon_logit_noise
-            
-#         return x_recon_logit
-            
-#     def decode(self, latent, c):
-#         """Takes a point in the latent space after sampling and returns a point in the dataspace.
-#         Output: Reconstructed image in data-space """
-        
-#         x_recon_logit = self.__decode_to_logit(latent, c)
-            
-#         # Leave the logit space
-#         x_recon = self.logit_trafo_out(x_recon_logit)
-        
-#         # Revert to original normalization
-#         x_recon = data_util.unnormalize_layers(x_recon, c, self.layer_boundaries, eps=self.eps)
-        
-#         return x_recon
-        
-#     def forward(self, x, c):
-#         """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
-#         the model will apply noise to the data and remove it in the logit-space by thresholding.
-
-#         Args:
-#             x (torch.tensor): Input data of dimension (#points, features). The features must contain the energy dimensions as last feature
-#             c (torch.tensor): Input data of dimension (#points, 1)
-#             noise (bool, optional): Whether noise should be added
-
-#         Returns:
-#             torch.tensor: reconstructed data
-#         """
-
-#         # Encode
-#         mu, logvar = self.encode(x=x, c=c)
-        
-#         # Sample
-#         latent = self.reparameterize(mu, logvar)
-        
-#         # Decode
-#         return self.decode(latent=latent, c=c)
+        # Decode
+        return self.decode(latent=latent, c=c)
     
-#     def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
-#         """Computes the reconstruction loss in the logit space and in the data space"""
+    def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
+        """Computes the reconstruction loss in the logit space and in the data space"""
         
         
-#         # For data part
-#         x_0_1 = data_util.normalize_layers(x, c, self.layer_boundaries, eps=self.eps)
+        # For data part
+        x_0_1 = data_util.normalize_layers(x, c, self.layer_boundaries, eps=self.eps)
         
-#         # For logit loss part
-#         x_logit = self.logit_trafo_in(x_0_1)
+        # For logit loss part
+        x_logit = self.logit_trafo_in(x_0_1)
         
-#         # Encode
-#         mu, logvar = self.encode(x=x, c=c)
+        # Encode
+        latent = self.encode(x=x, c=c)
         
-#         # Sample
-#         latent = self.reparameterize(mu, logvar)
+        # Decode into logit space
+        x_recon_logit = self._decode_to_logit(latent=latent, c=c)
         
-#         # Decode into logit space
-#         x_recon_logit = self.__decode_to_logit(latent=latent, c=c)
+        # Leave the logit space
+        x_recon_0_1 = self.logit_trafo_out(x_recon_logit)
         
-#         # Leave the logit space
-#         x_recon_0_1 = self.logit_trafo_out(x_recon_logit)
+        # print()
+        # print("recos & originals")
+        # print(x_0_1, x_logit, latent, x_recon_logit, x_recon_0_1)
         
-#         # print()
-#         # print("recos & originals")
-#         # print(x_0_1, x_logit, latent, x_recon_logit, x_recon_0_1)
+        # Compute the losses
         
-#         # Compute the losses
-        
-#         if not MAE_logit:
-#             MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit, x_logit, reduction="mean")
-#         else:
-#             MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit, x_logit, reduction="mean")
+        if not MAE_logit:
+            MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+        else:
+            MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
             
-#         if not MAE_data:
-#             MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon_0_1, x_0_1, reduction="mean")
-#         else:
-#             MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon_0_1, x_0_1, reduction="mean")
-            
-#         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
+        if not MAE_data:
+            MSE_data = self.gamma* 0.5*nn.functional.mse_loss(x_recon_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+        else:
+            MSE_data = self.gamma* 0.5*nn.functional.l1_loss(x_recon_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean") 
 
-#         if zero_logit:
-#             MSE_logit = torch.tensor(0).to(MSE_logit.device)
+        if zero_logit:
+            MSE_logit = torch.tensor(0).to(MSE_logit.device)
             
-#         if zero_data:
-#             MSE_data = torch.tensor(0).to(MSE_logit.device)
+        if zero_data:
+            MSE_data = torch.tensor(0).to(MSE_logit.device)
             
-#         # print()
-#         # print("losses")
-#         # print(MSE_logit, MSE_data, KLD)
+        # print()
+        # print("losses")
+        # print(MSE_logit, MSE_data, KLD)
             
         
-#         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
-    
+        return MSE_logit + MSE_data, MSE_logit, MSE_data, torch.tensor(0)
