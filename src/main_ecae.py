@@ -25,11 +25,15 @@ def main():
     device = 'cuda:0' if use_cuda else 'cpu'
 
     # set default parameters for the file locations using the particle type parameter
+    dataset = params.get("dataset", 1)
     if "data_path" not in params:
-        particle_type = params.get("particle_type", "pion")
-        data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
+        particle_type = params.get("particle_type", "phoron")
+        if dataset == 1:
+            data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
+        else:
+            data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset{dataset}/dataset_{dataset}_1.hdf5"
         params["data_path"] = data_path
-
+        
     # Initialize the documenter class
     # Sends all outputs to a log file and manages the file system of the output folder
     doc = Documenter(params['run_name'], block_name=params.get("block_name", None))

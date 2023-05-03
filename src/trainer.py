@@ -31,6 +31,7 @@ class VAETrainer:
         self.params = params
         self.device = device
         print(self.device)
+        print(params.get("dataset", 1))
         self.doc = doc
 
         # Load the data  
@@ -42,7 +43,8 @@ class VAETrainer:
             eps=params.get("eps", 1.e-10),
             device=device,
             drop_last=False,
-            shuffle=True)
+            shuffle=True,
+            dataset=params.get("dataset", 1))
         
         data = self.train_loader.data
         cond = self.train_loader.cond
@@ -56,6 +58,7 @@ class VAETrainer:
                           hidden_sizes = hidden_sizes,
                           layer_boundaries_detector = self.layer_boundaries,
                           particle_type = params['particle_type'],
+                          dataset = params.get('dataset', 1),
                           dropout = params.get("VAE_dropout", 0.0),
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
@@ -232,11 +235,22 @@ class VAETrainer:
 
         return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss
 
-    def get_reco(self, data, cond):
-        # Do not need batches. If the input fits on the GPU. The output should fit as well. (Consumption goes up by factor of 2)
+    def get_reco(self, data, cond, batch_size=10000):
+        
+        
         self.model.eval()
+        reconstructed = torch.zeros((data.shape[0],data.shape[1]))
+        
         with torch.no_grad():
-            reconstructed = self.model(data, cond)
+            # Generate the data in batches according to batch_size
+            for batch in range((data.shape[0]+batch_size-1)//batch_size):
+                start = batch_size*batch
+                stop = min(batch_size*(batch+1), data.shape[0])
+                cond_l = cond[start:stop].to(self.device)
+                data_l = data[start:stop].to(self.device)
+                reconstructed[start:stop] = self.model(data_l, cond_l).cpu()
+            
+        reconstructed = reconstructed[:,...]
         
         return reconstructed
         
@@ -381,7 +395,8 @@ class CCVAETrainer:
             eps=params.get("eps", 1.e-10),
             device=device,
             drop_last=False,
-            shuffle=True)
+            shuffle=True,
+            dataset=params.get("dataset", 1))
         
         data = self.train_loader.data
         cond = self.train_loader.cond
@@ -703,7 +718,8 @@ class AETrainer:
             eps=params.get("eps", 1.e-10),
             device=device,
             drop_last=False,
-            shuffle=True)
+            shuffle=True,
+            dataset=params.get("dataset", 1))
         
         data = self.train_loader.data
         cond = self.train_loader.cond

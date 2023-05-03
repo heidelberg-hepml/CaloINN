@@ -139,7 +139,7 @@ def plot_hist(
         
         widths = 1.2*(bins_1[1:] - bins_1[:-1])
         
-        panel_ax.bar(bins_0[:-1], ns_0/ns_1, label='VAE/GEANT', width=widths)
+        panel_ax.bar(bins_0[:-1], panel_data, label='VAE/GEANT', width=widths)
         
         panel_ax.plot([vmin, vmax],[1,1], color="red", ls="--", marker=None)
 
@@ -313,7 +313,9 @@ def get_all_plot_parameters(hlf, params):
     # eta centroid plots mean
     for layer in hlf.GetECEtas().keys():
         # TODO: different for dataset 2,3
-        if layer in [12, 13]:
+        if params.get("dataset", 1) in [2, 3]:
+            vmin, vmax = (-30., 30.)
+        elif layer in [12, 13]:
             vmin, vmax = (-500., 500.)
         else:
             vmin, vmax = (-100., 100.)
@@ -325,7 +327,9 @@ def get_all_plot_parameters(hlf, params):
     # phi centroid plots mean
     for layer in hlf.GetECPhis().keys():
         # TODO: different for dataset 2,3
-        if layer in [12, 13]:
+        if params.get("dataset", 1) in [2, 3]:
+            vmin, vmax = (-30., 30.)
+        elif layer in [12, 13]:
             vmin, vmax = (-500., 500.)
         else:
             vmin, vmax = (-100., 100.)
@@ -337,7 +341,9 @@ def get_all_plot_parameters(hlf, params):
     # eta centroid plots width
     for layer in hlf.GetWidthEtas().keys():
         # TODO: different for dataset 2,3
-        if layer in [12, 13]:
+        if params.get("dataset", 1) in [2, 3]:
+            vmin, vmax = (0., 30.)
+        elif layer in [12, 13]:
             vmin, vmax = (0., 400.)
         else:
             vmin, vmax = (0., 100.)
@@ -349,7 +355,9 @@ def get_all_plot_parameters(hlf, params):
     # phi centroid plots width
     for layer in hlf.GetWidthPhis().keys():
         # TODO: different for dataset 2,3
-        if layer in [12, 13]:
+        if params.get("dataset", 1) in [2, 3]:
+            vmin, vmax = (0., 30.)
+        elif layer in [12, 13]:
             vmin, vmax = (0., 400.)
         else:
             vmin, vmax = (0., 100.)
@@ -377,8 +385,8 @@ def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot
     threshold = params.get("threshold", 1.e-4)
     
     # Load the hlf classes
-    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold)
-    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold)
+    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold, dataset=params.get("dataset", 1))
+    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold, dataset=params.get("dataset", 1))
     
     os.makedirs(plot_dir, exist_ok=True)
     

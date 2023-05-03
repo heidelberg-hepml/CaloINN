@@ -12,12 +12,16 @@ import os
 import warnings
 
 
-def load_data(filename, particle_type):
+def load_data(filename, particle_type, dataset=1):
     """Loads the data for a dataset 1 from the calo challenge"""
     
     # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
-    xml_handler = XMLHandler(particle_name=particle_type, 
-    filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml')
+    if dataset==1:
+        xml_handler = XMLHandler(particle_name=particle_type, 
+        filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml')
+    else:
+        xml_handler = XMLHandler(particle_name=particle_type, 
+        filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_{dataset}.xml')
     
     layer_boundaries = np.unique(xml_handler.GetBinEdges())
 
@@ -209,13 +213,17 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
 
     return output
 
-def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4):
+def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     "returns a hlf class needed for plotting"
     x = x.cpu()
     c = c.cpu()
     
-    hlf = HLF.HighLevelFeatures(particle_type,
-                                f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml")
+    if dataset == 1:
+        hlf = HLF.HighLevelFeatures(particle_type,
+                                    f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml")
+    else:
+        hlf = HLF.HighLevelFeatures(particle_type,
+                                    f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_{dataset}.xml")
     
     # Maybe we will do more than just thresholding in postprocess someday. So, we should call it here as well.
     data = postprocess(x, c, layer_boundaries, threshold)
@@ -245,11 +253,11 @@ def save_hlf(hlf, filename):
         pickle.dump(hlf, file)
     print("Saving file with high-level features DONE.")
 
-def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False):
+def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False, dataset=1):
     """Creates the dataloaders used to train the VAE model."""
     
     # load the data from the hdf5 file
-    data, layer_boundaries = load_data(filename, particle_type)
+    data, layer_boundaries = load_data(filename, particle_type, dataset=dataset)
 
     # preprocess the data and append the extra dims
     x, c = preprocess(data, layer_boundaries, eps)

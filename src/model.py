@@ -458,6 +458,18 @@ class LogitTransformationVAE:
     def __call__(self, x):
         return self.forward(x)
  
+    
+class IdentityTransformationVAE:
+    def __init__(self, rev=False, alpha=1.e-6):
+        self.alpha = alpha
+        self.rev = rev
+        
+    def forward(self, x):
+        return x
+        
+    def __call__(self, x):
+        return self.forward(x)
+ 
   
 class noise_layer(nn.Module):
     def __init__(self, noise_width, layer_boundaries, rev, logit_space=False, data_space=False, logit_function=None):
@@ -553,7 +565,7 @@ class noise_layer(nn.Module):
     
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, 
-                 particle_type="photon",dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
+                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
                  noise_width=None, smearing_self=1.0, smearing_share=0.0):
         # TODO: eps is not passed in the normalize and unnormalize funcs. -> Not using the params value
         super(CVAE, self).__init__()
@@ -576,6 +588,7 @@ class CVAE(nn.Module):
         
         # Create a logit preprocessing
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
+        # self.logit_trafo_in = IdentityTransformationVAE(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
         self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
@@ -586,6 +599,7 @@ class CVAE(nn.Module):
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
+        # self.logit_trafo_out = IdentityTransformationVAE(alpha=alpha, rev=True)
         
         # the hyperparamters for the reco_loss
         self.beta = beta
@@ -593,6 +607,7 @@ class CVAE(nn.Module):
         
         # needed for the smearing matrix (geometry info)
         self.particle_type = particle_type
+        self.dataset = dataset # The number of the dataset 1,2 or 3...
         
         # parameters for layer normalization stability
         self.eps = eps
@@ -720,7 +735,7 @@ class CVAE(nn.Module):
             return neighbors
 
         # TODO: Adjust the particle type
-        hlf_true = data_util.get_hlf(x, c, self.particle_type, self.layer_boundaries, threshold=1.e-10)
+        hlf_true = data_util.get_hlf(x, c, self.particle_type, self.layer_boundaries, threshold=1.e-10, dataset=self.dataset)
 
         smearing_matrix = np.zeros((len(hlf_true.showers[0]), len(hlf_true.showers[0])))
         smearing_matrix.shape
@@ -966,14 +981,14 @@ class cyclic_padding(nn.Module):
 
 class CCVAE(CVAE):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, kernel_size, channel_list, padding,
-                 particle_type="photon", dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None,
+                 particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None,
                  smearing_self=1.0, smearing_share=0.0):
                 
         cond_dim = cond.shape[1]
         input_dim = input.shape[1]
         
         # Initialize CVAE
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, 
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, 
                          dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share)
         
         # Unroll the data and seperate the detector layers (only take the first 10 points for speedup just need the shapes
@@ -1208,8 +1223,8 @@ class CCVAE(CVAE):
     
 
 class CAE(CVAE):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type="photon", dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share)
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0):
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share)
         
         self.encoder[-1] = nn.Linear(hidden_sizes[-1], latent_dim)
     
