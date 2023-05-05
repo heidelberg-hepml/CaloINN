@@ -12,7 +12,7 @@ class MyDataLoader:
     shuffle: bool
 
     def __init__(self, data: torch.Tensor, cond: torch.Tensor, batch_size: int,
-                drop_last:bool=False, shuffle:bool=True, width_noise:float=1e-7, fixed_noise=False) -> None:
+                drop_last:bool=False, shuffle:bool=True, width_noise:float=1e-7) -> None:
         """
             Initializes MyDataLoader class.
 
@@ -31,31 +31,35 @@ class MyDataLoader:
         self.shuffle = shuffle
         self.width_noise  = width_noise
         self.noise_distribution = torch.distributions.Uniform(torch.tensor(0., device=data.device), torch.tensor(1., device=data.device))
-        # self.noise_distribution = torch.distributions.Beta(torch.tensor(3., device=data.device), torch.tensor(3., device=data.device))
-        
-        self.fixed_noise = fixed_noise
-        if fixed_noise:
-            self.data = self.add_noise(self.data)
+        self.noise_distribution_2 = torch.distributions.Uniform(torch.tensor(1.0e-6, device=data.device), torch.tensor(1.0e-5, device=data.device))
+       # self.noise_distribution = torch.distributions.Beta(torch.tensor(3., device=data.device), torch.tensor(3., device=data.device))
 
         if self.drop_last:
             self.max_batch = len(self.data) // self.batch_size
         else:
             self.max_batch = math.ceil(len(self.data) / self.batch_size)
+	
+    def u_noise(self, us):
+        uc = torch.clone(us)
+        #noise = (torch.rand(uc.shape, device=uc.device)*(1.0e-3 - 1.0e-6) + 1.0e-6)*(-1)*torch.sign(uc-0.5)
+        noise = self.noise_distribution_2.sample(uc.shape)*(-1.*torch.sign(uc-0.5))
+        return noise
 
     def add_noise(self, input: torch.Tensor) -> torch.Tensor:
         noise = self.noise_distribution.sample(input.shape)*self.width_noise
+        #noise[:, -5] = 0.0
+        #noise[:, -4:] = self.u_noise(input[:, -4:])
         return input + noise.reshape(input.shape)
-    
-    def fix_noise(self):
-        if self.fixed_noise:
-            print("Noise already fixed")
-            return 
-        else:
-            self.fixed_noise = True
-            self.data = self.add_noise(self.data)
-    
-    def drop_last_batch(self):
-        self.max_batch = len(self.data) // self.batch_size
+
+    def add_noise_v2(self, input: torch.Tensor) -> torch.Tensor:
+        noise = self.noise_distribution.sample(input.shape)*self.q
+        
+        #mask = input==0.
+        #input[mask] += noise[mask]
+        return input
+
+    def set_quantiles(self, q: torch.Tensor) -> torch.Tensor:
+        self.q = q
 
     def __len__(self) -> int:
         return self.max_batch
@@ -77,9 +81,7 @@ class MyDataLoader:
         last = min(first+self.batch_size, len(self.data))
         idx = self.index[first:last]
         self.batch += 1
-        if not self.fixed_noise:
-            data = torch.clone(self.add_noise(self.data[idx]))
-        else:
-            data = torch.clone(self.data[idx])
+        data = torch.clone(self.add_noise(self.data[idx]))
+        #data[:,:-3].clamp_(max=1.0)
         cond = torch.clone(self.cond[idx])
         return data, cond

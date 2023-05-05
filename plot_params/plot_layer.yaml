@@ -13,7 +13,7 @@ e_layer_%layer_log.pdf:
     range: [(1e-2, 1e-1, 1e-2)[%layer], (2, 3, 2)[%layer]]
     n_bins: 99
 
-e_normd_layer_%layer.pdf:
+e_normd_layer_%layer_log.pdf:
     label: '\\(E_%layer/E_{tot}\\)'
     func: calc_e_layer_normd
     args: {'layer', %layer}

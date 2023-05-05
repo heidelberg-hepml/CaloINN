@@ -8,8 +8,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import FrEIA.modules as fm
 
-import matplotlib.pyplot as plt
-import numpy as np
 
 class CubicSplineBlock(fm.InvertibleModule):
 
@@ -357,6 +355,7 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
                  num_bins: int = 10,
                  bounds_init: float = 1.,
                  permute_soft: bool = False,
+                 permute_layer: bool = False,
                  tails='linear',
                  bounds_type="SOFTPLUS"):
 
@@ -413,18 +412,20 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
         self.in_channels         = channels
         self.bounds = self.bounds_activation(torch.ones(1, self.splits[1], *([1] * self.input_rank)) * float(bounds))
         self.tails = tails
-
+        
+        lay_dim = np.array([0, 288, 144, 72, 3])
         if permute_soft:
             w = special_ortho_group.rvs(channels)
+        elif permute_layer:
+            w = np.zeros((channels, channels))
+            for k in range(len(lay_dim[1:])):
+                for i, j in enumerate(np.random.permutation(lay_dim[k+1])):
+                    w[i+np.cumsum(lay_dim)[k], j+np.cumsum(lay_dim)[k]] = 1. 
         else:
             w = np.zeros((channels, channels))
             for i, j in enumerate(np.random.permutation(channels)):
                 w[i, j] = 1.
 
-        # self.w_perm = nn.Parameter(torch.FloatTensor(w).view(channels, channels, *([1] * self.input_rank)),
-        #                            requires_grad=False)
-        # self.w_perm_inv = nn.Parameter(torch.FloatTensor(w.T).view(channels, channels, *([1] * self.input_rank)),
-        #                                requires_grad=False)
         self.w_perm = nn.Parameter(torch.Tensor(w).view(channels, channels, *([1] * self.input_rank)),
                                    requires_grad=False)
         self.w_perm_inv = nn.Parameter(torch.Tensor(w.T).view(channels, channels, *([1] * self.input_rank)),
@@ -433,6 +434,7 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
         if subnet_constructor is None:
             raise ValueError("Please supply a callable subnet_constructor"
                              "function or object (see docstring)")
+        print(self.splits)
         self.subnet = subnet_constructor(self.splits[0] + self.condition_channels, (3 * self.num_bins - 1) * self.splits[1])
         self.last_jac = None
 
@@ -533,22 +535,6 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
             c = - input_delta * (inputs - input_cumheights)
 
             discriminant = b.pow(2) - 4 * a * c
-            
-            ######################################################################
-            # Mini-Debug terminal
-            if not (discriminant >= 0).all():
-                print(f"{discriminant=}, \n {a=}, \n {b=}, \n {c=}, \n {theta=}")
-                while True:
-                    inp = input()
-                    print(inp)
-                    if inp=="break":
-                        break
-                    try:
-                        print(eval(inp), flush=True)
-                    except:
-                        print("Cannot do this", flush=True)
-            #######################################################################
-            
             assert (discriminant >= 0).all()
 
             root = (2 * c) / (-b - torch.sqrt(discriminant))
@@ -606,18 +592,298 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
     def forward(self, x, c=[], rev=False, jac=True):
         '''See base class docstring'''
         self.bounds = self.bounds.to(x[0].device)
-        
-        # For debugging
-        # print(np.exp(c[0].cpu().numpy()))
-        self.cond = torch.exp(c[0])
-        self.data = x[0]
 
         if rev:
             x, global_scaling_jac = self._permute(x[0], rev=True)
             x = (x,)
 
+        #x1 = torch.cat((x[0][:, :144], x[0][:, 288:360], x[0][:, 432:468]), dim=1)
+        #x2 =  torch.cat((x[0][:, 144:288], x[0][:, 360:432], x[0][:, 468:]), dim=1)
         x1, x2 = torch.split(x[0], self.splits, dim=1)
+        #print(x[0].shape, x1.shape, x2.shape)
+        if self.conditional:
+            x1c = torch.cat([x1, *c], 1)
+        else:
+            x1c = x1
 
+        if not rev:
+            theta = self.subnet(x1c).reshape(x1c.shape[0], self.splits[1], 3*self.num_bins - 1)
+            x2, j2 = self._unconstrained_rational_quadratic_spline(x2, theta, rev=False)
+        else:
+            theta = self.subnet(x1c).reshape(x1c.shape[0], self.splits[1], 3*self.num_bins - 1)
+            x2, j2 = self._unconstrained_rational_quadratic_spline(x2, theta, rev=True)
+        log_jac_det = j2
+        x_out = torch.cat((x1, x2), 1)
+
+        if not rev:
+            x_out, global_scaling_jac = self._permute(x_out, rev=False)
+        # add the global scaling Jacobian to the total.
+        # trick to get the total number of non-channel dimensions:
+        # number of elements of the first channel of the first batch member
+        n_pixels = x_out[0, :1].numel()
+        log_jac_det += (-1)**rev * n_pixels * global_scaling_jac
+        return (x_out,), log_jac_det
+
+    def output_dims(self, input_dims):
+        return input_dims
+
+class myRationalQuadraticSplineBlock(fm.InvertibleModule):
+
+    DEFAULT_MIN_BIN_WIDTH = 1e-3
+    DEFAULT_MIN_BIN_HEIGHT = 1e-3
+    DEFAULT_MIN_DERIVATIVE = 1e-3
+
+    def __init__(self, dims_in, dims_c=[],
+                 subnet_constructor: Callable = None,
+                 num_bins: int = 10,
+                 bounds_init: float = 1.,
+                 permute_soft: bool = False,
+                 permute_layer: bool = True,
+                 tails='linear',
+                 bounds_type="SOFTPLUS"):
+
+        super().__init__(dims_in, dims_c)
+        channels = dims_in[0][0]
+        # rank of the tensors means 1d, 2d, 3d tensor etc.
+        self.input_rank = len(dims_in[0]) - 1
+        # tuple containing all dims except for batch-dim (used at various points)
+        self.sum_dims = tuple(range(1, 2 + self.input_rank))
+        if len(dims_c) == 0:
+            self.conditional = False
+            self.condition_channels = 0
+        else:
+            assert tuple(dims_c[0][1:]) == tuple(dims_in[0][1:]), \
+                F"Dimensions of input and condition don't agree: {dims_c} vs {dims_in}."
+            self.conditional = True
+            self.condition_channels = sum(dc[0] for dc in dims_c)
+
+        split_len1 = (channels - 3) // 2
+        split_len2 = (channels - 3) // 2 + 3
+        self.splits = [split_len1, split_len2]
+        self.num_bins = num_bins
+        if self.DEFAULT_MIN_BIN_WIDTH * self.num_bins > 1.0:
+            raise ValueError('Minimal bin width too large for the number of bins')
+        if self.DEFAULT_MIN_BIN_HEIGHT * self.num_bins > 1.0:
+            raise ValueError('Minimal bin height too large for the number of bins')
+
+        try:
+            self.permute_function = {0: F.linear,
+                                     1: F.conv1d,
+                                     2: F.conv2d,
+                                     3: F.conv3d}[self.input_rank]
+        except KeyError:
+            raise ValueError(f"Data is {1 + self.input_rank}D. Must be 1D-4D.")
+
+
+
+        if bounds_type == 'SIGMOID':
+            bounds = 2. - np.log(10. / bounds_init - 1.)
+            self.bounds_activation = (lambda a: 10 * torch.sigmoid(a - 2.))
+        elif bounds_type == 'SOFTPLUS':
+            bounds = 2. * np.log(np.exp(0.5 * 10. * bounds_init) - 1)
+            self.softplus = nn.Softplus(beta=0.5)
+            self.bounds_activation = (lambda a: 0.1 * self.softplus(a))
+        elif bounds_type == 'EXP':
+            bounds = np.log(bounds_init)
+            self.bounds_activation = (lambda a: torch.exp(a))
+        elif bounds_type == 'LIN':
+            bounds = bounds_init
+            self.bounds_activation = (lambda a: a)
+        else:
+            raise ValueError('Global affine activation must be "SIGMOID", "SOFTPLUS" or "EXP"')
+
+        self.in_channels         = channels
+        self.bounds = self.bounds_activation(torch.ones(1, self.splits[1], *([1] * self.input_rank)) * float(bounds))
+        self.tails = tails
+        
+        lay_dim = np.array([0, 288, 144, 72, 3])
+        if permute_soft:
+            w = special_ortho_group.rvs(channels)
+        elif permute_layer:
+            w = np.zeros((channels, channels))
+            for k in range(len(lay_dim[1:])):
+                for i, j in enumerate(np.random.permutation(lay_dim[k+1])):
+                    w[i+np.cumsum(lay_dim)[k], j+np.cumsum(lay_dim)[k]] = 1. 
+        else:
+            w = np.zeros((channels, channels))
+            for i, j in enumerate(np.random.permutation(channels)):
+                w[i, j] = 1.
+
+        self.w_perm = nn.Parameter(torch.Tensor(w).view(channels, channels, *([1] * self.input_rank)),
+                                   requires_grad=False)
+        self.w_perm_inv = nn.Parameter(torch.Tensor(w.T).view(channels, channels, *([1] * self.input_rank)),
+                                       requires_grad=False)
+
+        if subnet_constructor is None:
+            raise ValueError("Please supply a callable subnet_constructor"
+                             "function or object (see docstring)")
+        print(self.splits)
+        self.subnet = subnet_constructor(self.splits[0] + self.condition_channels, (3 * self.num_bins - 1) * self.splits[1])
+        self.last_jac = None
+
+    def _unconstrained_rational_quadratic_spline(self,
+                                   inputs,
+                                   theta,
+                                   rev=False):
+
+        inside_interval_mask = torch.all((inputs >= -self.bounds) & (inputs <= self.bounds),
+                                         dim = -1)
+        outside_interval_mask = ~inside_interval_mask
+
+        masked_outputs = torch.zeros_like(inputs)
+        masked_logabsdet = torch.zeros(inputs.shape[0], dtype=inputs.dtype).to(inputs.device)
+
+        min_bin_width=self.DEFAULT_MIN_BIN_WIDTH
+        min_bin_height=self.DEFAULT_MIN_BIN_HEIGHT
+        min_derivative=self.DEFAULT_MIN_DERIVATIVE
+
+
+        if self.tails == 'linear':
+            masked_outputs[outside_interval_mask] = inputs[outside_interval_mask]
+            masked_logabsdet[outside_interval_mask] = 0
+
+        else:
+            raise RuntimeError('{} tails are not implemented.'.format(self.tails))
+        inputs = inputs[inside_interval_mask]
+        theta = theta[inside_interval_mask, :]
+        bound = torch.min(self.bounds)
+
+        left = -bound
+        right = bound
+        bottom = -bound
+        top = bound
+
+        #if not rev and (torch.min(inputs) < left or torch.max(inputs) > right):
+        #    raise ValueError("Spline Block inputs are not within boundaries")
+        #elif rev and (torch.min(inputs) < bottom or torch.max(inputs) > top):
+        #    raise ValueError("Spline Block inputs are not within boundaries")
+
+        unnormalized_widths = theta[...,:self.num_bins]
+        unnormalized_heights = theta[...,self.num_bins:self.num_bins*2]
+        unnormalized_derivatives = theta[...,self.num_bins*2:]
+
+        unnormalized_derivatives = F.pad(unnormalized_derivatives, pad=(1, 1))
+        constant = np.log(np.exp(1 - min_derivative) - 1)
+        unnormalized_derivatives[..., 0] = constant
+        unnormalized_derivatives[..., -1] = constant
+
+
+
+        widths = F.softmax(unnormalized_widths, dim=-1)
+        widths = min_bin_width + (1 - min_bin_width * self.num_bins) * widths
+        cumwidths = torch.cumsum(widths, dim=-1)
+        cumwidths = F.pad(cumwidths, pad=(1, 0), mode='constant', value=0.0)
+        cumwidths = (right - left) * cumwidths + left
+        cumwidths[..., 0] = left
+        cumwidths[..., -1] = right
+        widths = cumwidths[..., 1:] - cumwidths[..., :-1]
+
+        derivatives = min_derivative + F.softplus(unnormalized_derivatives)
+
+        heights = F.softmax(unnormalized_heights, dim=-1)
+        heights = min_bin_height + (1 - min_bin_height * self.num_bins) * heights
+        cumheights = torch.cumsum(heights, dim=-1)
+        cumheights = F.pad(cumheights, pad=(1, 0), mode='constant', value=0.0)
+        cumheights = (top - bottom) * cumheights + bottom
+        cumheights[..., 0] = bottom
+        cumheights[..., -1] = top
+        heights = cumheights[..., 1:] - cumheights[..., :-1]
+
+        if rev:
+            bin_idx = self.searchsorted(cumheights, inputs)[..., None]
+        else:
+            bin_idx = self.searchsorted(cumwidths, inputs)[..., None]
+
+        input_cumwidths = cumwidths.gather(-1, bin_idx)[..., 0]
+        input_bin_widths = widths.gather(-1, bin_idx)[..., 0]
+
+        input_cumheights = cumheights.gather(-1, bin_idx)[..., 0]
+        delta = heights / widths
+        input_delta = delta.gather(-1, bin_idx)[..., 0]
+
+        input_derivatives = derivatives.gather(-1, bin_idx)[..., 0]
+        input_derivatives_plus_one = derivatives[..., 1:].gather(-1, bin_idx)[..., 0]
+
+        input_heights = heights.gather(-1, bin_idx)[..., 0]
+
+        if rev:
+            a = (((inputs - input_cumheights) * (input_derivatives
+                                                 + input_derivatives_plus_one
+                                                 - 2 * input_delta)
+                  + input_heights * (input_delta - input_derivatives)))
+            b = (input_heights * input_derivatives
+                 - (inputs - input_cumheights) * (input_derivatives
+                                                  + input_derivatives_plus_one
+                                                  - 2 * input_delta))
+            c = - input_delta * (inputs - input_cumheights)
+
+            discriminant = b.pow(2) - 4 * a * c
+            assert (discriminant >= 0).all()
+
+            root = (2 * c) / (-b - torch.sqrt(discriminant))
+            outputs = root * input_bin_widths + input_cumwidths
+
+            theta_one_minus_theta = root * (1 - root)
+            denominator = input_delta + ((input_derivatives + input_derivatives_plus_one - 2 * input_delta)
+                                         * theta_one_minus_theta)
+            derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * root.pow(2)
+                                                         + 2 * input_delta * theta_one_minus_theta
+                                                         + input_derivatives * (1 - root).pow(2))
+            logabsdet = - torch.log(derivative_numerator) + 2 * torch.log(denominator)
+
+        else:
+            theta = (inputs - input_cumwidths) / input_bin_widths
+            theta_one_minus_theta = theta * (1 - theta)
+
+            numerator = input_heights * (input_delta * theta.pow(2)
+                                         + input_derivatives * theta_one_minus_theta)
+            denominator = input_delta + ((input_derivatives + input_derivatives_plus_one - 2 * input_delta)
+                                         * theta_one_minus_theta)
+            outputs = input_cumheights + numerator / denominator
+
+            derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * theta.pow(2)
+                                                         + 2 * input_delta * theta_one_minus_theta
+                                                         + input_derivatives * (1 - theta).pow(2))
+            logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
+
+        logabsdet = torch.sum(logabsdet, dim=1)
+
+        masked_outputs[inside_interval_mask], masked_logabsdet[inside_interval_mask] = outputs, logabsdet
+
+        return masked_outputs, masked_logabsdet
+
+    def searchsorted(self, bin_locations, inputs, eps=1e-6):
+        bin_locations[..., -1] += eps
+        return torch.sum(
+            inputs[..., None] >= bin_locations,
+            dim=-1
+        ) - 1
+
+    def _permute(self, x, rev=False):
+        '''Performs the permutation and scaling after the coupling operation.
+        Returns transformed outputs and the LogJacDet of the scaling operation.'''
+
+        scale = torch.ones(x.shape[-1]).to(x.device)
+        perm_log_jac = torch.sum(-torch.log(scale))
+        if rev:
+            return (self.permute_function(x * scale, self.w_perm_inv),
+                    perm_log_jac)
+        else:
+            return (self.permute_function(x, self.w_perm) / scale,
+                    perm_log_jac)
+
+    def forward(self, x, c=[], rev=False, jac=True):
+        '''See base class docstring'''
+        self.bounds = self.bounds.to(x[0].device)
+
+        if rev:
+            x, global_scaling_jac = self._permute(x[0], rev=True)
+            x = (x,)
+
+        x1 = torch.cat((x[0][:, :144], x[0][:, 288:360], x[0][:, 432:468]), dim=1)
+        x2 =  torch.cat((x[0][:, 144:288], x[0][:, 360:432], x[0][:, 468:]), dim=1)
+        #x1, x2 = torch.split(x[0], self.splits, dim=1)
+        #print(x[0].shape, x1.shape, x2.shape)
         if self.conditional:
             x1c = torch.cat([x1, *c], 1)
         else:

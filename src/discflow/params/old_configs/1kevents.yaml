@@ -1,0 +1,41 @@
+# #########
+# # Data: #
+# #########
+#
+test_split : 0.999
+data_path : "./data/"
+transform : True
+reduce_data : True
+sort_p_t : True
+#
+# ##############
+# # Training:  #
+# ##############
+#
+lr : 8.e-4
+batch_size : 1024
+weight_decay : 1.e-5
+betas : [0.9, 0.999]
+n_epochs : 800
+#
+# #################
+# # Architecture: #
+# #################
+#
+n_blocks : 36
+internal_size : 256
+layers_per_block : 3
+dropout : 0.0
+clamping   : 0.8
+#
+#
+# ###################
+# # Loading/saving: #
+# ###################
+#
+filename : '1kevents.pth'               # Save parameters under this name
+#
+max_val_batches : 10
+checkpoint_save_interval : 30
+checkpoint_save_overwrite : True            # Overwrite each checkpoint with the next one
+# checkpoint_on_error : True                  # Write out a checkpoint if the training crashes
