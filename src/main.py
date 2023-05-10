@@ -27,9 +27,13 @@ def main():
     device = 'cuda:0' if use_cuda else 'cpu'
 
     # set default parameters for the file locations using the particle type parameter
+    dataset = params.get("dataset", 1)
     if "data_path" not in params:
-        particle_type = params.get("particle_type", "pion")
-        data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
+        particle_type = params.get("particle_type", "phoron")
+        if dataset == 1:
+            data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
+        else:
+            data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset{dataset}/dataset_{dataset}_1.hdf5"
         params["data_path"] = data_path
 
 

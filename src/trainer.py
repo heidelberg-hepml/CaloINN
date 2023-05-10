@@ -66,13 +66,17 @@ class VAETrainer:
                           eps = params.get("eps", 1.e-10),
                           noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
-                          smearing_share=params.get("VAE_smearing_share", 0))
+                          smearing_share=params.get("VAE_smearing_share", 0),
+                          einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"))
         
         self.model = self.model.to(self.device)
         
         
         # Set the optimizer
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("VAE_lr", 1.e-4))
+        
+        # Configure a possible LR scheduler
+        self.set_scheduler()
         
         # Print the model
         print(self.model)
@@ -86,7 +90,37 @@ class VAETrainer:
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
+
+    def set_scheduler(self):
         
+        steps_per_epoch = len(self.train_loader)
+        
+        if self.params.get("VAE_lr_sched_mode", None) == "step":
+            self.scheduler = torch.optim.lr_scheduler.StepLR(
+                self.optim,
+                step_size = self.params["lr_decay_epochs"],
+                gamma = self.params["lr_decay_factor"],
+            )
+        elif self.params.get("VAE_lr_sched_mode", None) == "reduce_on_plateau":
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optim,
+                factor = 0.4,
+                patience = 50,
+                cooldown = 100,
+                threshold = 5e-5,
+                threshold_mode = "rel",
+                verbose=True
+            )
+        elif self.params.get("VAE_lr_sched_mode", None) == "one_cycle_lr":
+            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                self.optim,
+                self.params.get("VEA_max_lr", self.params["VAE_lr"]*10),
+                epochs = self.params.get("opt_epochs") or self.params["n_epochs"],
+                steps_per_epoch=steps_per_epoch)
+            
+        elif self.params.get("VAE_lr_sched_mode", None) is None:
+            self.scheduler = None
+
     def train(self):
         for epoch in range(self.epoch_offset+1, self.params['VAE_n_epochs']+1):
             
@@ -176,6 +210,11 @@ class VAETrainer:
             train_mse_loss += mse_loss.item()*len(x)
             train_mse_loss_logit += mse_loss_logit.item()*len(x)
             train_kl_loss += kl_loss.item()*len(x)
+            
+            # Save the LR if a scheduler is used
+            if self.scheduler is not None:
+                self.scheduler.step()
+                self.learning_rates.append(self.scheduler.get_last_lr()[0])
 
             # Save the maximum gradient for documentation
             for param in self.model.parameters():
@@ -332,6 +371,10 @@ class VAETrainer:
         plotting.plot_loss(self.doc.get_file('loss_mse_logit.pdf'), self.losses_train['mse_logit'], self.losses_test['mse_logit'])
         plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
         
+        # Plot the learning rate (if we use a scheduler)
+        if self.scheduler is not None:
+            plotting.plot_lr(self.doc.get_file('learning_rate.pdf'), self.learning_rates, len(self.train_loader))
+        
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
 
@@ -348,6 +391,9 @@ class VAETrainer:
         print(f'mse logit-loss (test): {test_mse_loss_logit}')
         print(f'kl loss (test): {test_kl_loss}')
         print(f'total loss (test): {test_loss}')
+        
+        if self.scheduler is not None:
+                print(f'lr: {self.scheduler.get_last_lr()[0]}')
 
         print(f'maximum gradient: {max_grad}')
         sys.stdout.flush()
@@ -359,7 +405,8 @@ class VAETrainer:
                     "losses_test": self.losses_test,
                     "losses_train": self.losses_train,
                     "grads": self.max_grad,
-                    "epoch": self.epoch,}, 
+                    "epoch": self.epoch,
+                    "learning_rates": self.learning_rates,}, 
                    
                    self.doc.get_file(f"model{epoch}.pt"))
                          
@@ -372,6 +419,7 @@ class VAETrainer:
         self.losses_train = state_dicts.get("losses_train", {})
         self.epoch = state_dicts.get("epoch", 0)
         self.max_grad = state_dicts.get("grads", [])
+        self.learning_rates = state_dicts.get("learing_rates", [])
         if update_offset:
             self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])

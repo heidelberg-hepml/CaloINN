@@ -225,13 +225,15 @@ def load_classifier(constructed_model, parser_args):
     print('classifier loaded successfully')
     return constructed_model
 
-def train_and_evaluate_cls(model, data_train, data_test, optim, arg):
+def train_and_evaluate_cls(model, data_train, data_test, optim, arg, scheduler=None):
     """ train the model and evaluate along the way"""
     best_eval_acc = float('-inf')
     arg.best_epoch = -1
     try:
         for i in range(arg.cls_n_epochs):
-            train_cls(model, data_train, optim, i, arg)
+            train_cls(model, data_train, optim, i, arg, scheduler=scheduler)
+            if scheduler is not None:
+                print(f'lr: {scheduler.get_last_lr()[0]}')
             with torch.no_grad():
                 eval_acc, _, _ = evaluate_cls(model, data_test, arg)
             if eval_acc > best_eval_acc:
@@ -247,7 +249,7 @@ def train_and_evaluate_cls(model, data_train, data_test, optim, arg):
         # is clearly visible
         pass
 
-def train_cls(model, data_train, optim, epoch, arg):
+def train_cls(model, data_train, optim, epoch, arg, scheduler=None):
     """ train one step """
     model.train()
     for i, data_batch in enumerate(data_train):
@@ -264,6 +266,9 @@ def train_cls(model, data_train, optim, epoch, arg):
         optim.zero_grad()
         loss.backward()
         optim.step()
+        
+        if scheduler is not None:
+            scheduler.step()
 
         if i % (len(data_train)//2) == 0:
             print('Epoch {:3d} / {}, step {:4d} / {}; loss {:.4f}'.format(
@@ -607,8 +612,21 @@ if __name__ == '__main__':
         train_dataloader = DataLoader(train_data, batch_size=args.cls_batch_size, shuffle=True)
         test_dataloader = DataLoader(test_data, batch_size=args.cls_batch_size, shuffle=False)
         val_dataloader = DataLoader(val_data, batch_size=args.cls_batch_size, shuffle=False)
+        
+        
+        ##########################################################################
+        # steps_per_epoch = len(train_dataloader)
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        #     optimizer,
+        #     max_lr=args.cls_lr,
+        #     epochs = args.cls_n_epochs,
+        #     steps_per_epoch=steps_per_epoch)
+        
+        scheduler = None
+        ###########################################################################
+        
 
-        train_and_evaluate_cls(classifier, train_dataloader, test_dataloader, optimizer, args)
+        train_and_evaluate_cls(classifier, train_dataloader, test_dataloader, optimizer, args, scheduler=scheduler)
         classifier = load_classifier(classifier, args)
 
         with torch.no_grad():
