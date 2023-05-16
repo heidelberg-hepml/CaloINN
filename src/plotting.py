@@ -67,7 +67,7 @@ def plot_average_table(data, save_file):
 
     plt.savefig(save_file)
     plt.close()
-
+  
 def plot_hist(
         file_name,
         data,
@@ -84,17 +84,39 @@ def plot_hist(
         ax=None,
         panel_ax=None,
         panel_scale="linear",
-        density=True):
-    data = data[np.isfinite(data)]
+        density=True,
+        labels=None):
+    
+    if type(data)==list and type(data[0]==np.ndarray):
+        data_list = data
+    else:
+        data_list = [data]
+    
+    for i in range(len(data_list)):
+        data_list[i] = data_list[i][np.isfinite(data_list[i])]
+    
     reference = reference[np.isfinite(reference)]
 
+    all_data = data_list + [reference]
+
+    # Set the plotting boundaries
     if vmin is None:
-        vmin = min(np.min(data), np.min(reference))
+        vmin = np.inf
+        for elem in all_data:
+            vmin = np.min([np.min(elem), vmin])
     if vmax is None:
-        vmax = max(np.max(data), np.max(reference))
+        vmax = -np.inf
+        for elem in all_data:
+            vmax = np.max([np.max(elem), vmax])
+            
+    # Get the bins (Modifications needed if logscale is used)
     if xscale=='log':
+        
         if vmin==0:
-            vmin = min(np.min(data[data>1e-7]), np.min(reference[reference>1e-7]))
+            vmin = np.inf     
+            for elem in all_data:
+                vmin = np.min([np.min(elem[elem>1e-7]), vmin])
+                
         if isinstance(n_bins, int):
             bins = np.logspace(np.log10(vmin), np.log10(vmax), n_bins)
         else:
@@ -119,12 +141,27 @@ def plot_hist(
     if ax is None:
         create_fig = True
         fig, ax = plt.subplots(1,1,figsize=(6,6))
-
-    ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
-        alpha=1, color=color, density=density, label='VAE')
+        
+        
+    for i, data in enumerate(data_list):
+        
+        # Modify the labels
+        if labels is None:
+            label = "VAE"
+        else:
+            label = labels[i]
+        
+        # Add the first trainer to the panel and use the default color code
+        if i == 0:
+            ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
+                alpha=1, density=density, label=label, color=color)
+        else:
+            ax.hist(data, bins=bins, histtype='step', linewidth=2,
+                alpha=1, density=density, label=label)
 
     ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
             alpha=0.5, color=color, density=density, label='GEANT')
+
 
     if panel_ax is not None:
         assert len(bins_0) == len(bins_1)
@@ -135,14 +172,12 @@ def plot_hist(
         ns_1[mask] = 1
         panel_data = ns_0/ns_1
         
-        panel_data[mask] = float("nan")
+        panel_data[mask] = 0
         
         widths = 1.2*(bins_1[1:] - bins_1[:-1])
+        panel_ax.axhline(1, color="red", ls="--")
+        panel_ax.hist(bins_0[:-1], bins[1:]-widths, weights=panel_data, histtype="step", lw=2, label='VAE/GEANT')
         
-        panel_ax.bar(bins_0[:-1], panel_data, label='VAE/GEANT', width=widths)
-        
-        panel_ax.plot([vmin, vmax],[1,1], color="red", ls="--", marker=None)
-
     ax.set_yscale(yscale)
     ax.set_xscale(xscale)
     if panel_ax is not None:
@@ -168,14 +203,17 @@ def plot_hist(
             
     plt.xticks(fontproperties=tickfont)
     plt.yticks(fontproperties=tickfont)
+    
+    ax.legend()
 
     if create_fig:
         fig.tight_layout()
         fig.savefig(file_name, bbox_inches='tight')
         
+    # Why this line?
     if panel_ax is None:
         plt.close()
-    
+        
 def plot_loss(
         file_name,
         loss_train,
@@ -303,6 +341,11 @@ def get_all_plot_parameters(hlf, params):
     plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
                 {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}}$', "p_ref": particle_type,
                 "vmin": 0.5, "vmax": 1.5, "yscale": "linear"}))
+    
+    
+    # All voxel energies flattened
+    plots.append((Etot_Einc, 'Etot_Einc_log.pdf', {},
+                {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}} (Logscale)$', "p_ref": particle_type, "xscale": "log"}))
 
     # layer energy plots
     for layer in hlf.GetElayers().keys():
@@ -365,9 +408,8 @@ def get_all_plot_parameters(hlf, params):
         plots.append((ECWidthPhis, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Width of Center of Energy in \n$\\Delta\\phi$ in layer {layer} [mm]", 
                     "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
-
-    # All voxel energies flattened
-    plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
+    
+    plots.append((cell_dist, 'total_energy_dist.pdf', {},
                 {"axis_label": r'Voxel energy distribution', "p_ref": particle_type, "xscale": "log"}))
     
     # Sparsity
