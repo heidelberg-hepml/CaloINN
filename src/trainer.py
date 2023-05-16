@@ -42,9 +42,10 @@ class VAETrainer:
             batch_size=params['VAE_batch_size'],
             eps=params.get("eps", 1.e-10),
             device=device,
-            drop_last=False,
+            drop_last=True,
             shuffle=True,
-            dataset=params.get("dataset", 1))
+            dataset=params.get("dataset", 1),
+            e_inc_index=params.get("e_inc_index", None))
         
         data = self.train_loader.data
         cond = self.train_loader.cond
@@ -330,7 +331,7 @@ class VAETrainer:
 
     #         return data      
     
-    def plot_results(self, epoch):
+    def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
         
@@ -342,8 +343,12 @@ class VAETrainer:
         generated = self.get_reco(data, cond)
                     
         # Now create the no-errorbar histograms
-        subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-        plot_dir = self.doc.get_file(subdir)
+        if plot_path is None:
+            subdir = os.path.join("plots", f'epoch_{epoch:03d}')
+            plot_dir = self.doc.get_file(subdir)
+        else:
+            plot_dir = plot_path
+            
         plotting.plot_all_hist(
             data, cond, generated, cond, self.params,
             self.layer_boundaries, plot_dir)
@@ -361,7 +366,10 @@ class VAETrainer:
             plt.xlabel(r"$\mu_0$")
             plt.ylabel(r"$\mu_1$")
             # plt.xlim(1.e-9, 5.e1)
-            plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "0_1_latent.png")))
+            if plot_path is None:
+                plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "0_1_latent.png")))
+            else:
+                plt.savefig(os.path.join(plot_path, "0_1_latent.png"))
             plt.close()
       
     def plot_losses(self):
@@ -1660,6 +1668,11 @@ class ECAETrainer:
             0.08264463, 0.08264463, 0.08264463, 0.08264463, 0.08264463,
             0.08264463, 0.08264463, 0.08264463, 0.08264463, 0.08264463,
             0.08264463, 0.04132231, 0.02479339, 0.01652893, 0.00826446])
+        
+        e_inc_index = self.params.get("e_inc_index", None)
+        if e_inc_index is not None:
+            energy_values = energy_values[[e_inc_index]]
+            probabilities = torch.tensor([1])
                
         
         with torch.no_grad():
