@@ -1,6 +1,6 @@
 # Documenter information
-run_name: VAE
-# block_name: Test_dataset_2
+run_name: test_ae
+# block_name: Try_to_improve_recons
 
 
 # Data
@@ -11,12 +11,10 @@ eps: 1.e-10
 threshold: 1.e-10
 
 # VAE Training
-VAE_lr_sched_mode: null
-VAE_max_lr: 1.e-4
 VAE_lr: 1.e-4
 VAE_batch_size: 256
 VAE_n_epochs: 750
-VAE_save_interval: 100
+VAE_save_interval: 200
 VAE_keep_models: 1000
 VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
 VAE_MAE_data: False # Use MAE instead of MSE for data loss
@@ -36,9 +34,7 @@ VAE_dropout: 0.0
 
 # Preprocessing
 alpha: 1.e-6
-VAE_width_noise: 1.e-6
-VAE_einc_preprocessing: "logit"
-e_inc_index: null
+VAE_width_noise: 1.e-10
 
 
 # Plotting

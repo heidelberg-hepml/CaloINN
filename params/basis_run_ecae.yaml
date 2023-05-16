@@ -1,29 +1,49 @@
 # General
 
 # Documenter information
-run_name: Default_setup
-vae_dir: "/remote/gpu06/ernst/Master_Thesis/add_VAE/CaloINN/results/2023_02_16_Test_ECAE/VAEs/piplus"
+run_name: ECAE_not_norm_trafo
+# block_name: Use_einc_number_4_large_net
+# vae_dir: /remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/results/2023_04_17_081500_3_gamma_large_net
+vae_dir: null
 # Data
 dtype: float32
-particle_type: piplus
+particle_type: photon
+val_frac: 0.2
+eps: 1.e-10
+threshold: 1.e-10
+# Plotting
+min_energy: 10 # corresponds to the threshold combined with a 10^5 normalization
 
 
 # VAE
 
 # VAE Preprocessing
 alpha: 1.e-6
-VAE_width_noise: 1.e-5
+VAE_width_noise: 1.e-6
+# VAE_einc_preprocessing: "logit"
+VAE_einc_preprocessing: "hot_one"
+e_inc_index: null
 # VAE Training
-VAE_lr: 5.e-4
+VAE_lr_sched_mode: null
+VAE_max_lr: 1.e-4
+VAE_lr: 1.e-4
 VAE_batch_size: 256
-VAE_n_epochs: 500
+VAE_n_epochs: 750
 VAE_save_interval: 100
 VAE_keep_models: 1001
+VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
+VAE_MAE_data: False # Use MAE instead of MSE for data loss
+VAE_zero_logit: False # Set the logit loss to 0
+VAE_zero_data: False # Set the data loss to 0
+VAE_smearing_self: 0.6
+VAE_smearing_share: 0.05
 # VAE Architecture
-VAE_hidden_sizes: [4500, 1000, 150]
+VAE_hidden_sizes: [10000, 3000, 500]
+# VAE_hidden_sizes: [700, 400, 150]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
-VAE_gamma: 1.e+4
+VAE_gamma: 1.e+3
+VAE_dropout: 0.0
 
 
 # INN
@@ -54,23 +74,3 @@ bounds_init: 20
 permute_soft: False
 num_bins: 10
 dropout: 0.0
-
-
-# Classifier Test
-do_classifier_test: True
-# Classifier Training
-classifier_sigmoid_in_BCE: True
-classifier_lr: 2.e-4
-classifier_n_epochs: 100
-classifier_batch_size: 1000
-classifier_runs: 5
-# Classifier Architecture
-modes: ["DNN"]
-DNN_hidden_layers: 2
-DNN_hidden_neurons: 512
-DNN_dropout: 0.
-# Classifier Preprocessing
-classifier_threshold: True #needed
-classifier_normalize: False #needed
-classifier_use_logit: False #needed
-

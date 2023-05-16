@@ -1,18 +1,17 @@
 # Documenter information
-run_name: VAE
-# block_name: Test_dataset_2
+run_name: Default
+block_name: Test_dataset_2
 
 
 # Data
 dtype: float32
-particle_type: photon
+particle_type: electron
+dataset: 2
 val_frac: 0.2
 eps: 1.e-10
 threshold: 1.e-10
 
 # VAE Training
-VAE_lr_sched_mode: null
-VAE_max_lr: 1.e-4
 VAE_lr: 1.e-4
 VAE_batch_size: 256
 VAE_n_epochs: 750
@@ -30,15 +29,13 @@ VAE_smearing_share: 0.05
 VAE_hidden_sizes: [10000, 3000, 500]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
-VAE_gamma: 1.e+3
+VAE_gamma: 1.e+4
 VAE_dropout: 0.0
 
 
 # Preprocessing
 alpha: 1.e-6
-VAE_width_noise: 1.e-6
-VAE_einc_preprocessing: "logit"
-e_inc_index: null
+VAE_width_noise: 1.e-10
 
 
 # Plotting
