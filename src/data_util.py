@@ -264,11 +264,22 @@ def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, devic
     x, c = preprocess(data, layer_boundaries, eps)
     
     if e_inc_index is not None:
-        assert type(e_inc_index) == int
-        e_incs = np.unique(c[..., 0])
-        mask = (c[..., 0] == e_incs[e_inc_index])
-        print(f"Use incident energy {e_incs[e_inc_index]} ({mask.sum()} events)")
+        if type(e_inc_index) == int:
+            e_inc_index_list = [e_inc_index]
+        else:
+            e_inc_index_list = e_inc_index
         
+        mask = np.zeros_like(c[..., 0])
+        e_incs = np.unique(c[..., 0])
+        
+        for e_inc_index in e_inc_index_list:
+            
+            assert type(e_inc_index) == int
+            
+            mask = np.logical_or((c[..., 0] == e_incs[e_inc_index]), mask)
+                        
+            print(f"Use incident energy {e_incs[e_inc_index]} ({(c[..., 0] == e_incs[e_inc_index]).sum()} events)")
+            
         print(x.shape, c.shape)
         x = x[mask]
         c = c[mask]

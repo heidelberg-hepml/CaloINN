@@ -1671,9 +1671,14 @@ class ECAETrainer:
         
         e_inc_index = self.params.get("e_inc_index", None)
         if e_inc_index is not None:
-            energy_values = energy_values[[e_inc_index]]
-            probabilities = torch.tensor([1])
-               
+            
+            if type(e_inc_index) == int:
+                energy_values = energy_values[[e_inc_index]]
+                probabilities = torch.tensor([1])
+            else:
+                energy_values = energy_values[e_inc_index]
+                probabilities = probabilities[e_inc_index]
+                probabilities = probabilities / probabilities.sum()
         
         with torch.no_grad():
             
