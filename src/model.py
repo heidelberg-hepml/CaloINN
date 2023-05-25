@@ -448,20 +448,16 @@ class LogitTransformationVAE:
         
         # if self.rev:
         #     z = torch.exp(x) - self.alpha
-        #     jac = torch.sum( x, dim=1)
         # else:
         #     z = torch.log(x + self.alpha)
-        #     jac = - torch.sum( z, dim=1)
 
         return z
     
     # def forward(self, x):
     #     if self.rev:
     #         z = torch.exp(x) - self.alpha
-    #         jac = torch.sum( x, dim=1)
     #     else:
     #         z = torch.log(x + self.alpha)
-    #         jac = - torch.sum( z, dim=1)
     #     return z
         
     def __call__(self, x):
