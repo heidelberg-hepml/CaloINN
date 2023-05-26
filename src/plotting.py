@@ -67,8 +67,7 @@ def plot_average_table(data, save_file):
 
     plt.savefig(save_file)
     plt.close()
-  
-  
+ 
 def plot_hist(
         file_name,
         data,
@@ -87,13 +86,21 @@ def plot_hist(
         panel_scale="linear",
         density=True,
         labels=None,
-        errorbars_true=True,
+        errorbars_true=False,
         errorbars_fake=False):
+
+    if type(errorbars_fake) == bool:
+        errorbars_fake = [errorbars_fake]
     
     if type(data)==list and type(data[0]==np.ndarray):
         data_list = data
     else:
         data_list = [data]
+        
+    if len(errorbars_fake) != len(data_list):
+        assert len(errorbars_fake) == 1, "Wrong size for the errorbars index"
+        
+        errorbars_fake = [errorbars_fake[0] for _ in range(len(data_list))]
     
     for i in range(len(data_list)):
         data_list[i] = data_list[i][np.isfinite(data_list[i])]
@@ -177,8 +184,10 @@ def plot_hist(
                         facecolor="blue", alpha=0.3, step='post')
     
     # Plot the generated data
-    if not errorbars_fake:
-        for i, data in enumerate(data_list):
+    alt_colors = ["green", "red", "pink"]
+    
+    for i, data in enumerate(data_list):
+        if not errorbars_fake[i]:
             
             # Modify the labels
             if labels is None:
@@ -192,44 +201,64 @@ def plot_hist(
                     alpha=1, density=density, label=label, color=color)
             else:
                 ax.hist(data, bins=bins, histtype='step', linewidth=2,
-                    alpha=1, density=density, label=label)
+                    alpha=1, density=density, label=label, color=alt_colors[i])
     
-    else:
-        assert len(data_list) == 1
-        
-        # labels
-        if labels is None:
-            label = "VAE"
         else:
-            label = labels[0]
+            # labels
+            if labels is None:
+                label = "VAE"
+            else:
+                label = labels[i]
+                
+            data = data_list[i]
             
-        data = data_list[0]
-        
-        dup_last = lambda a: np.append(a, a[-1])
-
-        bins_0 = bins
-        
-        counts, _ = np.histogram(data, bins_1, density=False)
-        ns_0, _ = np.histogram(data, bins_1, density=True)
-        
-        mask = (counts == 0)
-        counts[mask] = 1
-        
-        data_err = ns_0 / np.sqrt(counts)
+            dup_last = lambda a: np.append(a, a[-1])
             
-        data_err[mask] = 0
-        
-        ax.step(bins_0, dup_last(ns_0), color="green", alpha=1,
-                        linewidth=1, where='post', label=label)
-        
-        ax.step(bins_0, dup_last(ns_0 - data_err), color="green", alpha=0.5,
-                        linewidth=0.5, where='post')
-        ax.step(bins_0, dup_last(ns_0 + data_err), color="green", alpha=0.5,
-                        linewidth=0.5, where='post')
+            if i == 0:
+                bins_0 = bins
+                
+                counts, _ = np.histogram(data, bins_0, density=False)
+                ns_0, _ = np.histogram(data, bins_0, density=True)
+                
+                mask = (counts == 0)
+                counts[mask] = 1
+                
+                data_err = ns_0 / np.sqrt(counts)
+                    
+                data_err[mask] = 0
+                
+                ax.step(bins_0, dup_last(ns_0), color=alt_colors[i], alpha=1,
+                                linewidth=1, where='post', label=label)
+                
+                ax.step(bins_0, dup_last(ns_0 - data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
+                ax.step(bins_0, dup_last(ns_0 + data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
 
-        ax.fill_between(bins_0, dup_last(ns_0 - data_err), dup_last(ns_0 + data_err), 
-                        facecolor="green", alpha=0.3, step='post')
-        
+                ax.fill_between(bins_0, dup_last(ns_0 - data_err), dup_last(ns_0 + data_err), 
+                                facecolor=alt_colors[i], alpha=0.3, step='post')
+            
+            else:                
+                counts, _ = np.histogram(data, bins, density=False)
+                ns, _ = np.histogram(data, bins, density=True)
+                
+                mask = (counts == 0)
+                counts[mask] = 1
+                
+                data_err = ns / np.sqrt(counts)
+                    
+                data_err[mask] = 0
+                
+                ax.step(bins, dup_last(ns), color=alt_colors[i], alpha=1,
+                                linewidth=1, where='post', label=label)
+                
+                ax.step(bins, dup_last(ns - data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
+                ax.step(bins, dup_last(ns + data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
+
+                ax.fill_between(bins_0, dup_last(ns - data_err), dup_last(ns + data_err), 
+                                facecolor=alt_colors[i], alpha=0.3, step='post')
 
     if panel_ax is not None:
         assert len(bins_0) == len(bins_1)
