@@ -64,6 +64,7 @@ class VAETrainer:
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
+                          delta = params.get("VAE_delta", 1.),
                           eps = params.get("eps", 1.e-10),
                           noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),

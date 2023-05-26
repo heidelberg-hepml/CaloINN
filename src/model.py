@@ -585,7 +585,7 @@ class noise_layer(nn.Module):
     
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, 
-                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
+                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, delta=1., eps=1.e-10, 
                  noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit"):
         # TODO: eps is not passed in the normalize and unnormalize funcs. -> Not using the params value
         super(CVAE, self).__init__()
@@ -630,6 +630,7 @@ class CVAE(nn.Module):
         # the hyperparamters for the reco_loss
         self.beta = beta
         self.gamma = gamma
+        self.delta = delta
         
         # needed for the smearing matrix (geometry info)
         self.particle_type = particle_type
@@ -1019,9 +1020,9 @@ class CVAE(nn.Module):
         # gamma =  torch.clamp(gamma, min=self.gamma, max=self.gamma*1.e1)
         
         if not MAE_logit:
-            MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            MSE_logit = self.delta * 0.5*nn.functional.mse_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
         else:
-            MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            MSE_logit = self.delta * 0.5*nn.functional.l1_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
             
         # if not MAE_data:
         #     MSE_data = 0.5*nn.functional.mse_loss(gamma* x_recon_0_1 @ self.smearing_matrix, gamma* x_0_1 @ self.smearing_matrix, reduction="mean") / x_recon_0_1.shape[0]

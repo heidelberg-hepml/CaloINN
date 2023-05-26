@@ -1,7 +1,7 @@
 # General
 
 # Documenter information
-run_name: ECAE_not_norm_trafo
+run_name: ECAE_small_noise_and_alpha_log
 # block_name: Use_einc_number_4_large_net
 # vae_dir: /remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/results/2023_04_17_081500_3_gamma_large_net
 vae_dir: null
@@ -43,6 +43,7 @@ VAE_hidden_sizes: [10000, 3000, 500]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
 VAE_gamma: 1.e+3
+VAE_delta: 1.
 VAE_dropout: 0.0
 
 
