@@ -92,7 +92,7 @@ def plot_hist(
     if type(errorbars_fake) == bool:
         errorbars_fake = [errorbars_fake]
     
-    if type(data)==list and type(data[0]==np.ndarray):
+    if type(data)==list and type(data[0])==np.ndarray:
         data_list = data
     else:
         data_list = [data]
@@ -517,7 +517,7 @@ def get_all_plot_parameters(hlf, params):
     for layer in hlf.GetSparsity().keys():
         plots.append((sparsity, f'Sparsity_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Sparsity of layer {layer}", "p_ref": particle_type, "yscale": "linear", 
-                     'n_bins': np.linspace(0, 1, 20), 'vmin': -0.05, 'vmax': 1.05}))
+                     'n_bins': 20, 'vmin': -0.05, 'vmax': 1.05}))
     
     return plots
  
