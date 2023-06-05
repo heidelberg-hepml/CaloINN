@@ -632,6 +632,7 @@ class CVAE(nn.Module):
         # self.logit_trafo_out = IdentityTransformationVAE(alpha=alpha, rev=True)
         
         # the hyperparamters for the reco_loss
+        self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
         
@@ -693,7 +694,7 @@ class CVAE(nn.Module):
         # The other conditions are allready between 0 and 1 and will not be modified
         # TODO: Problems if test set is more than 5% off
         max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]*1.05
-        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)
+        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)*1.05), axis=1)
         
         # Set the normalization layer operating on the x space (before the actual encoder)
         data = self._preprocess_encoding(data, cond, without_norm=True)
@@ -989,53 +990,39 @@ class CVAE(nn.Module):
     def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
+
         # Encode
         mu, logvar = self.encode(x=x, c=c)
         
         # Sample
         latent = self.reparameterize(mu, logvar)
         
-        # Decode into logit space
-        x_recon_logit, c_noise = self._decode_to_logit(latent=latent, c=c)
+        # Decode
+        x_reco = self.decode(latent=latent, c=c)
         
-        # Leave the logit space
-        x_recon_0_1 = self.logit_trafo_out(x_recon_logit)
+        x_reco[x_reco < 0] = 0
         
-        
-        # Ground truth preprocessing:
-        # For data part (Use c_noise here for better agreement)
-        x_0_1 = data_util.normalize_layers(x, c_noise, self.layer_boundaries, eps=self.eps)
-        
-        # For logit loss part
-        x_logit = self.logit_trafo_in(x_0_1)
-        
+        # For log loss part
+        x_reco_log = torch.log(x_reco + self.alpha)
+        x_log = torch.log(x + self.alpha)
+
         
         # print()
         # print("recos & originals")
-        # print(x_0_1, x_logit, latent, x_recon_logit, x_recon_0_1)
+        # print(x, x_log, latent, x_reco, x_reco_log)
         
         # Compute the losses
-        
-        # incident_energy = c[..., [0]]
-        
-        # gamma = self.gamma * torch.sqrt(4.2e1 / incident_energy)
-        
-        # gamma =  torch.clamp(gamma, min=self.gamma, max=self.gamma*1.e1)
-        
+
         if not MAE_logit:
-            MSE_logit = 0.5*nn.functional.mse_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            MSE_logit = 0.5*nn.functional.mse_loss(x_reco_log @ self.smearing_matrix, x_log @ self.smearing_matrix, reduction="mean")
         else:
-            MSE_logit = 0.5*nn.functional.l1_loss(x_recon_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            MSE_logit = 0.5*nn.functional.l1_loss(x_reco_log @ self.smearing_matrix, x_log @ self.smearing_matrix, reduction="mean")
             
-        # if not MAE_data:
-        #     MSE_data = 0.5*nn.functional.mse_loss(gamma* x_recon_0_1 @ self.smearing_matrix, gamma* x_0_1 @ self.smearing_matrix, reduction="mean") / x_recon_0_1.shape[0]
-        # else:
-        #     MSE_data = 0.5*nn.functional.l1_loss(gamma * x_recon_0_1 @ self.smearing_matrix, gamma* x_0_1 @ self.smearing_matrix, reduction="mean") / x_recon_0_1.shape[0]
-            
+        
         if not MAE_data:
-            MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_recon_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+            MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco @ self.smearing_matrix, x @ self.smearing_matrix, reduction="mean")
         else:
-            MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_recon_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+            MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco @ self.smearing_matrix, x @ self.smearing_matrix, reduction="mean")
         
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
