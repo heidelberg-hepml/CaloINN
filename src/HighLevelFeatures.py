@@ -74,6 +74,8 @@ class HighLevelFeatures:
         for l in self.relevantLayers:
             E_layer = data[:, self.bin_edges[l]:self.bin_edges[l+1]].sum(axis=-1)
             self.E_layers[l] = E_layer
+            
+            self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], sparsity_threshold)
 
         for l in self.relevantLayers:
 

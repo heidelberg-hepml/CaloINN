@@ -67,7 +67,7 @@ def plot_average_table(data, save_file):
 
     plt.savefig(save_file)
     plt.close()
-  
+ 
 def plot_hist(
         file_name,
         data,
@@ -85,12 +85,22 @@ def plot_hist(
         panel_ax=None,
         panel_scale="linear",
         density=True,
-        labels=None):
+        labels=None,
+        errorbars_true=False,
+        errorbars_fake=False):
+
+    if type(errorbars_fake) == bool:
+        errorbars_fake = [errorbars_fake]
     
-    if type(data)==list and type(data[0]==np.ndarray):
+    if type(data)==list and type(data[0])==np.ndarray:
         data_list = data
     else:
         data_list = [data]
+        
+    if len(errorbars_fake) != len(data_list):
+        assert len(errorbars_fake) == 1, "Wrong size for the errorbars index"
+        
+        errorbars_fake = [errorbars_fake[0] for _ in range(len(data_list))]
     
     for i in range(len(data_list)):
         data_list[i] = data_list[i][np.isfinite(data_list[i])]
@@ -140,28 +150,115 @@ def plot_hist(
     create_fig = False
     if ax is None:
         create_fig = True
-        fig, ax = plt.subplots(1,1,figsize=(6,6))
+        fig, ax = plt.subplots(1,1,figsize=(6,6))    
         
         
+    # Plot the reference data
+    if not errorbars_true:
+        ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
+                alpha=0.5, color=color, density=density, label='GEANT')
+    else:
+        dup_last = lambda a: np.append(a, a[-1])
+
+        bins_1 = bins
+        
+        counts, _ = np.histogram(reference, bins_1, density=False)
+        ns_1, _ = np.histogram(reference, bins_1, density=True)
+        
+        mask = (counts == 0)
+        counts[mask] = 1
+        
+        ref_err = ns_1 / np.sqrt(counts)
+            
+        ref_err[mask] = 0
+        
+        ax.step(bins_1, dup_last(ns_1), color="blue", alpha=1,
+                        linewidth=1, where='post', label='GEANT')
+        
+        ax.step(bins_1, dup_last(ns_1 - ref_err), color="blue", alpha=0.5,
+                        linewidth=0.5, where='post')
+        ax.step(bins_1, dup_last(ns_1 + ref_err), color="blue", alpha=0.5,
+                        linewidth=0.5, where='post')
+
+        ax.fill_between(bins_1, dup_last(ns_1 - ref_err), dup_last(ns_1 + ref_err), 
+                        facecolor="blue", alpha=0.3, step='post')
+    
+    # Plot the generated data
+    alt_colors = ["green", "red", "pink"]
+    
     for i, data in enumerate(data_list):
-        
-        # Modify the labels
-        if labels is None:
-            label = "VAE"
+        if not errorbars_fake[i]:
+            
+            # Modify the labels
+            if labels is None:
+                label = "VAE"
+            else:
+                label = labels[i]
+            
+            # Add the first trainer to the panel and use the default color code
+            if i == 0:
+                ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
+                    alpha=1, density=density, label=label, color=color)
+            else:
+                ax.hist(data, bins=bins, histtype='step', linewidth=2,
+                    alpha=1, density=density, label=label, color=alt_colors[i])
+    
         else:
-            label = labels[i]
-        
-        # Add the first trainer to the panel and use the default color code
-        if i == 0:
-            ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
-                alpha=1, density=density, label=label, color=color)
-        else:
-            ax.hist(data, bins=bins, histtype='step', linewidth=2,
-                alpha=1, density=density, label=label)
+            # labels
+            if labels is None:
+                label = "VAE"
+            else:
+                label = labels[i]
+                
+            data = data_list[i]
+            
+            dup_last = lambda a: np.append(a, a[-1])
+            
+            if i == 0:
+                bins_0 = bins
+                
+                counts, _ = np.histogram(data, bins_0, density=False)
+                ns_0, _ = np.histogram(data, bins_0, density=True)
+                
+                mask = (counts == 0)
+                counts[mask] = 1
+                
+                data_err = ns_0 / np.sqrt(counts)
+                    
+                data_err[mask] = 0
+                
+                ax.step(bins_0, dup_last(ns_0), color=alt_colors[i], alpha=1,
+                                linewidth=1, where='post', label=label)
+                
+                ax.step(bins_0, dup_last(ns_0 - data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
+                ax.step(bins_0, dup_last(ns_0 + data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
 
-    ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
-            alpha=0.5, color=color, density=density, label='GEANT')
+                ax.fill_between(bins_0, dup_last(ns_0 - data_err), dup_last(ns_0 + data_err), 
+                                facecolor=alt_colors[i], alpha=0.3, step='post')
+            
+            else:                
+                counts, _ = np.histogram(data, bins, density=False)
+                ns, _ = np.histogram(data, bins, density=True)
+                
+                mask = (counts == 0)
+                counts[mask] = 1
+                
+                data_err = ns / np.sqrt(counts)
+                    
+                data_err[mask] = 0
+                
+                ax.step(bins, dup_last(ns), color=alt_colors[i], alpha=1,
+                                linewidth=1, where='post', label=label)
+                
+                ax.step(bins, dup_last(ns - data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
+                ax.step(bins, dup_last(ns + data_err), color=alt_colors[i], alpha=0.5,
+                                linewidth=0.5, where='post')
 
+                ax.fill_between(bins_0, dup_last(ns - data_err), dup_last(ns + data_err), 
+                                facecolor=alt_colors[i], alpha=0.3, step='post')
 
     if panel_ax is not None:
         assert len(bins_0) == len(bins_1)
@@ -337,13 +434,11 @@ def get_all_plot_parameters(hlf, params):
     particle_type = params.get("particle_type", "pion")
     min_energy = params.get("min_energy", 10)
 
-    # total energy plots
+    # Etot vs Einc
     plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
                 {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}}$', "p_ref": particle_type,
                 "vmin": 0.5, "vmax": 1.5, "yscale": "linear"}))
     
-    
-    # All voxel energies flattened
     plots.append((Etot_Einc, 'Etot_Einc_log.pdf', {},
                 {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}} (Logscale)$', "p_ref": particle_type, "xscale": "log"}))
 
@@ -409,14 +504,20 @@ def get_all_plot_parameters(hlf, params):
                     {"axis_label": f"Width of Center of Energy in \n$\\Delta\\phi$ in layer {layer} [mm]", 
                     "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
     
+    # Voxel distribution
     plots.append((cell_dist, 'total_energy_dist.pdf', {},
                 {"axis_label": r'Voxel energy distribution', "p_ref": particle_type, "xscale": "log"}))
     
+    # Voxel distribution by layer
+    for layer in cell_dist_by_layer(hlf).keys():
+        plots.append((cell_dist_by_layer, f'total_energy_dist_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": f'Voxel energy distribution of layer {layer}', "p_ref": particle_type, "xscale": "log"}))
+     
     # Sparsity
     for layer in hlf.GetSparsity().keys():
         plots.append((sparsity, f'Sparsity_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Sparsity of layer {layer}", "p_ref": particle_type, "yscale": "linear", 
-                     'n_bins': np.linspace(0, 1, 20), 'vmin': -0.05, 'vmax': 1.05}))
+                     'n_bins': 20, 'vmin': -0.05, 'vmax': 1.05}))
     
     return plots
  

@@ -27,5 +27,16 @@ def ECWidthPhis(hlf, layer):
 def cell_dist(hlf):
     return hlf.showers.flatten()
 
+def cell_dist_by_layer(hlf, layer=None):
+    
+    if layer is not None:
+        return hlf.showers[:, hlf.bin_edges[layer]:hlf.bin_edges[layer+1]].flatten()
+    
+    layer_dist = {}
+    
+    for layer in hlf.relevantLayers:
+        layer_dist[layer] = hlf.showers[:, hlf.bin_edges[layer]:hlf.bin_edges[layer+1]].flatten()
+    return layer_dist
+
 def sparsity(hlf, layer):
     return hlf.GetSparsity()[layer]

@@ -1,8 +1,8 @@
 # General
 
 # Documenter information
-run_name: ECAE_not_norm_trafo
-# block_name: Use_einc_number_4_large_net
+run_name: e_inc_0_gamma_schedule
+# block_name: ECAE_testrun_einc_6
 # vae_dir: /remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/results/2023_04_17_081500_3_gamma_large_net
 vae_dir: null
 # Data
@@ -22,11 +22,12 @@ alpha: 1.e-6
 VAE_width_noise: 1.e-6
 # VAE_einc_preprocessing: "logit"
 VAE_einc_preprocessing: "hot_one"
-e_inc_index: null
+e_inc_index: 0
 # VAE Training
 VAE_lr_sched_mode: null
 VAE_max_lr: 1.e-4
 VAE_lr: 1.e-4
+VAE_weight_decay: 1.e-7
 VAE_batch_size: 256
 VAE_n_epochs: 750
 VAE_save_interval: 100
@@ -38,8 +39,8 @@ VAE_zero_data: False # Set the data loss to 0
 VAE_smearing_self: 0.6
 VAE_smearing_share: 0.05
 # VAE Architecture
-VAE_hidden_sizes: [10000, 3000, 500]
-# VAE_hidden_sizes: [700, 400, 150]
+# VAE_hidden_sizes: [10000, 3000, 500]
+VAE_hidden_sizes: [700, 400, 150]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
 VAE_gamma: 1.e+3
