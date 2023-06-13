@@ -513,8 +513,8 @@ class noise_layer(nn.Module):
     
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, 
-                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
-                 noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit"):
+                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
+                 eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit"):
         
         super(CVAE, self).__init__()
         
@@ -538,7 +538,13 @@ class CVAE(nn.Module):
         # the hyperparamters for the reco_loss
         self.alpha = alpha
         self.beta = beta
-        self.gamma = gamma
+        self.gamma = torch.tensor(gamma)
+        
+        self.learn_gamma = learn_gamma
+        if self.learn_gamma:
+            with torch.no_grad():
+                self.data_sum = 0
+                self.logit_sum = 0
         
         # needed for the smearing matrix (geometry info)
         self.particle_type = particle_type
@@ -939,6 +945,8 @@ class CVAE(nn.Module):
         # For data loss part
         x_dimensionless = x / torch.sqrt(x.mean(axis=1, keepdims=True))
         x_reco_dimensionless = x_reco / torch.sqrt(x.mean(axis=1, keepdims=True))
+        # x_dimensionless = x / torch.sqrt(c[..., [0]])
+        # x_reco_dimensionless = x_reco / torch.sqrt(c[..., [0]])
         
         # For logit loss part        
         x_0_1      = data_util.normalize_layers(x,      c, self.layer_boundaries, eps=self.eps) * 0.9
@@ -960,8 +968,16 @@ class CVAE(nn.Module):
             MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
         else:
             MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
-            
-        # MSE_data = MSE_data / torch.mean(x)
+
+        # if not MAE_data:
+        #     MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+        # else:
+        #     MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+        
+        if self.training and self.learn_gamma: # Make sure to only track the loss from training, and not from validation!!!
+            with torch.no_grad():
+                self.data_sum += MSE_data
+                self.logit_sum += MSE_logit
         
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
@@ -973,3 +989,13 @@ class CVAE(nn.Module):
 
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
 
+    def update_gamma(self):
+                
+        if self.learn_gamma:
+            with torch.no_grad():
+                self.gamma = self.gamma * (self.logit_sum/self.data_sum)
+                self.data_sum = 0
+                self.logit_sum = 0
+        else:
+            print("Updating gamma is disabled!")
+        return

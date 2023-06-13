@@ -53,6 +53,14 @@ class VAETrainer:
         # Create the VAE
         self.latent_dim = params["VAE_latent_dim"]
         hidden_sizes = params["VAE_hidden_sizes"]
+        
+        learn_gamma = False
+        self.gamma_updates = params.get("VAE_gamma_updates", None)
+        if self.gamma_updates is not None:
+            learn_gamma = True
+        else:
+            self.gamma_updates = params['VAE_n_epochs']+2
+            
         self.model = CVAE(input = data,
                           cond = cond,
                           latent_dim = self.latent_dim,
@@ -64,6 +72,7 @@ class VAETrainer:
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
+                          learn_gamma = learn_gamma,
                           eps = params.get("eps", 1.e-10),
                           noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
@@ -88,6 +97,7 @@ class VAETrainer:
         self.losses_test = {'mse': [], 'mse_logit': [], 'kl': [], 'total': []}
         self.learning_rates = []
         self.max_grad = []
+        self.gammas = []
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
@@ -134,6 +144,11 @@ class VAETrainer:
             # Do training and validation for the current epoch
             max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss = self.__train_one_epoch()
             test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss = self.__do_validation()
+            
+            self.gammas.append(self.model.gamma.item())
+            
+            if epoch % self.gamma_updates == 0:
+                self.model.update_gamma()
 
             # Remember the best model so far
             if test_loss < min_test_loss:
@@ -385,6 +400,9 @@ class VAETrainer:
         
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
+        
+        if self.gamma_updates is not None:
+            plotting.plot_gamma(self.doc.get_file('gamma.pdf'), self.gammas, 1)
 
     def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_loss, max_grad):
         print('')
@@ -404,6 +422,8 @@ class VAETrainer:
                 print(f'lr: {self.scheduler.get_last_lr()[0]}')
 
         print(f'maximum gradient: {max_grad}')
+        
+        print(f"gamma: {self.gammas[-1]}")
         sys.stdout.flush()
          
     def save(self, epoch="", name=None):

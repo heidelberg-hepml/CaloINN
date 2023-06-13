@@ -402,6 +402,27 @@ def plot_grad(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
+        
+def plot_gamma(
+        file_name,
+        gammas,
+        batches_per_epoch=1):
+    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
+
+    ax.plot(np.arange(1,len(gammas)+1)/batches_per_epoch, gammas, color='red', label='gradient')
+
+    ax.set_xlim([0,len(gammas)/batches_per_epoch])
+    ax.set_xlabel('epoch', fontproperties=axislabelfont)
+    ax.set_ylabel('gamma', fontproperties=axislabelfont)
+    ax.set_yscale("log")
+
+    plt.xticks(fontproperties=tickfont)
+    plt.yticks(fontproperties=tickfont)
+
+    fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
     
 def plot_logsig(
         file_name,
