@@ -326,6 +326,10 @@ def plot_loss(
     ax.set_xlim([0,len(loss_test)])
     # nested np.mins needed for the case of different length
     # print(len(loss_test))
+    
+    loss_train = np.nan_to_num(loss_train, nan=0, posinf=0, neginf=0)
+    loss_test = np.nan_to_num(loss_test, nan=0, posinf=0, neginf=0)
+    
     if len(loss_test) <= 10 or (not skip_epochs):
         y_min = np.min( [ np.min(loss_train), np.min(loss_test) ] )
         y_max = np.max( [ np.max(loss_train), np.max(loss_test) ] )
@@ -493,7 +497,7 @@ def get_all_plot_parameters(hlf, params):
         else:
             vmin, vmax = (-100., 100.)
             
-        plots.append((ECEtas, f'ECPhi_layer_{layer}.pdf', {"layer": layer},
+        plots.append((ECPhis, f'ECPhi_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": r"Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
                     "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
         
