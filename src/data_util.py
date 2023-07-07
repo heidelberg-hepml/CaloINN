@@ -189,7 +189,7 @@ def normalize_layers(x, c, layer_boundaries, eps=1.e-10):
         
     return x
 
-def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
+def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, enforce_energy=True):
     """Reverses the effect of the normalize_layers function"""
     
     # Here we should not use clone, since it might result
@@ -207,14 +207,21 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
     layer_energies = c[..., -number_of_layers:]
     
     # Normalize each layer and multiply it with its original energy
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]] / \
+    if enforce_energy:
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]] / \
                                              (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+    
+    else:
+        # Normalize each layer and multiply it with its original energy
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]
 
     return output
 
 def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     "returns a hlf class needed for plotting"
+    
     x = x.cpu()
     c = c.cpu()
     
@@ -235,11 +242,15 @@ def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     # renormalize the energies
     incident_energies *= 1.e5
     
+    # TODO: Pass to the function once I am sure that it is good.
+    # Would be a major code change to pipe e_min here
+    sparsity_threshold = 1.e-3
+    
     # concatenate the layers and renormalize them, too           
     showers = np.concatenate(layers, axis=1) * 1.e5
     
     
-    hlf.CalculateFeatures(showers, threshold * 1.e5)
+    hlf.CalculateFeatures(showers, sparsity_threshold)
     hlf.Einc = incident_energies
     hlf.showers = showers
     
