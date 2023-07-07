@@ -479,9 +479,10 @@ class noise_layer(nn.Module):
         self.layer_boundaries = layer_boundaries
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
-    def forward(self, input, c):
+    def forward(self, input, c, noise=None):
         
         if not self.rev:
+            
                        
             # add noise to the input
             noise = self.noise_distribution.sample(input.shape)*self.noise_width
@@ -502,19 +503,24 @@ class noise_layer(nn.Module):
             c_noise = torch.cat((incident_energy, extra_dims, c[:, self.num_detector_layers+1:-self.num_detector_layers], layer_energies), axis=1)
             
             return input_with_noise, c_noise, noise
-        
+               
         else:
-            
-            # TODO: Might even substract if this approach works
-            input = torch.where(input<self.noise_width, torch.tensor(0, device=input.device), input)
+            if noise is None:
+                input = input - self.noise_width/2
+                # ...
+            else:
+                input = input - noise
                 
+            input = torch.where(input<self.noise_width, torch.tensor(0, device=input.device), input)
+            
             return input
         
     
 class CVAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, 
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
-                 eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit"):
+                 eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
+                 subtract_noise=False):
         
         super(CVAE, self).__init__()
         
@@ -560,7 +566,8 @@ class CVAE(nn.Module):
         self.latent_dim = latent_dim
         
         # Initialize the last_noise parameter
-        self.last_noise = 0
+        self.last_noise = None
+        self.subtract_noise = subtract_noise
 
 
 
@@ -579,7 +586,7 @@ class CVAE(nn.Module):
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
-        self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout)
+        self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=batch_norm)
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
@@ -597,7 +604,7 @@ class CVAE(nn.Module):
         # Create the smearing matrix. It is used in the reco-loss
         self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
 
-    def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout):
+    def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=False):
         # Create decoder and encoder
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
@@ -611,6 +618,8 @@ class CVAE(nn.Module):
             
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            if batch_norm:
+                self.encoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
             self.encoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
@@ -625,6 +634,8 @@ class CVAE(nn.Module):
             
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            if batch_norm:
+                self.decoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
             self.decoder.add_module(f"relu{i}", nn.ReLU())
             self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
@@ -786,6 +797,9 @@ class CVAE(nn.Module):
         else:
             x_noise = x
             c_noise = c
+            
+        if not self.subtract_noise:
+            self.last_noise = None
         
         x_noise = data_util.normalize_layers(x_noise, c_noise, self.layer_boundaries, eps=self.eps)
         
@@ -852,7 +866,7 @@ class CVAE(nn.Module):
         eps = torch.randn_like(std)
         return eps * std + mu
             
-    def decode(self, latent, c):
+    def decode(self, latent, c, also_return_uncorrected=False, return_directly_after_decoder=False):
         """Takes a point in the latent space after sampling and returns a point in the dataspace.
         Output: Reconstructed image in data-space """
         
@@ -884,6 +898,9 @@ class CVAE(nn.Module):
         # decode
         x_recon_logit_noise = self.decoder(latent)
         
+        if return_directly_after_decoder:
+            return x_recon_logit_noise
+        
         
         # Undo normalization step (zero mean, unit variance)
         x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
@@ -901,12 +918,24 @@ class CVAE(nn.Module):
         
         # Remove noise by thresholding, if needed
         if self.noise_width is not None:
-            x_recon = self.noise_layer_out(x_recon_noise, c)
+            if self.last_noise is not None:
+                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
+                self.last_noise = None
+            else:
+                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
         else:
             x_recon = x_recon_noise
             x_recon[x_recon<0] = 0
             
-        return x_recon
+        total_energy = c[..., [0]]*c[..., [1]]
+        
+        x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
+                   
+        if not also_return_uncorrected:
+            return x_recon_shifted
+        
+        else:
+            return x_recon, x_recon_shifted
         
     def forward(self, x, c, return_mu_logvar=False):
         """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
@@ -928,23 +957,34 @@ class CVAE(nn.Module):
         latent = self.reparameterize(mu, logvar)
         
         # Decode
-        x_reco = self.decode(latent=latent, c=c)
+        x_reco, x_reco_shifted = self.decode(latent=latent, c=c, also_return_uncorrected=True)
+        
+        # total_energy = 0
+        # for layer_index in range(self.num_detector_layers):
+        #     layer_size =  (self.layer_boundaries[layer_index+1] - self.layer_boundaries[layer_index])
+        #     total_energy += c[..., [-self.num_detector_layers+layer_index]] / layer_size
+        # x_reco_shifted = x_reco / (x_reco.mean(axis=1, keepdims=True)+self.eps) * total_energy
+        
+        # total_energy = c[..., -self.num_detector_layers:].sum(axis=1, keepdims=True)
+
+        
+        # print(total_energy[:10], x_reco.mean(axis=1, keepdims=True)[:10])
         
         if not return_mu_logvar:
-            return x_reco
+            return x_reco_shifted
         
         else:
-            return x_reco, mu, logvar
+            return x_reco, x_reco_shifted, mu, logvar
     
     def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
         # Model forward pass
-        x_reco, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
+        x_reco, x_reco_shifted, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
                 
         # For data loss part
         x_dimensionless = x / torch.sqrt(x.mean(axis=1, keepdims=True))
-        x_reco_dimensionless = x_reco / torch.sqrt(x.mean(axis=1, keepdims=True))
+        x_reco_dimensionless = x_reco_shifted / torch.sqrt(x.mean(axis=1, keepdims=True))
         # x_dimensionless = x / torch.sqrt(c[..., [0]])
         # x_reco_dimensionless = x_reco / torch.sqrt(c[..., [0]])
         
@@ -963,7 +1003,6 @@ class CVAE(nn.Module):
         else:
             MSE_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
         
-        # TODO: Note that we are in the original data space now, unnormed!!!
         if not MAE_data:
             MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
         else:
@@ -999,3 +1038,170 @@ class CVAE(nn.Module):
         else:
             print("Updating gamma is disabled!")
         return
+
+
+class CAE(CVAE):
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False, particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000, learn_gamma=False, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0, einc_preprocessing="logit", subtract_noise=False):
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, learn_gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise)
+        
+        self.encoder[-1] = nn.Linear(hidden_sizes[-1], latent_dim)
+        self.mu = torch.tensor([[0]])
+        self.logvar = torch.tensor([[0]])
+    
+    def encode(self, x, c):
+        """Takes a point in the dataspace and returns a point in the latent space before sampling.
+        Does apply the logit preprocessing and the layer normalization
+        noise=True decides, if the noise layer should be used (if it exists)
+    
+        Output: latent"""
+        
+        # Input sanity check
+        assert len(x.shape) == 2
+        assert len(c.shape) == 2
+        assert c.shape[0] == x.shape[0]
+        
+        # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
+        x = self._preprocess_encoding(x, c)
+        
+        # Call the encoder
+        latent = self.encoder(x)
+        
+        return latent
+
+    def forward(self, x, c, return_mu_logvar=False):
+        """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
+        the model will apply noise to the data and remove it in the logit-space by thresholding.
+
+        Args:
+            x (torch.tensor): Input data of dimension (#points, features). The features must contain the energy dimensions as last feature
+            c (torch.tensor): Input data of dimension (#points, 1)
+            return_mu_logvar (bool): Whether the latent parameters should be passed as well (default=False)
+
+        Returns:
+            torch.tensor: reconstruction
+        """
+
+        # Encode
+        latent = self.encode(x=x, c=c)
+        
+        # Decode
+        x_reco, x_reco_shifted = self.decode(latent=latent, c=c, also_return_uncorrected=True)
+        
+        if not return_mu_logvar:
+            return x_reco_shifted
+        
+        else:
+            # mu and logvar are returned as constant zeros
+            return x_reco, x_reco_shifted, self.mu, self.logvar
+    
+    def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
+        """Computes the reconstruction loss in the logit space and in the data space"""
+        
+        _, MSE_logit, MSE_data, _ = super().reco_loss(x, c, MAE_logit, MAE_data, zero_logit, zero_data)
+                   
+        
+        return MSE_logit + MSE_data, MSE_logit, MSE_data, torch.tensor(0)
+     
+    # def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
+    #     """Computes the reconstruction loss in the logit space and in the data space"""
+        
+    #     x_low_level = self._preprocess_encoding(x, c)
+        
+        
+    #     latent = self.encode(x=x, c=c)
+    #     x_reco_low_level = self.decode(latent=latent, c=c, return_directly_after_decoder=True)
+
+    #     low_level_loss = 0.5*nn.functional.l1_loss(x_low_level[..., 0:x_reco_low_level.shape[1]], x_reco_low_level, reduction="mean")
+        
+    #     return low_level_loss, low_level_loss, low_level_loss, torch.tensor(0)
+        
+        
+    #     # Rest of decode function
+        
+    #     # Undo normalization step (zero mean, unit variance)
+    #     x_recon_logit_noise = self.norm_x_out( (x_reco_low_level, ), rev=True)[0][0]
+        
+            
+    #     # Leave the logit space
+    #     x_recon_noise = self.logit_trafo_out(x_recon_logit_noise)
+        
+    #     x_recon_noise[x_recon_noise<0] = 0
+        
+        
+    #     # Revert to original normalization
+    #     x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps)
+        
+        
+    #     # Remove noise by thresholding, if needed
+    #     if self.noise_width is not None:
+    #         if self.last_noise is not None:
+    #             x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
+    #             self.last_noise = None
+    #         else:
+    #             x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
+    #     else:
+    #         x_recon = x_recon_noise
+    #         x_recon[x_recon<0] = 0
+            
+    #     total_energy = c[..., [0]]*c[..., [1]]
+        
+    #     x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
+        
+    #     x_reco, x_reco_shifted = x_recon, x_recon_shifted
+        
+        
+        
+    #     # Old loss func
+        
+    #     x_reco, x_reco_shifted, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
+                
+    #     # For data loss part
+    #     x_dimensionless = x / torch.sqrt(x.mean(axis=1, keepdims=True))
+    #     x_reco_dimensionless = x_reco_shifted / torch.sqrt(x.mean(axis=1, keepdims=True))
+    #     # x_dimensionless = x / torch.sqrt(c[..., [0]])
+    #     # x_reco_dimensionless = x_reco / torch.sqrt(c[..., [0]])
+        
+    #     # For logit loss part        
+    #     x_0_1      = data_util.normalize_layers(x,      c, self.layer_boundaries, eps=self.eps) * 0.9
+    #     x_logit = self.logit_trafo_in(x_0_1)
+        
+    #     x_reco_0_1 = data_util.normalize_layers(x_reco, c, self.layer_boundaries, eps=self.eps) * 0.9
+    #     x_reco_logit = self.logit_trafo_in(x_reco_0_1)
+
+        
+    #     # Compute the losses
+
+    #     if not MAE_logit:
+    #         MSE_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+    #     else:
+    #         MSE_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+        
+    #     # TODO: Note that we are in the original data space now, unnormed!!!
+    #     if not MAE_data:
+    #         MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
+    #     else:
+    #         MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
+
+    #     # if not MAE_data:
+    #     #     MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+    #     # else:
+    #     #     MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
+        
+    #     if self.training and self.learn_gamma: # Make sure to only track the loss from training, and not from validation!!!
+    #         with torch.no_grad():
+    #             self.data_sum += MSE_data
+    #             self.logit_sum += MSE_logit
+        
+    #     KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
+
+    #     if zero_logit:
+    #         MSE_logit = torch.tensor(0).to(MSE_logit.device)
+            
+    #     if zero_data:
+    #         MSE_data = torch.tensor(0).to(MSE_logit.device)
+            
+            
+    #     return MSE_logit + MSE_data + low_level_loss, MSE_logit, MSE_data, low_level_loss
+        
+    
+    

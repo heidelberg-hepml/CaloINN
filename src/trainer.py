@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 import data_util
-from model import CINN, CVAE
+from model import CINN, CVAE, CAE
 import plotting
 from plotter import Plotter
 
@@ -61,11 +61,13 @@ class VAETrainer:
         else:
             self.gamma_updates = params['VAE_n_epochs']+2
             
+        # self.model = CAE(input = data,
         self.model = CVAE(input = data,
                           cond = cond,
                           latent_dim = self.latent_dim,
                           hidden_sizes = hidden_sizes,
                           layer_boundaries_detector = self.layer_boundaries,
+                          batch_norm=params.get("VAE_batch_norm", False),
                           particle_type = params['particle_type'],
                           dataset = params.get('dataset', 1),
                           dropout = params.get("VAE_dropout", 0.0),
@@ -77,7 +79,8 @@ class VAETrainer:
                           noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
                           smearing_share=params.get("VAE_smearing_share", 0),
-                          einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"))
+                          einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
+                          subtract_noise=params.get("VAE_subtract_noise", False), )
         
         self.model = self.model.to(self.device)
         
@@ -125,21 +128,20 @@ class VAETrainer:
         elif self.params.get("VAE_lr_sched_mode", None) == "one_cycle_lr":
             self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 self.optim,
-                self.params.get("VEA_max_lr", self.params["VAE_lr"]*10),
-                epochs = self.params.get("opt_epochs") or self.params["n_epochs"],
+                self.params.get("VAE_max_lr", self.params["VAE_lr"]*10),
+                epochs = self.params.get("VAE_opt_epochs") or self.params["VAE_n_epochs"],
                 steps_per_epoch=steps_per_epoch)
             
         elif self.params.get("VAE_lr_sched_mode", None) is None:
             self.scheduler = None
 
     def train(self):
+        # Initialize the best validation loss
+        min_test_loss = np.inf
         for epoch in range(self.epoch_offset+1, self.params['VAE_n_epochs']+1):
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
-            
-            # Initialize the best validation loss
-            min_test_loss = np.inf
             
             # Do training and validation for the current epoch
             max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss = self.__train_one_epoch()
@@ -351,22 +353,24 @@ class VAETrainer:
         """
         
         self.model.eval()
-        
-        # Generate the reconstructions
-        data = self.test_loader.data
-        cond = self.test_loader.cond
-        generated = self.get_reco(data, cond)
-                    
-        # Now create the no-errorbar histograms
-        if plot_path is None:
-            subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-            plot_dir = self.doc.get_file(subdir)
-        else:
-            plot_dir = plot_path
-            
-        plotting.plot_all_hist(
-            data, cond, generated, cond, self.params,
-            self.layer_boundaries, plot_dir)
+        try:
+            # Generate the reconstructions
+            data = self.test_loader.data
+            cond = self.test_loader.cond
+            generated = self.get_reco(data, cond)
+                        
+            # Now create the no-errorbar histograms
+            if plot_path is None:
+                subdir = os.path.join("plots", f'epoch_{epoch:03d}')
+                plot_dir = self.doc.get_file(subdir)
+            else:
+                plot_dir = plot_path
+                
+            plotting.plot_all_hist(
+                data, cond, generated, cond, self.params,
+                self.layer_boundaries, plot_dir)
+        except:
+            print("error during plotting")
 
         
         with torch.no_grad():
@@ -452,6 +456,7 @@ class VAETrainer:
             self.epoch_offset = state_dicts.get("epoch", 0)
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
+        print(f"loaded VAE state from epoch {state_dicts.get('epoch', 0)}")
                                           
        
 class ECAETrainer:
@@ -475,12 +480,15 @@ class ECAETrainer:
             vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_dir, log_name="log_jupyter.txt", read_only=True)
             self.vae_trainer = VAETrainer(params, device, vae_doc)
             
+        self.vae_trainer.model.subtract_noise = False
+        self.vae_trainer.model.last_noise = None
+            
         self.layer_boundaries = self.vae_trainer.layer_boundaries
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
         # TODO: Best or last? Maybe add toggle in params file
-        # self.vae_trainer.load("_best")
-        self.vae_trainer.load()
+        self.vae_trainer.load("_best")
+        # self.vae_trainer.load()
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
@@ -560,8 +568,20 @@ class ECAETrainer:
             # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
             # TODO: Watch out for numerical problems later
             # TODO: We do not logit preprocess here!!
-            data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
-            data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
+            
+            extra_dims_train = self.vae_trainer.train_loader.cond[:, 1:-n]
+            extra_dims_test = self.vae_trainer.test_loader.cond[:, 1:-n]
+            
+            self.logit_trafo_in = self.vae_trainer.model.logit_trafo_in
+            self.logit_trafo_out = self.vae_trainer.model.logit_trafo_out
+
+            extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
+            extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
+            
+            
+            
+            data_train = np.append(data_train, extra_dims_logit_train , axis=1)
+            data_test = np.append(data_test, extra_dims_logit_test, axis=1)
             
             # Create the conditioning data (Only the incident energy)
             cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
@@ -889,6 +909,10 @@ class ECAETrainer:
             plt.close()
             bins_2 = plt.hist(generated[:, -self.num_detector_layers:].flatten(), bins=100)[1]
             plt.close()
+            # start = generated[:, -self.num_detector_layers:].flatten().min()
+            # end = generated[:, -self.num_detector_layers:].flatten().max()
+            # print(start, end)
+            # bins_2 = np.logspace(np.log(start), np.log(end), 100)
             n = int(np.ceil(generated.shape[1] / 6))
 
             fig, axs = plt.subplots(n, 6, figsize=(6*6,6*n))
@@ -899,6 +923,8 @@ class ECAETrainer:
                 if i >= generated.shape[1]-self.num_detector_layers:
                     ax.hist(train_data[:,i], bins=bins_2, density=True)
                     ax.hist(generated[:,i], bins=bins_2, density=True, histtype="step")
+                    # ax.set_xscale("log")
+                    ax.set_yscale("log")
                 
                 else:  
                     ax.hist(train_data[:,i], bins=bins_1, density=True)
@@ -1125,7 +1151,7 @@ class ECAETrainer:
                 mu = samples_latent[:, :latent_dim]
                 logvar = samples_latent[:, latent_dim:-self.num_detector_layers]
             
-            extra_dims = samples_latent[:, -self.num_detector_layers:]
+            extra_dims = self.logit_trafo_out(samples_latent[:, -self.num_detector_layers:])/0.9
             
             
             condition = self.generate_expanded_cond(e_inc=energies, extra_dims=extra_dims)
