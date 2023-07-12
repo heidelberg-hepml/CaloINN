@@ -991,7 +991,7 @@ class ECAETrainer:
 
     def save(self, epoch="", name=None):
         """ Save the model, its optimizer, losses, learning rates and the epoch """
-        self.vae_trainer.save(epoch, name)
+        # self.vae_trainer.save(epoch, name)
         torch.save({"opt": self.optim.state_dict(),
                     "net": self.model.state_dict(),
                     "losses_test": self.losses_test,
