@@ -483,6 +483,7 @@ class noise_layer(nn.Module):
         
         if not self.rev:
             
+            # return input, c, 0
                        
             # add noise to the input
             noise = self.noise_distribution.sample(input.shape)*self.noise_width
@@ -515,6 +516,8 @@ class noise_layer(nn.Module):
             
             return input
         
+def smooth_sparsity(input, threshold, strength=0.2):
+    return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)
     
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
@@ -618,9 +621,9 @@ class CVAE(nn.Module):
             
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            self.encoder.add_module(f"relu{i}", nn.ReLU())
             if batch_norm:
                 self.encoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
-            self.encoder.add_module(f"relu{i}", nn.ReLU())
             self.encoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
@@ -634,9 +637,9 @@ class CVAE(nn.Module):
             
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
+            self.decoder.add_module(f"relu{i}", nn.ReLU())
             if batch_norm:
                 self.decoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
-            self.decoder.add_module(f"relu{i}", nn.ReLU())
             self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
@@ -979,6 +982,9 @@ class CVAE(nn.Module):
     def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
+        # TODO: Watch out, inplace!!!
+        # x[x < self.noise_width] = 0
+        
         # Model forward pass
         x_reco, x_reco_shifted, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
                 
@@ -996,7 +1002,15 @@ class CVAE(nn.Module):
         x_reco_logit = self.logit_trafo_in(x_reco_0_1)
 
         
+        # # Sparsity loss
+        # if self.noise_width is not None:
+        #     sparsity_loss = 100*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, self.noise_width), smooth_sparsity(x, self.noise_width))
+        # else:
+        #     sparsity_loss = 100*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, 1.e-6), smooth_sparsity(x, 1.e-6))
+        
         # Compute the losses
+        
+        # x_reco_logit[x_reco<1.e-6] = self.logit_trafo_in(torch.tensor(0))
 
         if not MAE_logit:
             MSE_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
@@ -1026,6 +1040,7 @@ class CVAE(nn.Module):
         if zero_data:
             MSE_data = torch.tensor(0).to(MSE_logit.device)
 
+        # return MSE_logit + MSE_data + KLD+sparsity_loss, MSE_logit, MSE_data, sparsity_loss
         return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
 
     def update_gamma(self):
