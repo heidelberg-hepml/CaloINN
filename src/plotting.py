@@ -537,6 +537,12 @@ def get_all_plot_parameters(hlf, params):
     for layer in cell_dist_by_layer(hlf).keys():
         plots.append((cell_dist_by_layer, f'total_energy_dist_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f'Voxel energy distribution of layer {layer}', "p_ref": particle_type, "xscale": "log"}))
+        
+    for layer in calc_brightest_voxel(hlf).keys():
+        for N in range(3):
+            plots.append((calc_brightest_voxel, f'{N+1}_brightest_voxel_{layer}.pdf', {"layer": layer, "N": N+1},
+                {"axis_label": f'{N+1} brightest voxel of layer {layer}', "p_ref": particle_type, "xscale": "log", "yscale": "linear",}))
+        
      
     # Sparsity
     for layer in hlf.GetSparsity().keys():

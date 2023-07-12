@@ -32,11 +32,24 @@ def cell_dist_by_layer(hlf, layer=None):
     if layer is not None:
         return hlf.showers[:, hlf.bin_edges[layer]:hlf.bin_edges[layer+1]].flatten()
     
+    # TODO: Maybe recursive is nicer...
     layer_dist = {}
-    
     for layer in hlf.relevantLayers:
         layer_dist[layer] = hlf.showers[:, hlf.bin_edges[layer]:hlf.bin_edges[layer+1]].flatten()
     return layer_dist
+
+def calc_brightest_voxel(hlf, layer=None, N=1):
+    if layer is not None:
+        layer_data = hlf.showers[:, hlf.bin_edges[layer]:hlf.bin_edges[layer+1]]
+        layer_data.sort(axis=1)
+        N = min(N, layer_data.shape[1])
+        return layer_data[:,-N]/layer_data.sum(axis=1)
+    
+    brightest_voxels = {}
+    for layer in hlf.relevantLayers:
+        brightest_voxels[layer] = calc_brightest_voxel(hlf, layer=layer, N=N)
+        
+    return brightest_voxels
 
 def sparsity(hlf, layer):
     return hlf.GetSparsity()[layer]
