@@ -86,6 +86,7 @@ def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
     c = np.copy(c)
 
     layer_energies = []
+    # brightest_voxels = []
 
     for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
         
@@ -98,6 +99,7 @@ def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
         # Store its energy for later
         layer_energies.append(layer_energy)
         
+        # brightest_voxels.append(np.max( x[..., layer_start:layer_end], axis=1, keepdims=True ))
     layer_energies_np = np.array(layer_energies).T[0]
         
     # Compute the generalized extra dimensions
@@ -108,6 +110,7 @@ def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
         extra_dims.append(extra_dim)
         
     # Collect all the conditions
+    # all_conditions = [c] + extra_dims + brightest_voxels + layer_energies
     all_conditions = [c] + extra_dims + layer_energies
     c = np.concatenate(all_conditions, axis=1)
     
@@ -133,6 +136,9 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
     binary_mask &= np.sum(x, axis=1) < energy[:,0]
     # Remove all no-interaction events (only 0.7%)
     binary_mask &= np.sum(x, axis=1) > 0
+    
+    # # TODO: hard-coded strict cutting, revisit if it works
+    # x[x<1.e-8] = 0
 
     x = x[binary_mask]
     c = energy[binary_mask]
@@ -205,6 +211,11 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, enforce_energy=True):
     incident_energy = c[..., [0]]
     extra_dims = c[..., 1:number_of_layers+1]
     layer_energies = c[..., -number_of_layers:]
+    # brightest_voxels = c[..., number_of_layers+1:(2*number_of_layers)+1]
+    
+    # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+    #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * brightest_voxels[..., [layer_index]] / \
+    #         (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
     
     # Normalize each layer and multiply it with its original energy
     if enforce_energy:
