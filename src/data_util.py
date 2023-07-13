@@ -174,28 +174,36 @@ def postprocess(x, c, layer_boundaries, threshold=1e-4):
 
     return data
 
-def normalize_layers(x, c, layer_boundaries, eps=1.e-10):
+def normalize_layers(x, layer_boundaries, c=None, eps=1.e-10):
     """Normalizes each layer by its energy"""
     
     # Prevent inplace operations
-    x = torch.clone(x)
-    c = torch.clone(c)
+    output = torch.zeros_like(x).to(x.device)
     
     # Get the number of layers
     number_of_layers = len(layer_boundaries) - 1
 
-    # Split up the conditions
-    incident_energy = c[..., [0]]
-    extra_dims = c[..., 1:number_of_layers+1]
-    layer_energies = c[..., -number_of_layers:]
-    
-    # Use the exact layer energies for numerical stability
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energies[..., [layer_index]] + eps)
+    # Use the passed c to speed up computation. Used if no noise is added    
+    if c is not None:
+        # Use the exact layer energies for numerical stability  
+        layer_energies = c[..., -number_of_layers:]
+        # brightest_voxels = c[..., number_of_layers+1:(2*number_of_layers)+1]
         
-    return x
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energies[..., [layer_index]] + eps)
+        # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (brightest_voxels[..., [layer_index]] + eps)
+    
+    # We have to recompute the layer normalization 
+    else:
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+        # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
+        
+    return output
 
-def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, enforce_energy=True):
+def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, noise_width=None):
     """Reverses the effect of the normalize_layers function"""
     
     # Here we should not use clone, since it might result
@@ -212,21 +220,24 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, enforce_energy=True):
     extra_dims = c[..., 1:number_of_layers+1]
     layer_energies = c[..., -number_of_layers:]
     # brightest_voxels = c[..., number_of_layers+1:(2*number_of_layers)+1]
+
     
-    # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-    #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * brightest_voxels[..., [layer_index]] / \
-    #         (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
     
     # Normalize each layer and multiply it with its original energy
-    if enforce_energy:
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]] / \
-                                             (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
-    
-    else:
-        # Normalize each layer and multiply it with its original energy
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        
+        if noise_width is not None:
+            number_of_voxels = (layer_end - layer_start)
+            noise_correction = noise_width / 2 * number_of_voxels
+        else:
+            noise_correction = 0
+            noise_width = 0
+        
+        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * (layer_energies[..., [layer_index]] + noise_correction) / \
+            (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+                                            
+        # output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * (brightest_voxels[..., [layer_index]] + noise_width/2) / \
+        #     (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
 
     return output
 
