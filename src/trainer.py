@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 import data_util
-from model import CINN, CVAE, CAE
+from model import CINN, CVAE
 import plotting
 from plotter import Plotter
 
@@ -80,7 +80,8 @@ class VAETrainer:
                           smearing_self=params.get("VAE_smearing_self", 1.0),
                           smearing_share=params.get("VAE_smearing_share", 0),
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
-                          subtract_noise=params.get("VAE_subtract_noise", False), )
+                          subtract_noise=params.get("VAE_subtract_noise", False),
+                          threshold=params.get("VAE_internal_threshold", False), )
         
         self.model = self.model.to(self.device)
         
