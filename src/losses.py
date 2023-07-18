@@ -15,7 +15,7 @@ class LatentLoss:
          '''
         self.params                 = params
         self.outprint               = True
-        self.loss_type              = eval("self."+self.params.get("latent_loss_type", "latent"))
+        self.loss_type              = eval("self."+self.params.get("latent_loss_type", "weighted_latent"))
         if self.loss_type == self.weighted_latent:
             self.weight_sched = 1
 
@@ -69,9 +69,6 @@ class LatentLoss:
             self.weight_sched = 1/weight_fade_in_epochs * (epoch - start_adv_training_epoch)
         else:
             self.weight_sched = 1
-
-    
-
         
 class GanLoss:
     def __init__(self, params, data_store, adversarial):
