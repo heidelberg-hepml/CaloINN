@@ -45,7 +45,7 @@ class VAETrainer:
             drop_last=True,
             shuffle=True,
             dataset=params.get("dataset", 1),
-            e_inc_index=params.get("e_inc_index", None))
+            e_inc_index=params.get("e_inc_index", None),)
         
         data = self.train_loader.data
         cond = self.train_loader.cond
@@ -81,7 +81,8 @@ class VAETrainer:
                           smearing_share=params.get("VAE_smearing_share", 0),
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
                           subtract_noise=params.get("VAE_subtract_noise", False),
-                          threshold=params.get("VAE_internal_threshold", False), )
+                          threshold=params.get("VAE_internal_threshold", False), 
+                          learn_energies=params.get("VAE_learn_energies", False), )
         
         self.model = self.model.to(self.device)
         
@@ -488,8 +489,8 @@ class ECAETrainer:
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
         # TODO: Best or last? Maybe add toggle in params file
-        self.vae_trainer.load("_best")
-        # self.vae_trainer.load()
+        # self.vae_trainer.load("_best")
+        self.vae_trainer.load()
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
