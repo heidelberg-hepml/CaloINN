@@ -139,6 +139,8 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
     
     # # TODO: hard-coded strict cutting, revisit if it works
     # x[x<1.e-8] = 0
+    
+    # x = np.log(x+1.e-8)    
 
     x = x[binary_mask]
     c = energy[binary_mask]
@@ -158,6 +160,8 @@ def postprocess(x, c, layer_boundaries, threshold=1e-4):
     # Makes sure, that the original set is not modified inplace
     x = torch.clone(x)
     c = torch.clone(c)
+           
+    # x = torch.exp(x)-1.e-8
 
     # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
     # the logit preprocessing
@@ -244,8 +248,8 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, noise_width=None):
 def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     "returns a hlf class needed for plotting"
     
-    x = x.cpu()
-    c = c.cpu()
+    x = x.detach().cpu()
+    c = c.detach().cpu()
     
     if dataset == 1:
         hlf = HLF.HighLevelFeatures(particle_type,
