@@ -480,6 +480,8 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (-30., 30.)
         elif layer in [12, 13]:
             vmin, vmax = (-500., 500.)
+        elif layer == 2:
+            vmin, vmax = (-250., 250.)
         else:
             vmin, vmax = (-100., 100.)
             
@@ -494,6 +496,8 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (-30., 30.)
         elif layer in [12, 13]:
             vmin, vmax = (-500., 500.)
+        elif layer == 2:
+            vmin, vmax = (-250., 250.)
         else:
             vmin, vmax = (-100., 100.)
             
@@ -508,6 +512,8 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (0., 30.)
         elif layer in [12, 13]:
             vmin, vmax = (0., 400.)
+        elif layer == 2:
+            vmin, vmax = (0., 250.)
         else:
             vmin, vmax = (0., 100.)
             
@@ -522,6 +528,8 @@ def get_all_plot_parameters(hlf, params):
             vmin, vmax = (0., 30.)
         elif layer in [12, 13]:
             vmin, vmax = (0., 400.)
+        elif layer == 2:
+            vmin, vmax = (0., 250.)
         else:
             vmin, vmax = (0., 100.)
             
@@ -538,10 +546,10 @@ def get_all_plot_parameters(hlf, params):
         plots.append((cell_dist_by_layer, f'total_energy_dist_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f'Voxel energy distribution of layer {layer}', "p_ref": particle_type, "xscale": "log"}))
         
-    for layer in calc_brightest_voxel(hlf).keys():
-        for N in range(3):
-            plots.append((calc_brightest_voxel, f'{N+1}_brightest_voxel_{layer}.pdf', {"layer": layer, "N": N+1},
-                {"axis_label": f'{N+1} brightest voxel of layer {layer}', "p_ref": particle_type, "xscale": "log", "yscale": "linear",}))
+    # for layer in calc_brightest_voxel(hlf).keys():
+    #     for N in range(3):
+    #         plots.append((calc_brightest_voxel, f'{N+1}_brightest_voxel_{layer}.pdf', {"layer": layer, "N": N+1},
+    #             {"axis_label": f'{N+1} brightest voxel of layer {layer}', "p_ref": particle_type, "xscale": "log", "yscale": "linear",}))
         
      
     # Sparsity
