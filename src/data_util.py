@@ -167,7 +167,6 @@ def postprocess(x, c, layer_boundaries, quantiles, threshold=1e-4):
     #x[x < threshold] = 0.
     x[x < quantiles] = 0.0
     x = unnormalize_layers(x, c, layer_boundaries)
-    print(x.min())
     #x[x < 0] = 0
     #x[x < threshold] = 0
 
@@ -233,7 +232,6 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
     for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
         output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]  / \
                                              (np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
-    print(output.min(), output.max())
     return output
 
 def save_hlf(hlf, filename):
@@ -246,7 +244,6 @@ def save_hlf(hlf, filename):
 
 def get_loaders(filename, xml_filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=True, width_noise=0.0):
     """Creates the dataloaders used to train the VAE model."""
-    
     # load the data from the hdf5 file
     data, layer_boundaries = load_data(filename, particle_type, xml_filename=xml_filename)
 

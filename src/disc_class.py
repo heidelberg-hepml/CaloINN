@@ -30,8 +30,10 @@ class DNN(torch.nn.Module):
         self.params_trainable = list(filter(
             lambda p: p.requires_grad, self.parameters()))
 
-    def forward(self, x):
+    def forward(self, x, sig=False):
         x = self.layers(x)
+        if sig:
+            x = torch.sigmoid(x)
         return x
 
     def eval_weight(self, x):

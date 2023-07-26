@@ -42,7 +42,7 @@ class LatentLoss:
 
         weights     = sig/torch.clamp((1-sig), min = 1.e-7)
         weight_pot  = self.params.get("weight_pot", 1)
-
+        print(weights.mean(), weights[:10], sig[:10])
         if self.params.get("sig_pot", False):
             weight_pot = torch.sqrt((self.params.get("sig_scale", 6) * (sig-0.5)))**2 * weight_pot
 
@@ -55,7 +55,7 @@ class LatentLoss:
         if num_nan >= 1:
             print("Setting {} nan weights ({}%) to 1.".format(num_nan, num_nan/weights.shape[0]*100))
             weights[nan_mask] = 1
-        return torch.mean(weights[:,None] * z**2)/2 - torch.mean(weights * jac) / z.shape[1]
+        return torch.mean(weights[:,None] * z**2)/2 - torch.mean(weights * jac) / z.shape[1]  # maybe inverse
 
 
     def weight_pot_scheduler(self, epoch):

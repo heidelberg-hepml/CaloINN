@@ -7,6 +7,9 @@ import torch
 
 from documenter import Documenter
 from trainer import Trainer
+from discflow_trainer import *
+from disc_class import *
+from model import *
 
 def main():
     parser = argparse.ArgumentParser(description='train network')
@@ -56,7 +59,36 @@ def main():
         with open(plot_configs[calo_layer]) as f:
             plot_params.update(yaml.load(f, Loader=yaml.FullLoader))
 
-    trainer = Trainer(params, device, doc)
+    train_loader, test_loader, layer_boundaries = data_util.get_loaders(
+            params.get("data_path"),
+            params.get("xml_path"),
+            params.get("xml_ptype"),
+            params.get("val_frac"),
+            params.get("batch_size"),
+            device=device,
+            width_noise=params.get("width_noise"),
+            )
+
+    # define disc model
+    n_layers = params.get("n_disc_layers", 3)
+    n_nodes = params.get("n_disc_nodes", 512)
+    disc_dim = params.get("disc_input_dim", 42)
+    disc_model = DNN(n_layers, n_nodes, disc_dim)
+   
+    # define gen model
+    gen_model = CINN(params, train_loader.add_noise(train_loader.data), train_loader.cond)
+
+    # define discflow trainer
+    trainer = DiscFlow_Trainer(
+            params, 
+            train_loader, 
+            test_loader, 
+            layer_boundaries,
+            disc_model, 
+            gen_model, 
+            doc
+            )
+
     if args.plot:
         trainer.load(args.model_name)
     else:
