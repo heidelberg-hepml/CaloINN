@@ -7,6 +7,7 @@ import os
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm
 from matplotlib.colors import LogNorm as LN
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
@@ -38,7 +39,14 @@ class HighLevelFeatures:
         self.width_phis = {}
         self.sparsity = {}
         self.particle = particle
-
+        self.colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
+        if self.particle == 'photon':
+            self.color = self.colors[1]
+        elif self.particle == 'pion':
+            self.color = self.colors[2]
+        else:
+            self.color = self.colors[0]
+    
         self.num_voxel = []
         for idx, r_values in enumerate(self.r_edges):
             self.num_voxel.append((len(r_values)-1)*self.num_alpha[idx])
@@ -63,17 +71,19 @@ class HighLevelFeatures:
         phi_width = np.sqrt((phi_width - phi_EC**2).clip(min=0.))
         return eta_EC, phi_EC, eta_width, phi_width
 
-    def _calculate_sparsity(self, layer_data, threshold):
+    def _calculate_sparsity(self, layer_data):
         """ Computes the sparsity of the given layer"""
-        return (layer_data > threshold).mean(axis=1)
+        return (layer_data > 0).mean(axis=1)
 
-    def CalculateFeatures(self, data, sparsity_threshold=10):
+    def CalculateFeatures(self, data):
         """ Computes all high-level features for the given data """
         self.E_tot = data.sum(axis=-1)
 
         for l in self.relevantLayers:
             E_layer = data[:, self.bin_edges[l]:self.bin_edges[l+1]].sum(axis=-1)
             self.E_layers[l] = E_layer
+            
+            self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]])
 
         for l in self.relevantLayers:
 
@@ -84,7 +94,7 @@ class HighLevelFeatures:
                         self.phi_all_layers[l],
                         data[:, self.bin_edges[l]:self.bin_edges[l+1]])
                     
-                self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], sparsity_threshold)
+                self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]])
 
     def _DrawSingleLayer(self, data, layer_nr, filename, title=None, fig=None, subplot=(1, 1, 1),
                          vmax=None, colbar='alone'):
@@ -108,6 +118,7 @@ class HighLevelFeatures:
         if vmax is None:
             vmax = data.max()
         pcm = ax.pcolormesh(theta, rad, data_repeated.T+1e-16, norm=LN(vmin=1e-2, vmax=vmax))
+        pcm.set_edgecolor('face')
         ax.axes.get_xaxis().set_visible(False)
         ax.axes.get_yaxis().set_visible(False)
         if self.particle == 'electron':
@@ -154,7 +165,7 @@ class HighLevelFeatures:
         for radii in self.r_edges:
             if radii[-1] > max_r:
                 max_r = radii[-1]
-        vmax = data.max()
+        vmax = data.max() if data.max() > 1e-2 else 1e-2
         for idx, layer in enumerate(self.relevantLayers):
             radii = np.array(self.r_edges[idx])
             if self.particle != 'electron':
@@ -170,6 +181,7 @@ class HighLevelFeatures:
                 ax = plt.subplot(1, len(self.r_edges), idx+1, polar=True)
             ax.grid(False)
             pcm = ax.pcolormesh(theta, rad, data_repeated.T+1e-16, norm=LN(vmin=1e-2, vmax=vmax))
+            pcm.set_edgecolor('face')
             ax.axes.get_xaxis().set_visible(False)
             ax.axes.get_yaxis().set_visible(False)
             if self.particle == 'electron':

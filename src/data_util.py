@@ -6,17 +6,26 @@ from myDataLoader import MyDataLoader
 from XMLHandler import XMLHandler
 import HighLevelFeatures as HLF
 
-def load_data_calo(filename, layer_boundaries):
+def load_data_calo(filename, layer_boundaries, energy=None):
     data = {}
     data_file = h5py.File(filename, 'r')
-    data["energy"] = data_file["incident_energies"][:] / 1.e3
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
+    if energy is not None:
+        energy_mask = data_file["incident_energies"][:] == energy
+        data["energy"] = data_file["incident_energies"][:][energy_mask].reshape(-1, 1) / 1.e3
+        print(energy_mask.shape)    
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end][energy_mask.flatten()] / 1.e3
+    else:
+        data["energy"] = data_file["incident_energies"][:] / 1.e3
+        #data["energy"] = data_file["incident_energies"][:] / 1.e3
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
+
     data_file.close()
     
     return data
 
-def load_data(filename, particle_type,  xml_filename, threshold=1e-5):
+def load_data(filename, particle_type,  xml_filename, threshold=1e-5, energy=None):
     """Loads the data for a dataset 1 from the calo challenge"""
     
     # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
@@ -31,9 +40,18 @@ def load_data(filename, particle_type,  xml_filename, threshold=1e-5):
     # Load and store the data. Make sure to slice according to the layers.
     # Also normalize to 100 GeV (The scale of the original data is MeV)
     data_file = h5py.File(filename, 'r')
-    data["energy"] = data_file["incident_energies"][:] / 1.e3
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
+    #data["energy"] = data_file["incident_energies"][:] / 1.e3
+    if energy is not None:
+        energy_mask = data_file["incident_energies"][:] == energy
+        data["energy"] = data_file["incident_energies"][:][energy_mask].reshape(-1, 1) / 1.e3
+        print(energy_mask.shape)
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end][energy_mask.flatten()] / 1.e3
+    else:
+        data["energy"] = data_file["incident_energies"][:] / 1.e3
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
+        print(data[f"layer_{layer_index}"].shape)
     data_file.close()
     
     return data, layer_boundaries
