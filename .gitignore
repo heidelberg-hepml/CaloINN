@@ -150,3 +150,4 @@ params_before_prior_test
 !notebooks/template.ipynb
 !notebooks/create_runcard.ipynb
 src_bak
+jupyter.txt
