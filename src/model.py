@@ -511,40 +511,13 @@ class noise_layer(nn.Module):
             return input
         
 def smooth_sparsity(input, threshold, strength=0.2):
-    return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)
-    
-
-class HeteroMSE(nn.Module):
-    def __init__(self):
-        super(HeteroMSE, self).__init__()
-
-    def forward(self, input, target, logsig2, reduction):
-        
-        assert reduction == "mean"
-        
-        loss = torch.mean((input - target) ** 2 / 2*logsig2.exp() + 1/2 * logsig2)
-        # loss = torch.mean((input - target) ** 2)
-
-        return loss
-    
-class HeteroMAE(nn.Module):
-    def __init__(self):
-        super(HeteroMAE, self).__init__()
-
-    def forward(self, input, target, logsig2, reduction):
-        
-        assert reduction == "mean"
-        
-        loss = torch.mean(torch.abs(input - target) / 2*logsig2.exp() + 1/2 * logsig2)
-
-        return loss
-    
+    return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)  
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
                  eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 subtract_noise=False, threshold=None, learn_energies=False):
+                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None):
         
         super(CVAE, self).__init__()
         
@@ -559,6 +532,8 @@ class CVAE(nn.Module):
         
         
         # Save some important parameters:
+        
+        self.sparsity_loss_strength = sparsity_loss
         
         # Should we learn an energy embedding?
         self.learn_e = learn_energies
@@ -1100,14 +1075,18 @@ class CVAE(nn.Module):
         x_reco_0_1 = torch.cat((x_reco_0_1, c_reco[..., 1:self.num_detector_layers+1]*0.9), axis=1)
         
         # Compute the losses
-
         
-        # # Sparsity loss
-        # if self.noise_width is not None:
-        #     sparsity_loss = 100*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, self.noise_width), smooth_sparsity(x, self.noise_width))
-        # else:
-        #     sparsity_loss = 100*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, 1.e-6), smooth_sparsity(x, 1.e-6))
+        # Sparsity loss
+        if self.sparsity_loss_strength is not None:
+            if self.noise_width is not None:
+                sparsity_loss = self.sparsity_loss_strength*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, self.noise_width), smooth_sparsity(x, self.noise_width))
+            else:
+                sparsity_loss = self.sparsity_loss_strength*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, 1.e-6), smooth_sparsity(x, 1.e-6))
+                
+        else:
+            sparsity_loss = torch.tensor(0.0, device=x.device)
 
+        # Reconstruction loss
         if not MAE_logit:
             MSE_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
         else:
@@ -1130,16 +1109,16 @@ class CVAE(nn.Module):
                 self.data_sum += MSE_data
                 self.logit_sum += MSE_logit
         
+        # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
         if zero_logit:
-            MSE_logit = torch.tensor(0).to(MSE_logit.device)
+            MSE_logit = torch.tensor(0.).to(MSE_logit.device)
             
         if zero_data:
-            MSE_data = torch.tensor(0).to(MSE_logit.device)
+            MSE_data = torch.tensor(0.).to(MSE_logit.device)
 
-        # return MSE_logit + MSE_data + KLD+sparsity_loss, MSE_logit, MSE_data, sparsity_loss
-        return MSE_logit + MSE_data + KLD, MSE_logit, MSE_data, KLD
+        return MSE_logit + MSE_data + KLD + sparsity_loss, MSE_logit, MSE_data, KLD, sparsity_loss
 
     def update_gamma(self):
                 
