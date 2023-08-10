@@ -517,7 +517,7 @@ class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
                  eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None):
+                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None):
         
         super(CVAE, self).__init__()
         
@@ -530,10 +530,12 @@ class CVAE(nn.Module):
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
         
+        # self.CE_scaling = 1 / torch.std(input, dim=0)
+        # self.CE_scaling = self.CE_scaling / torch.mean(self.CE_scaling)
+        
+        self.log_c_weight = 1
         
         # Save some important parameters:
-        
-        self.sparsity_loss_strength = sparsity_loss
         
         # Should we learn an energy embedding?
         self.learn_e = learn_energies
@@ -542,7 +544,9 @@ class CVAE(nn.Module):
         self.layer_boundaries = layer_boundaries_detector
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
-        # the hyperparamters for the reco_loss
+        # the hyperparamters for the loss
+        self.sparsity_loss_strength = sparsity_loss
+        self.BCE_mode = BCE_mode
         self.alpha = alpha
         self.beta = beta
         self.gamma = torch.tensor(gamma)
@@ -959,7 +963,7 @@ class CVAE(nn.Module):
         elif self.einc_preprocessing == "logit":
             e_inc = torch.clamp( c[:, [0]] / self.max_cond[:, [0]], min=0, max=1 )
             e_inc_logit = self.logit_trafo_in( e_inc )
-            torch.cat((latent, e_inc_logit ), axis=1)
+            latent = torch.cat((latent, e_inc_logit ), axis=1)
             
                   
         # decode
@@ -1043,13 +1047,19 @@ class CVAE(nn.Module):
         # Sample
         latent = self.reparameterize(mu, logvar)
         
-        # Decode
-        x_reco_shifted, c = self.decode(latent=latent, c=c, train=True)
         
         if not return_mu_logvar:
+            
+            # Decode
+            x_reco_shifted = self.decode(latent=latent, c=c, train=False)
+            
             return x_reco_shifted
         
         else:
+            
+            # Decode
+            x_reco_shifted, c = self.decode(latent=latent, c=c, train=True)
+            
             return x_reco_shifted, c, mu, logvar
     
     def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
@@ -1064,15 +1074,25 @@ class CVAE(nn.Module):
         # x_dimensionless = x / torch.sqrt(c[..., [0]])
         # x_reco_dimensionless = x_reco / torch.sqrt(c[..., [0]])
         
-        # For logit loss part        
+        # For BCE loss part
         x_0_1      = data_util.normalize_layers(x, self.layer_boundaries, eps=self.eps) * 0.9
-        x_logit = self.logit_trafo_in(x_0_1)
-        
         x_reco_0_1 = data_util.normalize_layers(x_reco_shifted, self.layer_boundaries, eps=self.eps) * 0.9
-        x_reco_logit = self.logit_trafo_in(x_reco_0_1)
+        
+        
+        # Could also add a possibility to sample here?
+        if self.BCE_mode == "continuous":
+            # mu_reco_x_0_1 = self._get_CB_mu(x_reco_0_1)
+            mu_reco_x_0_1 = x_reco_0_1
+        else:
+            mu_reco_x_0_1 = x_reco_0_1
+        
+        # For logit loss part
+        x_logit = self.logit_trafo_in(x_0_1)
+        x_reco_logit = self.logit_trafo_in(mu_reco_x_0_1)
 
-        x_0_1 = torch.cat((x_0_1, c[..., 1:self.num_detector_layers+1]*0.9), axis=1)
-        x_reco_0_1 = torch.cat((x_reco_0_1, c_reco[..., 1:self.num_detector_layers+1]*0.9), axis=1)
+        if self.learn_e:
+            x_0_1 = torch.cat((x_0_1, c[..., 1:self.num_detector_layers+1]*0.9), axis=1)
+            x_reco_0_1 = torch.cat((x_reco_0_1, c_reco[..., 1:self.num_detector_layers+1]*0.9), axis=1)
         
         # Compute the losses
         
@@ -1087,38 +1107,63 @@ class CVAE(nn.Module):
             sparsity_loss = torch.tensor(0.0, device=x.device)
 
         # Reconstruction loss
+        # Logit loss
         if not MAE_logit:
-            MSE_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
         else:
-            MSE_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
         
-        if not MAE_data:
-            # MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
-            MSE_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
+        # Data MSE loss
+        if self.BCE_mode is None:
+            if not MAE_data:
+                reco_loss_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
+            else:
+                reco_loss_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
+            
+            # Not needed for gaussian approach
+            log_c = torch.tensor(0.0, device=x.device)
+                
+        # Data BCE loss
+        elif self.BCE_mode == "discrete":
+            reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
+            
+            # Only needed for the continuous bernoulli approach
+            log_c = torch.tensor(0.0, device=x.device)
+            
+        elif self.BCE_mode == "non_binary":
+            # reco_loss_data = self.gamma * cross_entropy(x_reco_0_1, self.CE_scaling * x_0_1, reduction="mean")
+            reco_loss_data = self.gamma * cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
+            
+            # Only needed for the continuous bernoulli approach
+            log_c = torch.tensor(0.0, device=x.device)
+            
+            
+        elif self.BCE_mode == "continuous":
+            reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
+            
+            # Calculates the normalization constant for the continuous bernoulli
+            log_c = self.gamma * self.log_c_weight * self._get_CB_log_c(x_reco_0_1, reduction="mean")
+            
         else:
-            MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
+            raise ValueError("BCE_mode must be None, discrete or continuous")
 
-        # Data loss in 0-1-space -> Not as good as the norm by average energy for the MSE
-        # if not MAE_data:
-        #     MSE_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
-        # else:
-        #     MSE_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
         
         if self.training and self.learn_gamma: # Make sure to only track the loss from training, and not from validation!!!
             with torch.no_grad():
-                self.data_sum += MSE_data
-                self.logit_sum += MSE_logit
+                self.data_sum += reco_loss_data
+                self.logit_sum += reco_loss_logit
         
         # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
         if zero_logit:
-            MSE_logit = torch.tensor(0.).to(MSE_logit.device)
+            reco_loss_logit = torch.tensor(0.).to(reco_loss_logit.device)
             
         if zero_data:
-            MSE_data = torch.tensor(0.).to(MSE_logit.device)
+            reco_loss_data = torch.tensor(0.).to(reco_loss_logit.device)
 
-        return MSE_logit + MSE_data + KLD + sparsity_loss, MSE_logit, MSE_data, KLD, sparsity_loss
+
+        return reco_loss_logit + reco_loss_data + KLD + sparsity_loss - log_c, reco_loss_logit, reco_loss_data, KLD, sparsity_loss, log_c
 
     def update_gamma(self):
                 
@@ -1130,3 +1175,55 @@ class CVAE(nn.Module):
         else:
             print("Updating gamma is disabled!")
         return
+    
+
+    def _get_CB_log_c(self, x, eps=1.e-5, reduction="mean"):
+        """ Calculates the normalization constant for the continuous bernoulli distribution."""
+        
+        # The output of the network, cliped to avoid numerical instabilities
+        x = torch.clamp(x, 1.e-6, 1.-1.e-6) 
+        
+        # For values close to the critical point the analytical expression is unstable. Thus we use a taylor expansion around 0.5 for these values.
+        mask = (torch.abs(x - 0.5) >= eps)
+        anayltical_c = torch.log( (torch.log(1. - x) - torch.log(x)) / (1. - 2. * x) )
+        approx_c = torch.log(2. + 2./3.*( 1. - 2. * x)**2 )
+        log_c  = torch.where(mask, anayltical_c, approx_c)
+        
+        if reduction=="sum":
+            return log_c.sum()
+        elif reduction=="mean":
+            return log_c.mean()
+        else:
+            raise ValueError("reduction must be sum or mean")
+    
+    def _get_CB_mu(self, x, eps=1.e-5):
+        """Calculate the expectation value of the continuous bernoulli distribution."""
+        
+        x = torch.clamp(x, eps, 1.-eps)
+        
+        mu = x / (2. * x - 1.) + 1 / (2 * torch.arctanh(1 - 2 * x))
+        
+        mu = torch.where(x==0, 0.5, mu)
+        
+        return mu
+        
+    def update_log_c_weight(self, value):
+        self.log_c_weight = value
+
+
+def cross_entropy(inp, trg, reduction="mean"):
+    """Calculates the cross entropy between two distributions."""
+    
+    # batch_size = inp.shape[0]
+    # return torch.nn.functional.cross_entropy(inp.view(-1, 1), trg.view(-1, 1), reduction=reduction)
+    
+    inp = torch.clamp(inp, 1.e-15, 1)
+    
+    if reduction == "sum":
+        return -torch.sum(trg * torch.log(inp))
+    
+    elif reduction == "mean":
+        return -torch.mean(trg * torch.log(inp))
+    
+    else:
+        raise ValueError("reduction must be sum or mean")
