@@ -985,6 +985,11 @@ class CVAE(nn.Module):
         if self.learn_e:
             x_recon_noise, c = self._update_c(x_recon_noise, c)
         
+        # Might be used to compute mu for the continuous BCE    
+        # if not train:
+        #     if self.BCE_mode == "continuous":
+        #         x_recon_noise = self._get_CB_mu(x_recon_noise)
+        
         
         # Revert to original normalization -> Enforce layer energies to be correct
         # NOTE: When normalizing to a noise width != 0, I found weird artifacts in the layer energy distribution and bad classifier scores
@@ -1024,6 +1029,11 @@ class CVAE(nn.Module):
             x_recon_shifted = x_recon
                     
         if not train:
+            # Might be used to compute mu for the continuous BCE    
+            # if self.BCE_mode == "continuous":
+            #     x_reco_0_1 = data_util.normalize_layers(x_recon_shifted, self.layer_boundaries, eps=self.eps) * 0.9
+            #     mu_reco_x_0_1 = self._get_CB_mu(x_reco_0_1)
+            #     x_recon_shifted  = data_util.unnormalize_layers(mu_reco_x_0_1, c, self.layer_boundaries, eps=self.eps)
             return x_recon_shifted
         else:
             return x_recon_shifted, c
