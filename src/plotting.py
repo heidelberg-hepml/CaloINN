@@ -113,10 +113,14 @@ def plot_hist(
     if vmin is None:
         vmin = np.inf
         for elem in all_data:
+            if len(elem) == 0:
+                return
             vmin = np.min([np.min(elem), vmin])
     if vmax is None:
         vmax = -np.inf
         for elem in all_data:
+            if len(elem) == 0:
+                return
             vmax = np.max([np.max(elem), vmax])
             
     # Get the bins (Modifications needed if logscale is used)
@@ -125,7 +129,10 @@ def plot_hist(
         if vmin==0:
             vmin = np.inf     
             for elem in all_data:
-                vmin = np.min([np.min(elem[elem>1e-7]), vmin])
+                cutted = elem[elem>1e-7]
+                if len(cutted) == 0:
+                    return
+                vmin = np.min([np.min(cutted), vmin])
                 
         if isinstance(n_bins, int):
             bins = np.logspace(np.log10(vmin), np.log10(vmax), n_bins)

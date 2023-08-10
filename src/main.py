@@ -29,7 +29,7 @@ def main():
     # set default parameters for the file locations using the particle type parameter
     dataset = params.get("dataset", 1)
     if "data_path" not in params:
-        particle_type = params.get("particle_type", "phoron")
+        particle_type = params.get("particle_type", "photon")
         if dataset == 1:
             data_path = f"/remote/gpu06/ernst/Master_Thesis/Datasets/Dataset1/dataset_1_{particle_type}s_1.hdf5"
         else:
