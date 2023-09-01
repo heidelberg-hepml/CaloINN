@@ -478,7 +478,7 @@ def get_all_plot_parameters(hlf, params):
     for layer in hlf.GetElayers().keys():
         plots.append((E_layers, f'E_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Energy deposited in layer {layer} [MeV]", "p_ref": particle_type,
-                    "vmin": min_energy, 'xscale': 'log', "n_bins": 40}))
+                     'xscale': 'log', "n_bins": 40}))
         
     # eta centroid plots mean
     for layer in hlf.GetECEtas().keys():
@@ -494,7 +494,8 @@ def get_all_plot_parameters(hlf, params):
             
         plots.append((ECEtas, f'ECEta_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": r"Center of Energy in $\Delta\eta$ in layer" + f" {layer} [mm]", 
-                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    "p_ref": particle_type}))
         
     # phi centroid plots mean
     for layer in hlf.GetECPhis().keys():
@@ -510,7 +511,8 @@ def get_all_plot_parameters(hlf, params):
             
         plots.append((ECPhis, f'ECPhi_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": r"Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
-                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    "p_ref": particle_type}))
         
     # eta centroid plots width
     for layer in hlf.GetWidthEtas().keys():
@@ -526,7 +528,8 @@ def get_all_plot_parameters(hlf, params):
             
         plots.append((ECWidthEtas, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Width of Center of Energy in \n$\\Delta\\eta$ in layer {layer} [mm]", 
-                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
+                    "p_ref": particle_type}))
 
     # phi centroid plots width
     for layer in hlf.GetWidthPhis().keys():
@@ -542,8 +545,19 @@ def get_all_plot_parameters(hlf, params):
             
         plots.append((ECWidthPhis, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
                     {"axis_label": f"Width of Center of Energy in \n$\\Delta\\phi$ in layer {layer} [mm]", 
-                    "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
+                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
+                    "p_ref": particle_type}))    
     
+    for layer in hlf.GetECRads().keys():
+        plots.append((ECRads, f'ECRad_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": f"Radial center of Energy in layer {layer} [mm]", 
+                    "p_ref": particle_type}))
+        
+    for layer in hlf.GetWidthRads().keys():
+        plots.append((ECWidthRads, f'WidthECRad_layer_{layer}.pdf', {"layer": layer},
+                    {"axis_label": f"Width of radial center of Energy in layer {layer} [mm]", 
+                    "p_ref": particle_type}))
+
     # Voxel distribution
     plots.append((cell_dist, 'total_energy_dist.pdf', {},
                 {"axis_label": r'Voxel energy distribution', "p_ref": particle_type, "xscale": "log"}))

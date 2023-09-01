@@ -28,14 +28,17 @@ class HighLevelFeatures:
         self.relevantLayers = xml.GetRelevantLayers()
         self.layersBinnedInAlpha = xml.GetLayersWithBinningInAlpha()
         self.r_edges = [redge for redge in xml.r_edges if len(redge) > 1]
+        self.r_midvalues = [np.array(r_midvalue) for r_midvalue in xml.r_midvalue]
         self.num_alpha = [len(xml.alphaListPerLayer[idx][0]) for idx, redge in \
                           enumerate(xml.r_edges) if len(redge) > 1]
         self.E_tot = None
         self.E_layers = {}
         self.EC_etas = {}
         self.EC_phis = {}
+        self.EC_rad = {}
         self.width_etas = {}
         self.width_phis = {}
+        self.width_rad = {}
         self.sparsity = {}
         self.particle = particle
 
@@ -66,6 +69,20 @@ class HighLevelFeatures:
     def _calculate_sparsity(self, layer_data, threshold):
         """ Computes the sparsity of the given layer"""
         return (layer_data > threshold).mean(axis=1)
+    
+    def _CalculateECandWidthsRadial(self, data, layer):
+        
+                    
+        # print(layer)
+        # print(self.r_midvalues[layer])
+        # print(data.sum(axis=-1))
+        # print(data.shape)
+              
+        return (
+            
+            (data * self.r_midvalues[layer]).sum(axis=-1)/(data.sum(axis=-1)+1e-16),
+            (data * self.r_midvalues[layer]**2).sum(axis=-1)/(data.sum(axis=-1)+1e-16)
+        )
 
     def CalculateFeatures(self, data, sparsity_threshold=10):
         """ Computes all high-level features for the given data """
@@ -76,6 +93,12 @@ class HighLevelFeatures:
             self.E_layers[l] = E_layer
             
             self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], sparsity_threshold)
+            
+            # print("alpha layers:", self.layersBinnedInAlpha)
+            # print("relevant layers:", self.relevantLayers)
+            
+            if l not in self.layersBinnedInAlpha:
+                self.EC_rad[l], self.width_rad[l] = self._CalculateECandWidthsRadial(data[:, self.bin_edges[l]:self.bin_edges[l+1]], layer=l)
 
         for l in self.relevantLayers:
 
@@ -223,6 +246,14 @@ class HighLevelFeatures:
     def GetWidthPhis(self):
         """ returns dictionary of widths of centers of energy in phi for each layer """
         return self.width_phis
+    
+    def GetECRads(self):
+        """ returns dictionary of centers of energy in radius for each layer without alpha bins """
+        return self.EC_rad
+
+    def GetWidthRads(self):
+        """ returns dictionary of widths of centers of energy in radius for each layer without alpha bins """
+        return self.width_rad
 
     def GetSparsity(self):
         return self.sparsity

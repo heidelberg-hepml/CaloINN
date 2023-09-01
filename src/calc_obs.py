@@ -24,6 +24,12 @@ def ECWidthEtas(hlf, layer):
 def ECWidthPhis(hlf, layer):
     return hlf.GetWidthPhis()[layer]
 
+def ECRads(hlf, layer):
+    return hlf.GetECRads()[layer]
+
+def ECWidthRads(hlf, layer):
+    return hlf.GetWidthRads()[layer]
+
 def cell_dist(hlf):
     return hlf.showers.flatten()
 
