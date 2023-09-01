@@ -1,0 +1,93 @@
+# General
+
+# Documenter information
+run_name: all_einc_1000_ep_only_BCE_set_2_KVAE_7_kernel_3_stride_8_alpha_7_internal_threshold_logit_loss_alpha_cutting
+# vae_dir: /remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/results/2023_04_17_081500_3_gamma_large_net
+vae_dir: null
+# Data
+dtype: float32
+
+# particle_type: pion
+particle_type: electron
+dataset: 2
+
+val_frac: 0.2
+eps: 1.e-10
+threshold: 1.e-10
+# Plotting
+min_energy: 1.e-3 # corresponds to the threshold combined with a 10^5 normalization
+
+
+# VAE
+
+# VAE Preprocessing
+alpha: 1.e-8
+VAE_width_noise: null
+VAE_internal_threshold: 1.e-7
+VAE_subtract_noise: False
+
+VAE_einc_preprocessing: "logit"
+# VAE_einc_preprocessing: "hot_one"
+
+e_inc_index: null
+# VAE Training
+VAE_lr_sched_mode: null
+VAE_max_lr: 1.e-4
+VAE_lr: 1.e-4
+VAE_gamma_updates: null # Int or null
+VAE_weight_decay: 1.e-7
+VAE_batch_size: 256
+VAE_n_epochs: 1000
+VAE_save_interval: 100
+VAE_keep_models: 5001
+VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
+VAE_MAE_data: False # Use MAE instead of MSE for data loss
+VAE_zero_logit: False # Set the logit loss to 0
+VAE_zero_data: False # Set the data loss to 0
+BCE_mode: discrete # replaces the data mse by an BCE if not null
+sparsity_loss: 0
+VAE_smearing_self: 0.6
+VAE_smearing_share: 0.05
+# VAE Architecture
+VAE_hidden_sizes: [1500, 1000, 500]
+VAE_latent_dim: 50
+VAE_beta: 1.e-5
+VAE_gamma: 1.e+4
+VAE_dropout: 0.0
+VAE_batch_norm: False
+VAE_learn_energies: False
+# Block Architecture
+VAE_hidden_sizes_kernel : [1500, 800, 300]
+VAE_kernel_size: 7
+VAE_kernel_stride: 3
+VAE_kernel_latent: 50
+
+
+# INN
+
+# Data
+latent_type: pre_sampling # post_sampling or pre_sampling or only_means
+# INN Preprocessing
+logit_transformation: False
+log_cond: True
+# INN Training
+lr: 5.e-5
+max_lr: 5.e-4
+batch_size: 256
+lr_scheduler: one_cycle_lr
+weight_decay: 0.
+betas: [0.9, 0.999]
+n_epochs: 200
+save_interval: 50
+keep_models: 1000
+# Bayesian Setup
+bayesian: False
+# INN Architecture
+n_blocks: 18
+internal_size: 32
+layers_per_block: 3
+coupling_type: rational_quadratic
+bounds_init: 20
+permute_soft: False
+num_bins: 10
+dropout: 0.0
