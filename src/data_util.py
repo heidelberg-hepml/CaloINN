@@ -32,8 +32,57 @@ def load_data(filename, particle_type, dataset=1):
     # Also normalize to 100 GeV (The scale of the original data is MeV)
     data_file = h5py.File(filename, 'r')
     data["energy"] = data_file["incident_energies"][:] / 1.e5
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+    
+    if type(dataset) != int and "layers_[" in dataset:
+        
+        print(layer_boundaries)
+                
+        # NOTE: This is a hacky solution to get the layers from the dataset.Works only for dataset 2!!!
+        layer_boundaries = np.arange(0, 46*144, 144)
+        layers = []
+        for layer in dataset.split("layers_")[1].split("[")[1].split("]")[0].split(","):
+            layers.append(int(layer))
+    
+        # layer_boundaries = layer_boundaries[layers]
+        new_layer_boundaries = [0]
+        
+        i = 0
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            if layer_index not in layers:
+                continue
+
+            new_layer_boundaries.append(new_layer_boundaries[-1] + layer_end - layer_start)
+            data[f"layer_{i}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+            
+            i += 1
+            
+        print(new_layer_boundaries)
+        layer_boundaries = new_layer_boundaries
+    
+    elif dataset == "2_small":
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+            
+            if layer_index == 4:
+                break
+            
+    elif dataset == "2_small_2":
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+            
+            if layer_index == 7:
+                break
+            
+    elif dataset == "2_medium":
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+            
+            if layer_index == 16:
+                break
+    else:
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
+            
     data_file.close()
     
     return data, layer_boundaries
@@ -59,7 +108,7 @@ def get_energy_and_sorted_layers(data):
             
     return energy, layers
 
-def save_data(data, filename):
+def save_data(data, filename, mask=None):
     """Saves the data with the same format as dataset 1 from the calo challenge"""
     
     # extract the needed data
@@ -70,11 +119,16 @@ def save_data(data, filename):
     
     # concatenate the layers and renormalize them, too           
     showers = np.concatenate(layers, axis=1) * 1.e5
-            
+    
+    if mask is not None:
+        showers[..., mask] = 0
+    
     save_file = h5py.File(filename, 'w')
     save_file.create_dataset('incident_energies', data=incident_energies)
     save_file.create_dataset('showers', data=showers)
-    save_file.close()            
+    save_file.close()
+    
+    return showers, incident_energies           
   
 def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
     """Appends the extra dimensions and the layer energies to the conditions
@@ -299,7 +353,7 @@ def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, devic
 
     # preprocess the data and append the extra dims
     x, c = preprocess(data, layer_boundaries, eps)
-    
+
     if e_inc_index is not None:
         assert type(e_inc_index) == int
         e_incs = np.unique(c[..., 0])
