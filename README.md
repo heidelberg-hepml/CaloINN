@@ -1,8 +1,10 @@
 # caloinn
 INN for Calorimeter Shower Generation
 
-Mainly developed by Thorsten Buss,
-repo forked from ThorstenBuss/caloinn.
+Code used for "Detector Flows" (arxiv:XXXX) by 
+Ernst F., Favaro L., Krause C., Plehn T., and Shih D.
+
+Fast calorimeter generation for CaloGAN dataset and Fast Calorimeter Challenge
 
 ## Usage
 
@@ -74,6 +76,6 @@ Parameter               | Explanation
 ----------------------- | --------------------------------------------------------------------
 use\_extra\_dim         | If true an extra dimension is added to the data containing the ratio between parton and detector level energy. This value is used to renormalize generated data.
 use\_extra\_dims        | Same as use_extra_dim onely now u1, u2 and u3 are getting stored in three extra dimensions.
-use_norm                | If true samples are normalized to the parton energy. Do not use in combination with use\_extra\_dim or use\_extra\_dims 
-log\_cond               | If true use the logarithm of the patron energy as condition
+use_norm                | If true samples are normalized to the incident energy. Do not use in combination with use\_extra\_dim or use\_extra\_dims 
+log\_cond               | If true use the logarithm of the incident energy as condition
 alpha                   | Constant value to add on the data before taking the logarithm 
