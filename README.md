@@ -8,12 +8,14 @@ Fast calorimeter generation for CaloGAN dataset and Fast Calorimeter Challenge
 
 ## Usage
 
-Running a training:
+Evaluation script used for the Fast Calorimeter Simulation Challenge
+modified by Luigi Favaro
+
+Running the evaluation script:
 ```
-python src/main.py --use_cuda params/example_bayesian.yaml
+python3 evaluate.py -i <input_file> -i2 <input_file_2> -r <reference> -m <mode> -d <dataset> --output_dir <path/to/output/> --cut <cut(MeV)>
 ```
-This creates a subfolder in the `results` folder named `yyyymmdd_hhmmss_run_name` where the
-prefix is the date and time and `run_name` is specified in the param card.
+
 
 ## Parameters
 
