@@ -545,6 +545,23 @@ def plot_latent(samples, results_dir, epoch=None):
         fig.savefig(os.path.join(plot_dir, f'latent_{idx:03d}.pdf'), bbox_inches='tight')
         plt.close()
 
+def plot_weights(w_pos, w_neg, results_dir, epoch=""):
+    plot_dir = os.path.join(results_dir, 'weights')
+    os.makedirs(plot_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(1,1, figsize=(6,4))
+    bins = np.logspace(-3, 3, 100)
+    ax.hist(w_pos, bins=bins, label='Pos. class', histtype='step')
+    ax.hist(w_neg, bins=bins, label='Neg. class', histtype='step')
+    
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(plot_dir, f'disc_weights_{epoch}.pdf'), bbox_inches='tight')
+    plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results_dir', help='Where to find the results and save the plots')

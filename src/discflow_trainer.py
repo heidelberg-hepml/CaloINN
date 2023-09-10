@@ -32,7 +32,6 @@ class DiscFlow_Trainer():
         self.gen_model = gen_model.to(self.device)
         
         self.disc_lr = params.get("disc_lr", 1.e-4)
-        print(self.disc_lr)
         self.batch_size = params.get("batch_size", 128)
 
         self.train_loader = train_loader
@@ -42,12 +41,11 @@ class DiscFlow_Trainer():
         #check needed params
         self.latent_loss = LatentLoss(self.params)
         self.dim_gen = train_loader.data.shape[-1]
-        print(len(train_loader))
         self.set_optimizer(steps_per_epoch=len(train_loader))
 
         # logging
-        self.numbers = {'gen_loss': [], 'disc_loss': [], 'disc_acc': [], 'disc_w': []}
-        self.test_numbers = {'gen_loss': [], 'disc_loss': [], 'disc_acc': [], 'disc_w': []}
+        self.numbers = {'gen_loss': [], 'disc_loss': [], 'disc_acc': [], 'disc_w_pos': [], 'disc_w_neg': []}
+        self.test_numbers = {'gen_loss': [], 'disc_loss': [], 'disc_acc': [], 'disc_w_pos': [], 'disc_w_neg': []}
         self.learning_rates = {'generator': [], 'discriminator': []}
         self.doc = doc
 
@@ -105,7 +103,8 @@ class DiscFlow_Trainer():
             train_inn_loss = 0
             train_disc_loss = 0
             train_acc_mean = 0
-            train_w_mean = 0
+            train_wpos_mean = 0
+            train_wneg_mean = 0
 
             test_inn_loss = 0
 
@@ -158,27 +157,46 @@ class DiscFlow_Trainer():
                     loss_disc.backward()
                     self.learning_rates['discriminator'].append(self.optimizer_disc.param_groups[0]['lr'])
 
-                    weights = (torch.sigmoid(pos)/(1-torch.sigmoid(neg))).mean().item()
+                    weights_pos = (torch.sigmoid(pos)/(1-torch.sigmoid(pos)))
+                    weights_neg = (torch.sigmoid(neg)/(1-torch.sigmoid(neg)))
+
                     train_disc_loss += loss_disc.item()*len(x_samps)
                     train_acc_mean += (acc_pos.mean()+acc_neg.mean())/2*len(x_samps)
-                    train_w_mean += weights*len(x_samps)
+                    train_wpos_mean += weights_pos.mean().item()*len(x_samps)
+                    train_wneg_mean += weights_neg.mean().item()*len(x_samps)
 
                     self.optimizer_disc.step()
             self.disc_scheduler.step(loss_disc.item())
                     # learning rate scheduling
                 
-            ### plotting for weights
+            ### plotting for weights of test data
+            self.disc_model.eval()
+            test_weights_pos = []
+            test_weights_neg = []
+            with torch.no_grad():
+                for x, c in self.test_loader:
+                    test_x = self.prepare_data_for_discriminator(x, c).to(self.device)
+                    test_cond_batch =  cond[torch.randint(cond.shape[0], size=(self.batch_size,))]
+
+                    test_pos, test_neg, _ = self.compute_pos_and_neg(1, test_cond_batch, test_x)
+                    test_weights_pos.append(torch.sigmoid(test_pos)/(1-torch.sigmoid(test_pos)))
+                    test_weights_neg.append(torch.sigmoid(test_neg)/(1-torch.sigmoid(test_neg)))
+            test_weights_pos = torch.cat(test_weights_pos, dim=0).detach().cpu().numpy()
+            test_weights_neg = torch.cat(test_weights_neg, dim=0).detach().cpu().numpy()
+            plotting.plot_weights(test_weights_pos, test_weights_neg, results_dir=self.doc.basedir, epoch=self.epoch)
 
             #update losses
             train_inn_loss /= len(self.train_loader.data)
             train_disc_loss /= len(self.train_loader.data)
             train_acc_mean /= len(self.train_loader.data)
-            train_w_mean /= len(self.train_loader.data)
+            train_wpos_mean /= len(self.train_loader.data)
+            train_wneg_mean /= len(self.train_loader.data)
 
             #self.numbers['gen_loss'].append(train_inn_loss)
             self.numbers['disc_loss'].append(train_disc_loss)
             self.numbers['disc_acc'].append(train_acc_mean)
-            self.numbers['disc_w'].append(train_w_mean)
+            self.numbers['disc_w_pos'].append(train_wpos_mean)
+            self.numbers['disc_w_neg'].append(train_wneg_mean)
 
             self.epoch += 1
             
@@ -198,7 +216,8 @@ class DiscFlow_Trainer():
             print(f'inn loss (train): {train_inn_loss}')
             print(f'disc loss (train): {train_disc_loss}')
             print(f'disc accuracy (train): {train_acc_mean}')
-            print(f'disc pos weights (train): {train_w_mean}')
+            print(f'disc pos weights (train): {train_wpos_mean}')
+            print(f'disc neg weights (train): {train_wneg_mean}')
 
             print(f'inn loss (test): {test_inn_loss}')
             sys.stdout.flush()
