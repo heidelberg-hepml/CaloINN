@@ -71,11 +71,11 @@ class HighLevelFeatures:
         phi_width = np.sqrt((phi_width - phi_EC**2).clip(min=0.))
         return eta_EC, phi_EC, eta_width, phi_width
 
-    def _calculate_sparsity(self, layer_data):
+    def _calculate_sparsity(self, layer_data, t=0):
         """ Computes the sparsity of the given layer"""
-        return (layer_data > 0).mean(axis=1)
+        return (layer_data > t).mean(axis=1)
 
-    def CalculateFeatures(self, data):
+    def CalculateFeatures(self, data, t=0):
         """ Computes all high-level features for the given data """
         self.E_tot = data.sum(axis=-1)
 
@@ -83,7 +83,7 @@ class HighLevelFeatures:
             E_layer = data[:, self.bin_edges[l]:self.bin_edges[l+1]].sum(axis=-1)
             self.E_layers[l] = E_layer
             
-            self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]])
+            self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], t)
 
         for l in self.relevantLayers:
 
@@ -94,7 +94,7 @@ class HighLevelFeatures:
                         self.phi_all_layers[l],
                         data[:, self.bin_edges[l]:self.bin_edges[l+1]])
                     
-                self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]])
+                self.sparsity[l] = self._calculate_sparsity(data[:, self.bin_edges[l]:self.bin_edges[l+1]], t)
 
     def _DrawSingleLayer(self, data, layer_nr, filename, title=None, fig=None, subplot=(1, 1, 1),
                          vmax=None, colbar='alone'):
