@@ -248,7 +248,6 @@ def load_classifier(constructed_model, parser_args):
     print('classifier loaded successfully')
     return constructed_model
 
-
 def train_and_evaluate_cls(model, data_train, data_test, optim, arg):
     """ train the model and evaluate along the way"""
     best_eval_acc = float('-inf')
@@ -381,7 +380,6 @@ def calibrate_classifier(model, calibration_data, arg):
                                                                                       result_true)
     return iso_reg
 
-
 def check_file(given_file, arg, which=None):
     """ checks if the provided file has the expected structure based on the dataset """
     print("Checking if {} file has the correct form ...".format(
@@ -448,7 +446,7 @@ def plot_histograms(hlf_class, vae_class, reference_class, arg, p_label):
     plot_sparsity(hlfs, reference_class, arg, p_label)
     if arg.dataset[0] == '1':
         plot_Etot_Einc_discrete(hlf_class, reference_class, arg, p_label)
-
+           
 ########## Main ##########
 
 def main(raw_args=None):
@@ -565,8 +563,6 @@ def main(raw_args=None):
                                                             args.dataset)),
                              title="Reference single shower")
 
-
-
     if args.mode in ['all', 'no-cls', 'avg-E']:
         print("Plotting average showers for different energies ...")
         if '1' in args.dataset:
@@ -637,6 +633,10 @@ def main(raw_args=None):
             p_label = r'$e^{+}$ DS-3'
 
         plot_histograms(hlf, hlf_2, reference_hlf, args, p_label)
+        
+        # Discrete Einc only for first dataset
+        if args.dataset == '1-photons' or args.dataset == '1-pions':
+            plot_atlas_style(hlf, hlf_2, reference_hlf, args, p_label)
 
         list_showers = (shower, shower_2)
         plot_cell_dist(list_showers, reference_shower, args, p_label)
