@@ -1,534 +1,526 @@
 import numpy as np
 import h5py
 import torch
-from copy import deepcopy
+
 from myDataLoader import MyDataLoader
-from torch.utils.data import Dataset, DataLoader
-import os
-import warnings
+from XMLHandler import XMLHandler
+import HighLevelFeatures as HLF
 
-def load_data(data_file, mask=None, threshold=1e-5):
-    full_file = h5py.File(data_file, 'r')
-    layer_0 = full_file['layer_0'][:] / 1e3
-    layer_1 = full_file['layer_1'][:] / 1e3
-    layer_2 = full_file['layer_2'][:] / 1e3
-    energy = full_file['energy'][:] / 1e0
-    full_file.close()
-
-    data = {
-        'layer_0': layer_0,
-        'layer_1': layer_1,
-        'layer_2': layer_2,
-        'energy': energy
-    }
-
-    if mask==1:
-        binary_mask = (layer_1 > threshold).mean((1,2)) < 0.1+0.2*np.log10(energy[:,0])
-    elif mask==2:
-        binary_mask = (layer_1 > threshold).mean((1,2)) >= 0.1+0.2*np.log10(energy[:,0])
+def load_data_calo(filename, layer_boundaries, energy=None):
+    data = {}
+    data_file = h5py.File(filename, 'r')
+    if energy is not None:
+        energy_mask = data_file["incident_energies"][:] == energy
+        data["energy"] = data_file["incident_energies"][:][energy_mask].reshape(-1, 1) / 1.e3
+        print(energy_mask.shape)    
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end][energy_mask.flatten()] / 1.e3
     else:
-        binary_mask = np.full(len(energy), True)
+        data["energy"] = data_file["incident_energies"][:] / 1.e3
+        #data["energy"] = data_file["incident_energies"][:] / 1.e3
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
 
-    return apply_mask(data, binary_mask)
-
-def save_data(data, data_file):
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-    overflow = np.zeros((len(energy), 3))
-
-    save_file = h5py.File(data_file, 'w')
-    save_file.create_dataset('layer_0', data=layer_0*1e3)
-    save_file.create_dataset('layer_1', data=layer_1*1e3)
-    save_file.create_dataset('layer_2', data=layer_2*1e3)
-    save_file.create_dataset('energy', data=energy*1e0)
-    save_file.create_dataset('overflow', data=overflow)
-    save_file.close()
-
-def apply_mask(data, mask):
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
-
-    return {
-        'layer_0': layer_0[mask],
-        'layer_1': layer_1[mask],
-        'layer_2': layer_2[mask],
-        'energy': energy[mask]
-    }
-
-def preprocess(data, use_extra_dim=False, use_extra_dims=False, threshold=1e-5, layer=None):
-    layer_0 = data['layer_0']
-    layer_1 = data['layer_1']
-    layer_2 = data['layer_2']
-    energy = data['energy']
+    data_file.close()
     
-    layer0 = layer_0.reshape(layer_0.shape[0], -1)
-    layer1 = layer_1.reshape(layer_1.shape[0], -1)
-    layer2 = layer_2.reshape(layer_2.shape[0], -1)
-
-    binary_mask = np.full(len(energy), True)
-
-    if layer is not None:
-        x = (layer0, layer1, layer2)[layer]
-        binary_mask &= np.sum(x, axis=1) > threshold
-    else:
-        x = np.concatenate((layer0, layer1, layer2), 1)
-
-    if use_extra_dims:
-        binary_mask &= np.sum(x, axis=1) < energy[:,0]
-
-    x = x[binary_mask]
-    c = energy[binary_mask]
-
-    if use_extra_dims:
-        x = add_extra_dims(x, c)
-    elif use_extra_dim:
-        x = add_extra_dim(x, c)
-    return x, c
-
-def postprocess(samples, energy, use_extra_dim=False, use_extra_dims=False, layer=None, threshold=1e-5):
-    
-    samples = deepcopy(samples)
-    
-    assert len(energy) == len(samples)
-
-    if use_extra_dims and (layer is not None):
-        warnings.warn("Extradims function uses the energies per layer and does not work with only one used layer!")
-        
-    if use_extra_dims:
-        samples = remove_extra_dims(samples, energy)
-    
-    elif use_extra_dim:
-        samples = remove_extra_dim(samples, energy)
-
-    samples[samples < threshold] = 0.
-
-    if layer is not None:
-        layer_0 = np.zeros((len(samples), 3, 96))
-        layer_1 = np.zeros((len(samples), 12, 12))
-        layer_2 = np.zeros((len(samples), 12, 6))
-        (layer_0, layer_1, layer_2)[layer][:] = samples.reshape(((-1, 3, 96),(-1, 12, 12),(-1, 12, 6))[layer])
-    else:
-        layer_0 = samples[..., :288].reshape(-1, 3, 96)
-        layer_1 = samples[..., 288:432].reshape(-1, 12, 12)
-        layer_2 = samples[..., 432:].reshape(-1, 12, 6)
-
-    return {
-        'layer_0': layer_0,
-        'layer_1': layer_1,
-        'layer_2': layer_2,
-        'energy': energy
-    }
-
-def add_extra_dim(data, energies):
-    s = np.sum(data, axis=1, keepdims=True)
-    factors = s/energies
-    data = data / s
-    return np.concatenate((data, factors), axis=1)
-
-def remove_extra_dim(data, energies):
-    factors = data[:,[-1]]
-    data = data[:,:-1]
-    data = data / np.sum(data, axis=1, keepdims=True)
-    return data*energies*factors
-
-def add_extra_dims(data, e_part):
-    e0 = np.sum(data[..., :288], axis=1, keepdims=True)
-    e1 = np.sum(data[..., 288:432], axis=1, keepdims=True)
-    e2 = np.sum(data[..., 432:], axis=1, keepdims=True)
-    u1 = (e0+e1+e2)/e_part
-    u2 = e0/(e0+e1+e2)
-    u3 = e1/(e1+e2+1e-7)
-    data = data / np.sum(data, axis=1, keepdims=True)
-    return np.concatenate((data, u1/(1-u1+1e-7), u2/(1-u2+1e-7), u3/(1-u3+1e-7)), axis=1)
-
-def remove_extra_dims(data, e_part):
-    data = deepcopy(data)
-    u1 = data[:,[-3]]/(1+data[:,[-3]])
-    u2 = data[:,[-2]]/(1+data[:,[-2]])
-    u3 = data[:,[-1]]/(1+data[:,[-1]])
-    e_tot = u1*e_part
-    e0 = u2*e_tot
-    e1 = u3*(e_tot-e0)
-    e2 = e_tot - e0 -e1
-    data = data[:,:-3]
-    data[data<0] = 0.
-    data[..., :288]    = data[..., :288] / (np.sum(data[..., :288], axis=1, keepdims=True) + 1e-7)
-    data[..., 288:432] = data[..., 288:432] / (np.sum(data[..., 288:432], axis=1, keepdims=True) + 1e-7)
-    data[..., 432:]    = data[..., 432:] / (np.sum(data[..., 432:], axis=1, keepdims=True) + 1e-7)
-    data[..., :288]    = data[..., :288] * e0
-    data[..., 288:432] = data[..., 288:432] * e1
-    data[..., 432:]    = data[..., 432:] * e2
     return data
 
-def get_loaders(data_file_train, data_file_test, batch_size, device='cpu',
-        width_noise=1e-7, use_extra_dim=False, use_extra_dims=False, mask=0, layer=None):
-    data_train, cond_train = preprocess(load_data(data_file_train, mask),
-        use_extra_dim, use_extra_dims, layer=layer)
+def load_data(filename, particle_type,  xml_filename, threshold=1e-5, energy=None):
+    """Loads the data for a dataset 1 from the calo challenge"""
+    
+    # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
+    xml_handler = XMLHandler(particle_name=particle_type, 
+    filename=xml_filename)
+    
+    layer_boundaries = np.unique(xml_handler.GetBinEdges())
 
+    # Prepare a container for the loaded data
+    data = {}
 
-    data_test, cond_test = preprocess(load_data(data_file_test, mask),
-        use_extra_dim, use_extra_dims, layer=layer)
+    # Load and store the data. Make sure to slice according to the layers.
+    # Also normalize to 100 GeV (The scale of the original data is MeV)
+    data_file = h5py.File(filename, 'r')
+    #data["energy"] = data_file["incident_energies"][:] / 1.e3
+    if energy is not None:
+        energy_mask = data_file["incident_energies"][:] == energy
+        data["energy"] = data_file["incident_energies"][:][energy_mask].reshape(-1, 1) / 1.e3
+        print(energy_mask.shape)
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end][energy_mask.flatten()] / 1.e3
+    else:
+        data["energy"] = data_file["incident_energies"][:] / 1.e3
+        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e3
+        print(data[f"layer_{layer_index}"].shape)
+    data_file.close()
+    
+    return data, layer_boundaries
 
+def get_energy_and_sorted_layers(data):
+    """returns the energy and the sorted layers from the data dict"""
+    
+    # Get the incident energies
+    energy = data["energy"]
 
-    # Just to check that the function is not returning an error
-    postprocess(data_train, cond_train, use_extra_dim, use_extra_dims, layer)
-    postprocess(data_test, cond_test, use_extra_dim, use_extra_dims, layer)
+    # Get the number of layers layers from the keys of the data array
+    number_of_layers = len(data)-1
+    
+    # Create a container for the layers
+    layers = []
 
-    data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-    cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
-
-    data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-    cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-
-    loader_train = MyDataLoader(data_train, cond_train, batch_size, width_noise=width_noise)
-    loader_test = MyDataLoader(data_test, cond_test, batch_size, width_noise=width_noise)
-    return loader_train, loader_test
-
-
-# Dataset for the classifier test:
-class CaloDataset(Dataset):
-    """CaloGAN dataset, updated to handle a variable amount of layers"""
-
-    def __init__(self, data_file, transform=None,apply_logit=True,
-                 with_noise=False, noise_width=1e-8, return_label=True):
-        """CaloGAN dataset, updated to handel a variable number of calorimeter layers
-
-        Args:
-            data_file (dict): Underlying data file for the dataset. Should have the form as produced by merge dataset
-            transform (str or dict, optional): "L_norm" = normalize the data to the layer energy or "E_norm" = normalize to the total energy.
-                If a string is passed, it is used for all layers, in case of a dict the keys of the dict must match with the keys of the layers.
-                Then the transformations can be specified for each layer seperately.
-                Defaults to None.
-            apply_logit (bool, optional): Should a logit transformation be applied. Defaults to True.
-            with_noise (bool, optional): Should noise be applied to the data. Defaults to False.
-            noise_width (_type_, optional): How large should the applied noise be
-                No effect if with_noise=False. Defaults to 1e-8.
-            return_label (bool, optional): Whether the labels for the training should be returned. Defaults to True.
-        """
+    # Append the layers such that they are sorted.
+    for layer_index in range(number_of_layers):
+        layer = f"layer_{layer_index}"
         
-
-        self.full_file = dict(data_file)
-
-        self.apply_logit = apply_logit
-        self.with_noise = with_noise
-        self.noise_width = noise_width
-
-        self.return_label = return_label
+        layers.append(data[layer])
         
-        self.input_dims = {}
-        self.input_size = {}
-        
-        # We need the energy information
-        assert "energy" in data_file, "The key 'energy' is missing in the given data file"
-        
-        # We need labels to train the classifier
-        assert "label" in data_file, "The key 'label' is missing in the given data file"
-        
-        # We need the overflow information
-        assert "overflow" in data_file, "The key 'overflow' is missing in the given data file"
-        
-        # Save the labels of the calorimeter layers
-        self.layer_names = list(data_file.keys())
-        self.layer_names.remove("energy")
-        self.layer_names.remove("overflow")
-        self.layer_names.remove("label")
-        
-        # At least one additional layer for training should be there
-        assert len(self.layer_names) > 0, "No calorimeter layer found in the given data file"
-        
-        # The data should have the format (datapoints, x, y)
-        for layer in self.layer_names:
-            assert len(self.full_file[layer].shape) == 3, f"Datashape of the calorimeter layer {layer} does not match"
-        
-        # Prepare the layer transformations
-        if transform is not None:
-            if type(transform) == str:
-                self.transform = {}
-                for layer in self.layer_names:
-                    self.transform["layer"] = transform
-            else:
-                assert self.layer_names in transform, f"The keys for the transformation dictionary do not match with {self.layer_names}"
-                self.transform = transform
-        else:
-            self.transform = transform
-        
-        for key in data_file:
-            if key == "energy":
-                # Normalize to 100 GeV
-                self.full_file[key][:] = self.full_file[key][:] / 1e2
-                
-            elif key == "overflow":
-                # Normalize to 100 GeV
-                self.full_file[key][:] = self.full_file[key][:] / 1e5
-                
-            elif key != "label":
-                # Normalize to 100 GeV
-                self.full_file[key][:] = self.full_file[key][:] / 1e5
-                
-                # Save the shape of the input layers
-                self.input_dims[key] = self.full_file[key][0].shape
-                self.input_size[key] = self.full_file[key][0].flatten().shape
-                
-                # Save the amount of datapoints in the dataset
-                self.size = len(self.full_file[key])        
-
-    def __len__(self):
-        # assuming file was written correctly
-        #return len(self.full_file['energy'])
-        return self.size
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-        
-
-        sample = dict(self.full_file)
-        
-        for layer in self.layer_names:
-            without_noise = self.full_file[layer][idx]
             
-            # Apply noise to the data
-            if self.with_noise:
-                # The data without the noise
-                # Add the noise and save the result
-                layer_data = self.__add_noise(without_noise)
-            else:
-                layer_data = without_noise
-                
-            # save the total energies per layer
-            layer_energies = layer_data.sum(axis=(-1,-2), keepdims=True)
-            
-            # Apply the given transformation if needed
-            if self.transform is not None:
-                transform = self.transform[layer]
-                if transform == "E_norm":
-                    layer_data = layer_data / self.full_file["energy"]
-                elif transform == "L_norm":
-                    layer_data = layer_data / layer_energies
-                else:
-                    raise KeyError(f"The transformation {transform} is not supported")
-           
-           # Apply a logit transformation if requested
-            if self.apply_logit:
-                layer_data = self.__logit_trafo(layer_data)
-            
-            # Update the samples file
-            sample[layer] = layer_data
-            
-            # Save the layer energies
-            # Do I really need them? -> Yes they are used!
-            sample[layer + "_E"] = layer_energies.squeeze()
-                    
+    return energy, layers
 
-        if not self.return_label:
-            #TODO: Maybe make the pass of "label" optional. Edit here if doing so !!!
-            sample.pop("label", None)
-        else:
-            sample["label"] = sample["label"][idx]
+
+def save_data(data, filename):
+    """Saves the data with the same format as dataset 1 from the calo challenge"""
+    
+    # extract the needed data
+    incident_energies, layers = get_energy_and_sorted_layers(data)
+    
+    # renormalize the energies
+    incident_energies *= 1.e3
+    
+    # concatenate the layers and renormalize them, too           
+    showers = np.concatenate(layers, axis=1) * 1.e3
             
+    save_file = h5py.File(filename, 'w')
+    save_file.create_dataset('incident_energies', data=incident_energies)
+    save_file.create_dataset('showers', data=showers)
+    save_file.close()            
+ 
+def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
+    """Appends the extra dimensions and the layer energies to the conditions
+    The layer energies will always be the last #layers entries, the extra dims will
+    be the #layers entries directly after the first entry - the incident energy.
+    Inbetween additional features might be appended as further conditions"""
+    
+    x = np.copy(x)
+    c = np.copy(c)
+    
+    #add_noise = np.random.rand(*x.shape)*1.0e-6
+    #x += add_noise
+
+    layer_energies = []
+
+    for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
         
-        sample["energy"] = sample["energy"][idx]
-        sample["overflow"] = sample["overflow"][idx]
-
-
-        return sample
-    
-    def __add_noise(self, input_tensor):
-        """Adds noise to the given tensor according to self.noise_width"""
+        # Compute total energy of current layer
+        layer_energy = np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True)
         
-        noise = np.random.rand(*input_tensor.shape)*self.noise_width
-        return input_tensor+noise
-
-    def __logit_trafo(self, x):
-        # TODO: Maybe allow modifications of ALPHA?
+        # Normalize current layer
+        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energy + eps)
         
-        ALPHA = 1e-6
-        def logit(x):
-            return np.log(x / (1.0 - x))
+        # Store its energy for later
+        layer_energies.append(layer_energy)
         
-        local_x = ALPHA + (1. - 2.*ALPHA) * x
-        return logit(local_x)
-    
-
-# Functions for the classifier test:
-def h5py_to_dict(file, dtype=torch.get_default_dtype()):
-    """Converts a given h5py file into a dictionary.
-
-    Args:
-        file (h5py file): h5py file that is converted
-        dtype (torch.dtype, optional): The dtype for the tensors in the dict. Defaults to torch.get_default_dtype().
-
-    Returns:
-        dict: converted input
-    """
-    # TODO: watch out for dtype bug!
-    new_file = {}
-    for key in file:
-        new_file[key] = torch.tensor(np.array(file[key]), dtype=dtype)
-    return new_file
-
-def merge_datasets(sample, original):
-    """Merge the two given files in order to 
-    perform the classifier test with them later.
-
-    Args:
-        sample (dict): dataset sampled by the network
-        original (dict): original ground truth dataset
-
-    Returns:
-        dict: dataset received by merging the two given sets
-    """
-    # Merge the two datasets
-    key_len_1 = []
-    for key in sample:
-        key_len_1.append(len(sample[key]))
-    key_len_1 = np.array(key_len_1)
-    
-    key_len_2 = []
-    for key in original.keys():
-        key_len_2.append(len(original[key]))
-    key_len_2 = np.array(key_len_2)
-    
-    # Make sure, that all entries in the dicts have the same length
-    assert np.all(key_len_1 == key_len_1[0])
-    assert np.all(key_len_2 == key_len_2[0])
-    
-    # Make sure that the dicts are equal sized
-    assert np.all(key_len_1 == key_len_2)
-    assert len(sample) == len(original)
-    
-    # Shuffle the elements of the merged dataset
-    shuffle_order = np.arange(key_len_1[0]+key_len_2[0])
-    np.random.shuffle(shuffle_order)
-
-    merged_file = {}
-    # Merge the datasets
-    for key in original:
-        data1 = sample[key][:]
-        data2 = original[key][:]
-        data = np.concatenate([data1, data2])
-        merged_file[key] = data[shuffle_order]
-
-    # Create ground truth lables for the classifier test
-    truth1 = np.zeros(key_len_1[0])
-    truth2 = np.ones(key_len_2[0])
-    truth = np.concatenate([truth1, truth2])
-    merged_file['label'] = truth[shuffle_order]
-    
-    return merged_file
-
-def split_dataset(input_dataset, val_fraction=0.2, test_fraction=0.2, save_dir=None, file_name=None):
-    """Splits a given dataset into train, test and validation sets according to the given split parameters.
-
-    Args:
-        input_dataset (dict): Dataset that is splitted
-        val_fraction (float, optional): Fraction of the validation part. Defaults to 0.2.
-        test_fraction (float, optional): Fraction of the test part. Defaults to 0.2.
-        save_dir (str, optional): Files are saved if a path is given SLOW! Defaults to None.
-        file_name (str, optional): Only used if save_dir is passed. Will be used as filename_suffix. Defaults to None.
-
-    Returns:
-        dict: the three datasets in the order (training set, validation set, test set)
-    """
-    key_len = []
-    for key in input_dataset:
-        key_len.append(len(input_dataset[key]))
-    key_len = np.array(key_len)
-
-    # Make sure, that all entries in the dicts have the same length
-    assert np.all(key_len==key_len[0])
-
-    # Compute the splitting points
-    cut_index_val = int(val_fraction * key_len[0])
-    cut_index_test = cut_index_val + int(test_fraction * key_len[0])
-
-    val_dataset = {}
-    test_dataset = {}
-    train_dataset = {}
-    
-    
-    for key in input_dataset:
-        val_dataset[key] = input_dataset[key][:cut_index_val]
-        test_dataset[key] = input_dataset[key][cut_index_val:cut_index_test]
-        train_dataset[key] = input_dataset[key][cut_index_test:]
-    
-    # Can also save the three files.
-    # Is rather slow, however.
-    if save_dir is not None:
-        if not os.path.isdir(save_dir):
-            os.makedirs(save_dir)
-            
-        if file_name is None:
-            file_name = "samples.h5py"
-            
-        train_path = os.path.join(save_dir, "train_"+file_name)
-        val_path = os.path.join(save_dir, "validation_"+file_name)
-        test_path = os.path.join(save_dir, "test_"+file_name)
+    layer_energies_np = np.array(layer_energies).T[0]
         
-        train_file = h5py.File(train_path, 'w')
-        val_file = h5py.File(val_path, 'w')
-        test_file = h5py.File(test_path, 'w')
+    # Compute the generalized extra dimensions
+    extra_dims = [np.sum(layer_energies_np, axis=1, keepdims=True) / c]
 
-        for key in input_dataset():
-            val_file.create_dataset(key, data=input_dataset[key][:cut_index_val])
-            test_file.create_dataset(key, data=input_dataset[key][cut_index_val:cut_index_test])
-            train_file.create_dataset(key, data=input_dataset[key][cut_index_test:])
+    for layer_index in range(len(layer_boundaries)-2):
+        extra_dim = layer_energies_np[..., [layer_index]] / (np.sum(layer_energies_np[..., layer_index:], axis=1, keepdims=True) + eps)
+        extra_dims.append(extra_dim)
         
-    return train_dataset, val_dataset, test_dataset
+    # Collect all the conditions
+    #all_conditions = [c] + extra_dims
+    #c = np.concatenate(all_conditions, axis=1)
+    extra_dims = np.concatenate(extra_dims, axis=1)
 
-def get_classifier_loaders(params, doc, device, drop_layers=None):
+    #extra_dims[:,0] /= 3.5
 
-    """Returns the dataloaders for the classifier test
+    return c, extra_dims
 
-    Args:
-        params (dict): params dictionary from the training (origin: yaml file)
-        doc (documeter): An instance of the documenter class responsible for documenting the run
-        device (str): device used for pytorch calculations
-        drop_layers (list of strings, optional): A container wrapping the names of the layers that should be dropped.
-            Defaults to None.
+def get_energies(x, c, layer_boundaries):
+    egs = []
+    for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
+        layer_energy = np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True)
+        egs.append(layer_energy)
+    egs = np.array(egs).reshape(len(layer_boundaries)-1, -1)
+    egs /= (egs.sum(0)+1.0e-10)
+    e_tc = (np.sum(x, axis=1, keepdims=True)/c).T
+    return np.insert(egs, 0, e_tc, axis=0).T
 
-    Returns:
-        torch.utils.data.DataLoader: Training dataloader
-        torch.utils.data.DataLoader: Validation dataloader
-        torch.utils.data.DataLoader: Test dataloader
-    """
+def preprocess_wEinc(data, layer_boundaries, eps=1.0e-10):
+    "Transform a là CERN VAE"
+    energy, layers = get_energy_and_sorted_layers(data)
+
+    x = np.concatenate(layers, axis=1)
+    c = energy
+
+    x = normalize_layers_Einc(x, c, layer_boundaries)
+    print("shape of inputs:")
+    print(x.shape, c.shape)
+    return x, c
+
+def preprocess_wenergy(data, layer_boundaries, eps=1.0e-10, rew=1.0):
+    "Transform a là CERN VAE"
+    energy, layers = get_energy_and_sorted_layers(data)
+
+    x = np.concatenate(layers, axis=1)
+    c = energy
+
+    en_scaled = get_energies(x, c, layer_boundaries)
+
+    x = normalize_layers(x, c, layer_boundaries)
+    x = np.concatenate((x, en_scaled), axis=1)
+
+    #reweight
+    x = x**rew
+
+    print("shape of inputs:")
+    print(x.shape, c.shape)
+    return x, c
+
+def preprocess(data, layer_boundaries, eps=1.e-10, u0up_cut=7.0, u0low_cut=0.0, rew=1.0, dep_cut=1e10):
+    """Transforms the dict 'data' into the ndarray 'x'. Furthermore, the events
+    are masked and the extra dims are appended to the incident energies"""
+    energy, layers = get_energy_and_sorted_layers(data)
+
+    # Concatenate the layers
+    x = np.concatenate(layers, axis=1)
+        
+    # Remove all no-interaction events (only 0.7%)
+    binary_mask = np.sum(x, axis=1) >= 0
+    #binary_mask &= np.sum(x, axis=1) < energy[:,0]
     
-    # load the datafiles
-    original_file = h5py.File(params["classification_set"], 'r')
-    original = h5py_to_dict(original_file)
-    original_file.close()
-    sample_file = h5py.File(doc.get_file('samples.hdf5'), 'r')
-    sample = h5py_to_dict(sample_file)
-    sample_file.close()
+    #x = x[binary_mask]
+    #c = energy[binary_mask]
     
-    # Drop the layers that are not needed, if requested
-    if drop_layers is not None:
+    #completely ignore low energy
+    #x[x<1.0e-3] = 0.
 
-        for layer in drop_layers:
-            original.pop(layer, None)
-            
-        for layer in drop_layers:
-            sample.pop(layer, None)
+    c = energy
+    c, extra_dims = get_energy_dims(x, c, layer_boundaries, eps)
+
+    binary_mask &= extra_dims[:,0] < u0up_cut
+    binary_mask &= extra_dims[:,0] >= u0low_cut
     
-    # Load the data files
-    train_file, validation_file, test_file = split_dataset(merge_datasets(sample=sample, original=original))
+    binary_mask &= ((x < dep_cut).prod(-1) != 0)
+    
+    print(f"cut on zero energy dep.: #", (np.sum(x, axis=1)>=0).sum())
+    print(f"cut on u0 upper {u0up_cut}: #", (extra_dims[:,0] < u0up_cut).sum())
+    print(f"cut on u0 lower {u0low_cut}: #", (extra_dims[:,0] >= u0low_cut).sum())
+    print(f"dep cut {dep_cut}: #", (x<dep_cut).prod(-1).sum())
 
-    # Create the datasets
-    dataset_train = CaloDataset(train_file, apply_logit=False, with_noise=False, return_label=True)
-    dataset_val = CaloDataset(validation_file, apply_logit=False, with_noise=False, return_label=True)
-    dataset_test = CaloDataset(test_file, apply_logit=False, with_noise=False, return_label=True)
+    x = x[binary_mask]
+    c = c[binary_mask]
+    extra_dims = extra_dims[binary_mask]
+    #extra_dims[:, 0] /= extra_dims[:,0].max()
+    print("final shape of dataset: ", x.shape)
+
+    x = normalize_layers(x, c, layer_boundaries)
+    #x = normalize_layers_Einc(x, c, layer_boundaries)
+
+    x = np.concatenate((x, extra_dims), axis=1)
+   
+    #reweight
+    #x = x**rew
+
+    return x, c
+
+def postprocess_wEinc(x, c, layer_boundaries, quantiles, threshold=1.0e-4):
+    "Reverse the effect of preprocess_wenergy"
+    assert len(x) == len(c)
+    assert len(x.shape) == 2
+
+    x = np.copy(x)
+    c = np.copy(c)
+
+    print("shape in output:")
+    print(x.shape, c.shape)
+    x[x<quantiles] = 0.0
+    x = unnormalize_layers_wEinc(x, c, layer_boundaries)
+    
+    print(x.min())
+
+    data = {}
+    data["energy"] = c[..., [0]]
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        data[f"layer_{layer_index}"] = x[..., layer_start:layer_end]
+
+    return data
+
+
+def postprocess_wenergy(x, c, layer_boundaries, quantiles, threshold=1.0e-4, rew=1.0):
+    "Reverse the effect of preprocess_wenergy"
+    assert len(x) == len(c)
+    assert len(x.shape) == 2
+
+    x = np.copy(x)
+    c = np.copy(c)
+
+    print("shape in output:")
+    print(x.shape, c.shape)
+    x[x<quantiles] = 0.0
+    x = x**(1/rew)
+    x = unnormalize_layers_wenergies(x, c, layer_boundaries)
+    
+    print(x.min())
+
+    data = {}
+    data["energy"] = c[..., [0]]
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        data[f"layer_{layer_index}"] = x[..., layer_start:layer_end]
+
+    return data
+
+def postprocess(x, c, layer_boundaries, quantiles, threshold=1e-4, rew=1.0):
+    """Reverses the effect of the preprocess funtion"""
+    
+    # Input sanity checks
+    assert len(x) == len(c)
+    assert len(x.shape) == 2
+    assert len(x.shape) == 2
+    
+    # Makes sure, that the original set is not modified inplace
+    x = np.copy(x)
+    c = np.copy(c)
+
+    # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
+    # the logit preprocessing
+    # TODO: Pipe to params
+    #x[x < threshold] = 0.
+    x[x < quantiles] = 0.0
+    
+    #reweight
+    #x = x**(1/rew)
+
+    #ifft
+    #x = np.fft.ifftshift(x)
+
+    x = unnormalize_layers(x, c, layer_boundaries)
+    #x = unnormalize_layers_Einc(x, c, layer_boundaries)
+
+    print(x.min())
+    #x[x < 0] = 0
+    #x[x < threshold] = 0
+
+    # Create a new dict 'data' for the output
+    data = {}
+    data["energy"] = c[..., [0]]
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        data[f"layer_{layer_index}"] = x[..., layer_start:layer_end]
+
+    return data
+
+def normalize_layers(x, c, layer_boundaries, eps=1.e-10):
+    """Normalizes each layer by its energy"""
+    
+    # Prevent inplace operations
+    x = np.copy(x)
+    c = np.copy(c)
+    
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+    extra_dims = c[..., 1:number_of_layers+1]
+    
+    # Use the exact layer energies for numerical stability
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / ( np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+        
+    return x
+
+def normalize_layers_Einc(x, c, layer_boundaries, eps=1.0e-10):
+    
+    # Prevent inplace operations
+    x = np.copy(x)
+    c = np.copy(c)
+    
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+   
+    x /= incident_energy
+        
+    return x
+
+def unnormalize_layers_wenergies(x, c, layer_boundaries, eps=1.0e-10):
+    output = np.zeros_like(x, dtype=np.float64)
+    x = x.astype(np.float64)
+
+    number_of_layers = len(layer_boundaries)-1
+
+    incident_energy = c[..., [0]]
+    extra_dims = x[..., -(number_of_layers+1):]
+    
+    x = x[:, :(-number_of_layers+1)]
+
+    layer_energies = []
+    en_tot = np.multiply(incident_energy.flatten(), extra_dims[:,0])
+    for i in range(extra_dims.shape[-1]-1):
+        ens = extra_dims[:, i+1]*en_tot
+        layer_energies.append(ens)
+
+    layer_energies = np.vstack(layer_energies).T
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]  / \
+                                             (np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+ 
+    print(output.min(), output.max())
+    return output
+
+def unnormalize_layers_wEinc(x, c, layer_boundaries, eps=1.e-10):
+    """Reverses the effect of the normalize_layers function"""
+    
+    # Here we should not use clone, since it might result
+    # in a memory leak, if this functions is used on tensors
+    # with gradients. Instead, we use a different output tensor
+    # to prevent inplace operations.
+    output = np.zeros_like(x, dtype=np.float64)
+    x = x.astype(np.float64)
+    
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+    
+    # Normalize each layer and multiply it with its original energy
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * incident_energy
+    print(output.min(), output.max())
+    return output
+
+
+def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
+    """Reverses the effect of the normalize_layers function"""
+    
+    # Here we should not use clone, since it might result
+    # in a memory leak, if this functions is used on tensors
+    # with gradients. Instead, we use a different output tensor
+    # to prevent inplace operations.
+    output = np.zeros_like(x, dtype=np.float64)
+    x = x.astype(np.float64)
+    
+    # Get the number of layers
+    number_of_layers = len(layer_boundaries) - 1
+
+    # Split up the conditions
+    incident_energy = c[..., [0]]
+    extra_dims = x[..., -number_of_layers:]
+    #extra_dims[:,0] *= 3.5
+    extra_dims[:, (-number_of_layers+1):] = np.clip(extra_dims[:, (-number_of_layers+1):], a_min=0., a_max=1.)   #clipping 
+    x = x[:, :-number_of_layers]
+    
+    layer_energies = []
+    en_tot = np.multiply(incident_energy.flatten(), extra_dims[:,0])
+    cum_sum = np.zeros_like(en_tot, dtype=np.float64)
+    for i in range(extra_dims.shape[-1]-1):
+        ens = (en_tot - cum_sum)*extra_dims[:,i+1]
+        layer_energies.append(ens)
+        cum_sum += ens
+
+    layer_energies.append((en_tot - cum_sum))
+    layer_energies = np.vstack(layer_energies).T
+    # Normalize each layer and multiply it with its original energy
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]  / \
+                                             (np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
+    print(output.min(), output.max())
+    return output
+
+def save_hlf(hlf, filename):
+    """ Saves high-level features class to file """
+    print("Saving file with high-level features.")
+    #filename = os.path.splitext(os.path.basename(ref_name))[0] + '.pkl'
+    with open(filename, 'wb') as file:
+        pickle.dump(hlf, file)
+    print("Saving file with high-level features DONE.")
+
+def get_loaders(filename, xml_filename, particle_type, val_frac, batch_size, 
+                eps=1.e-10, device='cpu', drop_last=False, shuffle=True, 
+                width_noise=0.0, energy=None, u0up_cut=7.0, u0low_cut=0.0, rew=1.0, dep_cut=0.0):
+    """Creates the dataloaders used to train the VAE model."""
+    
+    # load the data from the hdf5 file
+    data, layer_boundaries = load_data(filename, particle_type, xml_filename=xml_filename, energy=energy)
+
+    print(data["energy"].shape, data["layer_0"].shape)
+    # preprocess the data and append the extra dims
+    x, c = preprocess(data, layer_boundaries, eps, u0up_cut=u0up_cut, u0low_cut=u0low_cut, rew=rew, dep_cut=dep_cut)
+    #x, c = preprocess_wenergy(data, layer_boundaries, eps, rew=rew)
+    #x, c = preprocess_wEinc(data, layer_boundaries, eps)
+
+    # Create an index array, used for splitting into train and val set
+    number_of_samples = len(x)
+    if shuffle:
+        full_index = np.random.choice(number_of_samples, number_of_samples, replace=False)
+    else:
+        full_index = np.arange(number_of_samples)
+
+    # Split the data
+    number_of_val_samples = int(number_of_samples * val_frac)
+    number_of_trn_samples = number_of_samples - number_of_val_samples
+
+    trn_index = full_index[:number_of_trn_samples]
+    val_index = full_index[number_of_trn_samples:]
+    
+    x_trn = x[trn_index]
+    c_trn = c[trn_index]
+
+    x_val = x[val_index]
+    c_val = c[val_index]  
+    
+    # Cast into torch tensors
+    x_trn = torch.tensor(x_trn, device=device, dtype=torch.get_default_dtype())
+    c_trn = torch.tensor(c_trn, device=device, dtype=torch.get_default_dtype())
+    x_val = torch.tensor(x_val, device=device, dtype=torch.get_default_dtype())
+    c_val = torch.tensor(c_val, device=device, dtype=torch.get_default_dtype())
+
+    # Call the postprocess func to make sure that it runs through
+    #_ = postprocess(x_trn, c_trn, layer_boundaries)
+    #_ = postprocess(x_val, c_val, layer_boundaries)
     
     # Create the dataloaders
-    batch_size = params.get("classifier_batch_size", 1000)
-    # Keywords for the dataloader if using cuda
-    kwargs = {'num_workers': 2, 'pin_memory': True} if 'cuda' in device else {}
-    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, **kwargs)
-    dataloader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=True, **kwargs)
-    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, shuffle=True, **kwargs)
+    trn_loader = MyDataLoader(x_trn, c_trn, batch_size, drop_last, shuffle, width_noise)
+    val_loader = MyDataLoader(x_val, c_val, batch_size, drop_last, shuffle, width_noise)
+    return trn_loader, val_loader, layer_boundaries
 
-    return dataloader_train, dataloader_val, dataloader_test
+def get_hlf(shower, particle_type, layer_boundaries, threshold=1.e-4):
+    "returns a hlf class needed for plotting"
+    #x = x.cpu()
+    #c = c.cpu()
+    
+    hlf = HLF.HighLevelFeatures(particle_type,
+                                f"/remote/gpu06/favaro/calo_inn/datasets/calo_challenge/binning_dataset_1_{particle_type}s.xml")
+    
+    # like in save function:
+    # extract the needed data
+    incident_energies, layers = get_energy_and_sorted_layers(shower)
+    
+    # renormalize the energies
+    #incident_energies = shower['incident_energies']
+    incident_energies *= 1.e3
+    
+    # concatenate the layers and renormalize them, too 
+    #showers = shower['showers']
+    showers = np.concatenate(layers, axis=1) * 1.e3
+    
+    
+    hlf.CalculateFeatures(showers)
+    hlf.Einc = incident_energies
+    hlf.showers = showers
+    
+    return hlf
+
+def save_hlf(hlf, filename):
+    """ Saves high-level features class to file """
+    print("Saving file with high-level features.")
+    #filename = os.path.splitext(os.path.basename(ref_name))[0] + '.pkl'
+    with open(filename, 'wb') as file:
+        pickle.dump(hlf, file)
+    print("Saving file with high-level features DONE.")
 

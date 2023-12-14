@@ -1,5 +1,4 @@
 import math
-import numpy as np
 
 import torch
 import torch.nn as nn
@@ -8,7 +7,8 @@ import FrEIA.modules as fm
 
 from myBlocks import *
 from vblinear import VBLinear
-from splines.rational_quadratic import RationalQuadraticSpline
+
+import numpy as np
 
 class Subnet(nn.Module):
     """ This class constructs a subnet for the coupling blocks """
@@ -30,19 +30,25 @@ class Subnet(nn.Module):
         if num_layers < 1:
             raise(ValueError("Subnet size has to be 1 or greater"))
         self.layer_list = []
-        for n in range(num_layers):
-            input_dim, output_dim = internal_size, internal_size
+        for n in range(num_layers - 1):
+            if isinstance(internal_size, list):
+                input_dim, output_dim = internal_size[n], internal_size[n+1]
+            else:
+                input_dim, output_dim = internal_size, internal_size
             if n == 0:
                 input_dim = size_in
-            if n == num_layers -1:
-                output_dim = size_out
 
-            self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+            self.layer_list.append(layer_class[n](input_dim, output_dim, **(layer_args[n])))
 
-            if n < num_layers - 1:
-                if dropout > 0:
-                    self.layer_list.append(nn.Dropout(p=dropout))
-                self.layer_list.append(nn.ReLU())
+            if dropout > 0:
+                self.layer_list.append(nn.Dropout(p=dropout))
+
+            #self.layer_list.append(nn.BatchNorm1d(output_dim))
+            self.layer_list.append(nn.LeakyReLU()) ###nn.SiLU()) ###########
+        
+        # separating last linear/VBL layer
+        #output_dim = size_out
+        self.layer_list.append(layer_class[-1](output_dim, size_out, **(layer_args[-1]) ))
 
         self.layers = nn.Sequential(*self.layer_list)
 
@@ -54,19 +60,54 @@ class Subnet(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-
-class LogTransformation(fm.InvertibleModule):
-    def __init__(self, dims_in, dims_c=None, alpha = 0.):
+class MixedTransformation(fm.InvertibleModule):
+    def __init__(self, dims_in, dims_c=None, alpha = 0., alpha_logit=0.):
         super().__init__(dims_in, dims_c)
         self.alpha = alpha
+        self.alpha_logit = alpha_logit
+
+    def forward(self, x, c=None, rev=False, jac=True):
+        x, = x
+        if rev:
+            z1 = torch.exp(x[:,:369]) - self.alpha
+            z2 = torch.sigmoid(x[:, -4:])
+            z2 = (z2 - self.alpha_logit)/(1-2*self.alpha_logit)
+
+            z = torch.cat((z1,z2), dim=1)
+            jac = torch.sum( x, dim=1)
+        else:
+            z1 = torch.log(x[:,:369] + self.alpha)
+            z2 = torch.logit(x[:, -4:]*(1-2*self.alpha_logit) + self.alpha_logit)
+
+            z = torch.cat((z1,z2), dim=1)
+            jac = - torch.sum( z, dim=1)
+        return (z, ), torch.tensor([0.], device=x.device) # jac
+
+    def output_dims(self, input_dims):
+        return input_dims
+
+
+class LogTransformation(fm.InvertibleModule):
+    def __init__(self, dims_in, dims_c=None, alpha = 0., alpha_logit=0.):
+        super().__init__(dims_in, dims_c)
+        self.alpha = alpha
+        self.alpha_logit = alpha_logit
 
     def forward(self, x, c=None, rev=False, jac=True):
         x, = x
         if rev:
             z = torch.exp(x) - self.alpha
+            #z2 = torch.exp(x[:, -4:])
+            #z3 = x[:, 369].reshape(-1, 1)
+
+            #z = torch.cat((z1,z3,z2), dim=1)
             jac = torch.sum( x, dim=1)
         else:
             z = torch.log(x + self.alpha)
+            #z3 = x[:,369].reshape(-1, 1)
+            #z2 = torch.log(x[:, -4:])     #*(1-2*self.alpha_logit) + self.alpha_logit)
+
+            #z = torch.cat((z1,z3,z2), dim=1)
             jac = - torch.sum( z, dim=1)
         return (z, ), torch.tensor([0.], device=x.device) # jac
 
@@ -86,7 +127,7 @@ class LogitTransformation(fm.InvertibleModule):
             z = torch.logit(x)
         else:
             if not self.training:
-                x[:,:-1] = self.norm_logit(x[:,:-1])
+                x[:,:-3] = self.norm_logit(x[:,:-3])
             z = torch.sigmoid(x)
             z = (z - self.alpha)/(1-2*self.alpha)
         return (z, ), torch.tensor([0.], device=x.device) # jac
@@ -143,6 +184,7 @@ class CINN(nn.Module):
         self.norm_m = None
         self.bayesian = params.get("bayesian", False)
         self.alpha = params.get("alpha", 1e-8)
+        self.alpha_logit = params.get("alpha_logit", 1.0e-6)
         self.log_cond = params.get("log_cond", False)
         self.use_norm = self.params.get("use_norm", False) and not self.params.get("use_extra_dim", False)
         self.pre_subnet = None
@@ -152,26 +194,65 @@ class CINN(nn.Module):
 
         self.initialize_normalization(data, cond)
         self.define_model_architecture(self.num_dim)
+        print(self.model)
 
     def forward(self, x, c, rev=False, jac=True):
         if self.log_cond:
-            c_norm = torch.log(c)
+            c_norm = torch.log2(c)
         else:
             c_norm = c
         if self.pre_subnet:
             c_norm = self.pre_subnet(c_norm)
         return self.model.forward(x, c_norm, rev=rev, jac=jac)
 
+    def get_layer_class(self, lay_params):
+        lays = []
+        for n in range(len(lay_params)):
+            if lay_params[n] == 'vblinear':
+                lays.append(VBLinear)
+            if lay_params[n] == 'linear':
+                lays.append(nn.Linear)
+        return lays
+
+    def get_layer_args(self, params):
+        layer_class = params["sub_layers"]
+        layer_args = []
+        for n in range(len(layer_class)):
+            n_args = {}
+            if layer_class[n] == "vblinear":
+                if "prior_prec" in params:
+                    n_args["prior_prec"] = params["prior_prec"]
+                if "std_init" in params:
+                    n_args["std_init"] = params["std_init"]
+            layer_args.append(n_args)
+        return layer_args
+
     def get_constructor_func(self, params):
         """ Returns a function that constructs a subnetwork with the given parameters """
-        layer_class = VBLinear if self.bayesian else nn.Linear
-        layer_args = {}
-        if "prior_prec" in params:
-            layer_args["prior_prec"] = params["prior_prec"]
-        if "std_init" in params:
-            layer_args["std_init"] = params["std_init"]
-        if "sigma_fixed" in params:
-            layer_args["sigma_fixed"] = params["sigma_fixed"]
+        if "sub_layers" in params:
+            layer_class = params["sub_layers"]
+            layer_class = self.get_layer_class(layer_class)
+            layer_args = self.get_layer_args(params)
+        else:
+            layer_class = []
+            layer_args = []
+            for n in range(params.get("layers_per_block", 3)):
+                dicts = {}
+                if self.bayesian:
+                    layer_class.append(VBLinear)
+                    if "prior_prec" in params:
+                        dicts["prior_prec"] = params["prior_prec"]
+                    if "std_init" in params:
+                        dicts["std_init"] = params["std_init"]
+                else:
+                    layer_class.append(nn.Linear)
+                layer_args.append(dicts)
+        #if "prior_prec" in params:
+        #    layer_args["prior_prec"] = params["prior_prec"]
+        #if "std_init" in params:
+        #    layer_args["std_init"] = params["std_init"]
+        #if "bias" in params:
+        #    layer_args["bias"] = params["bias"]
         def func(x_in, x_out):
             subnet = Subnet(
                     params.get("layers_per_block", 3),
@@ -217,12 +298,6 @@ class CINN(nn.Module):
                             "bounds_init":  params.get("bounds_init", 10),
                             "permute_soft" : permute_soft
                            }
-        elif coupling_type == "rational_quadratic_freia":
-            CouplingBlock = RationalQuadraticSpline
-            block_kwargs = {
-                            "bins": params.get("num_bins", 10),
-                            "subnet_constructor": constructor_fct,
-                           }
         elif coupling_type == "MADE":
             CouplingBlock = MADE
             block_kwargs = {
@@ -243,16 +318,23 @@ class CINN(nn.Module):
         data = torch.clone(data)
         if self.use_norm:
             data /= cond
-        if self.params.get("log_transformation", True):
-            data = torch.log(data + self.alpha)
+        data = torch.log(data + self.alpha)
+        #data1 = torch.log(data[:, :369] + self.alpha)
+        #data2 = torch.logit(data[:, -4:]*(1-2*self.alpha_logit)+self.alpha_logit)
+        #print(data1.shape, data2.shape)
+        #data = torch.cat((data1, data2), dim=1)
+        print(data[:, -5:])
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
         self.norm_m = torch.diag(1 / std)
         self.norm_b = - mean/std
 
-        data -= mean
-        data /= std
-
+        #np.save('norm_m.npy', self.norm_m)
+        #np.save('norm_b.npy', self.norm_b)
+        
+        #data -= mean
+        #data /= std
+        print(torch.isnan(data).sum(), self.norm_m.dtype)
         print('num samples out of bounds:', torch.count_nonzero(torch.max(torch.abs(data), dim=1)[0] > self.params.get("bounds_init", 10)).item())
 
     def define_model_architecture(self, in_dim):
@@ -267,7 +349,6 @@ class CINN(nn.Module):
         nodes = [ff.InputNode(in_dim, name="inp")]
         cond_node = ff.ConditionNode(1, name="cond")
 
-        # Add some preprocessing nodes
         if self.use_norm:
                 nodes.append(ff.Node(
                 [nodes[-1].out0],
@@ -276,58 +357,56 @@ class CINN(nn.Module):
                 conditions = cond_node,
                 name = "norm"
             ))
-        if self.params.get("log_transformation", True):
-            nodes.append(ff.Node(
-                [nodes[-1].out0],
-                LogTransformation,
-                { "alpha": self.alpha },
-                name = "inp_log"
-            ))
         nodes.append(ff.Node(
             [nodes[-1].out0],
-            fm.FixedLinearTransform,
-            { "M": self.norm_m, "b": self.norm_b },
-            name = "inp_norm"
+            LogTransformation,
+            { "alpha": self.alpha, "alpha_logit": self.alpha_logit },
+            name = "inp_log"
         ))
-
-        # Add the coupling blocks determined by the params file
+        #nodes.append(ff.Node(
+        #    [nodes[-1].out0],
+        #    fm.FixedLinearTransform,
+        #    { "M": self.norm_m, "b": self.norm_b },
+        #    name = "inp_norm"
+        #))
         CouplingBlock, block_kwargs = self.get_coupling_block(self.params)
-        
-        if self.params.get("coupling_type", "affine") != "rational_quadratic_freia":
-            
-            for i in range(self.params.get("n_blocks", 10)):
+        Affine = fm.AllInOneBlock
+        Affine_kwargs = {
+                            "affine_clamping": self.params.get("clamping", 5.),
+                            "subnet_constructor": self.get_constructor_func(self.params),
+                            "global_affine_init": 0.92,
+                            "permute_soft" : False
+                           }
+ 
+        for i in range(self.params.get("n_blocks", 10)):
+            if self.params.get("norm", True): # i!=0:
                 nodes.append(
                     ff.Node(
                         [nodes[-1].out0],
-                        CouplingBlock,
-                        block_kwargs,
-                        conditions = cond_node,
-                        name = f"block_{i}"
+                        fm.ActNorm,
+                        module_args = {},
+                        name = f"act_{i}"
+                        )
                     )
+            nodes.append(
+                ff.Node(
+                    [nodes[-1].out0],
+                    CouplingBlock,
+                    block_kwargs,
+                    conditions = cond_node,
+                    name = f"block_{i}"
                 )
-                
-        # Freia uses a double pass. Each block runs the transformation on both splits. So we need only half of the blocks.
-        # Furthermore, we have to add a random permutation block manually.
-        else:
-            for i in range(self.params.get("n_blocks", 10) // 2):
-                nodes.append(
-                    ff.Node(
-                        [nodes[-1].out0],
-                        CouplingBlock,
-                        block_kwargs,
-                        conditions = cond_node,
-                        name = f"block_{i}"
-                    )
-                )
-                nodes.append(
-                    ff.Node(
-                        [nodes[-1].out0],
-                        fm.PermuteRandom,
-                        {"seed": None},
-                        name = f"permutation_block_{i}"
-                    )
-                )
-
+            )
+            #nodes.append(
+            #    ff.Node(
+            #        [nodes[-1].out0],
+            #        Affine,
+            #        Affine_kwargs,
+            #        conditions = cond_node,
+            #        name = f"affine_{i}"
+            #    )
+            #)
+         
         nodes.append(ff.OutputNode([nodes[-1].out0], name='out'))
         nodes.append(cond_node)
 
@@ -357,32 +436,13 @@ class CINN(nn.Module):
     def disenable_map(self):
         for layer in self.bayesian_layers:
             layer.disenable_map()
-            
-    def fix_sigma(self):
-        for layer in self.bayesian_layers:
-            layer.fix_sigma()
-            
-        self.params_trainable = list(filter(
-                lambda p: p.requires_grad, self.model.parameters()))
-        
-    def unfix_sigma(self):
-        for layer in self.bayesian_layers:
-            layer.unfix_sigma()
-            
-        self.params_trainable = list(filter(
-                lambda p: p.requires_grad, self.model.parameters()))
-        
-    def reset_sigma(self):
-        for layer in self.bayesian_layers:
-            layer.unfix_sigma()
-            layer.reset_sigma(self.params.get("std_init", -9))
 
     def reset_random(self):
         """ samples a new random state for the Bayesian layers """
         for layer in self.bayesian_layers:
             layer.reset_random()
 
-    def sample(self, num_pts, condition, z=None):
+    def sample(self, num_pts, condition):
         """
             sample from the learned distribution
 
@@ -393,10 +453,9 @@ class CINN(nn.Module):
             Returns:
             tensor[len(condition), num_pts, dims]: Samples 
         """
-        if z is None:
-            z = torch.normal(0, 1,
-                size=(num_pts*condition.shape[0], self.in_dim),
-                device=next(self.parameters()).device)
+        z = torch.normal(0, 1,
+            size=(num_pts*condition.shape[0], self.in_dim),
+            device=next(self.parameters()).device)
         c = condition.repeat(num_pts,1)
         x, _ = self.forward(z, c, rev=True)
         return x.reshape(num_pts, condition.shape[0], self.in_dim).permute(1,0,2)
@@ -415,48 +474,3 @@ class CINN(nn.Module):
         z, log_jac_det = self.forward(x, c, rev=False)
         log_prob = - 0.5*torch.sum(z**2, 1) + log_jac_det - z.shape[1]/2 * math.log(2*math.pi)
         return log_prob
-
-
-class DNN(torch.nn.Module):
-    """ NN for vanilla classifier """
-    def __init__(self, input_dim, num_layer=2, num_hidden=512, dropout_probability=0.,
-                 is_classifier=True):
-        super(DNN, self).__init__()
-
-        self.dpo = dropout_probability
-
-        self.inputlayer = torch.nn.Linear(input_dim, num_hidden)
-        self.outputlayer = torch.nn.Linear(num_hidden, 1)
-
-        all_layers = [self.inputlayer, torch.nn.LeakyReLU(), torch.nn.Dropout(self.dpo)]
-        for _ in range(num_layer):
-            all_layers.append(torch.nn.Linear(num_hidden, num_hidden))
-            all_layers.append(torch.nn.LeakyReLU())
-            all_layers.append(torch.nn.Dropout(self.dpo))
-
-        all_layers.append(self.outputlayer)
-        if is_classifier:
-            all_layers.append(torch.nn.Sigmoid())
-        self.layers = torch.nn.Sequential(*all_layers)
-
-        self.sigmoid_in_BCE = not is_classifier
-        
-        if self.sigmoid_in_BCE:
-            self.loss_fct = torch.nn.BCEWithLogitsLoss()
-        else:
-            self.loss_fct = torch.nn.BCELoss()
-            
-        self.params_trainable = list(filter(
-                lambda p: p.requires_grad, self.parameters()))
-
-        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
-        n_trainable = sum([np.prod(p.size()) for p in model_parameters])
-        
-        print(f"number of parameters (classifier): {n_trainable}", flush=True)
-    
-    def forward(self, x):
-        x = self.layers(x)
-        return x
-    
-    def loss(self, *args, **kwargs):
-        return self.loss_fct(*args, **kwargs)

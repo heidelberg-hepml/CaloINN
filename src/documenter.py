@@ -8,7 +8,7 @@ class Documenter:
     """ Class that makes network runs self-documenting. All output data including the saved
     model, log file, parameter file and plots are saved into an output folder. """
 
-    def __init__(self, run_name, existing_run=None, read_only=False, basedir=None, log_name="log.txt"):
+    def __init__(self, run_name, existing_run=None, read_only=False):
         """ If existing_run is None, a new output folder named as run_name prefixed by date
         and time is created. stdout and stderr are redirected into a log file. The method
         close is registered to be automatically called when the program exits. """
@@ -25,14 +25,11 @@ class Documenter:
                 except FileExistsError:
                     now += timedelta(seconds=1)
         else:
-            if basedir is not None:
-                self.basedir = basedir
-            else:
-                self.basedir = os.path.join(script_dir, "../results", existing_run)
-            print(f"Using the directory: {self.basedir}")
+            self.basedir = existing_run
+            #self.basedir = os.pathi.join(script_dir, "../results", existing_run)
 
         if not read_only:
-            self.tee = Tee(self.add_file(log_name, False))
+            self.tee = Tee(self.add_file("log.txt", False))
             atexit.register(self.close)
 
     def add_file(self, name, add_run_name=True):
@@ -53,14 +50,7 @@ class Documenter:
         if add_run_name:
             name_base, name_ext = os.path.splitext(name)
             name = f"{name_base}_{self.run_name}{name_ext}"
-            
-        full_path = os.path.join(self.basedir,name)
-        
-        if os.path.exists(os.path.dirname(full_path)):
-            return full_path
-        else:
-            os.makedirs(os.path.dirname(full_path), exist_ok=False)
-            return full_path
+        return os.path.join(self.basedir,name)
 
     def close(self):
         """ Ends redirection of stdout and changes the file permissions of the output folder

@@ -1,11 +1,9 @@
 import os
-import sys
 from typing import Callable, Optional, List
 
 import numpy as np
 from numpy.typing import ArrayLike
 import matplotlib.pyplot as plt
-from copy import deepcopy
 
 import calc_obs
 
@@ -61,23 +59,13 @@ class Plotter:
 
         def set_bins(self, observable:ArrayLike) -> None:
             if self.range is None:
-                self.range = [np.nanmin(observable), np.nanmax(observable)]
-                if self.x_log:
-                    self.range = np.log(self.range)
-                
+                self.range = [np.min(observable), np.max(observable)]
             if self.range[0] is None:
-                self.range[0] = np.nanmin(observable)
-                if self.x_log:
-                    self.range[0] = np.log(self.range[0])
-                    
+                self.range[0] = np.min(observable)
             if self.range[1] is None:
-                self.range[1] = np.nanmax(observable)
-                if self.x_log:
-                    self.range[1] = np.log(self.range[1])
-                    
+                self.range[1] = np.max(observable)
             if not self.x_log:
                 self.bins = np.linspace(self.range[0], self.range[1], self.n_bins+1)
-                
             else:
                 self.bins = np.logspace(self.range[0], self.range[1], self.n_bins+1)
 
@@ -102,16 +90,7 @@ class Plotter:
                 self.set_bins(observable)
             self.train_hist, _ = np.histogram(observable, bins=self.bins, density=True)
             count, _ = np.histogram(observable, bins=self.bins, density=False)
-            if (count<0).any():
-                print("--------------------------------------")
-                print(f"Count contains negative values ({self.plot_name}):")
-                print(count)
-                print("--------------------------------------")
-            
-            mask = count > 0
-            self.train_hist_std = np.zeros(count.shape)
-            self.train_hist_std[mask] = self.train_hist[mask]/np.sqrt(count[mask])
-            # self.train_hist_std = self.train_hist/np.sqrt(count)
+            self.train_hist_std = self.train_hist/np.sqrt(count)
 
         def get_mean(self) -> np.ndarray:
             return self.sum_hist/self.n_updates
@@ -147,25 +126,11 @@ class Plotter:
                 if label == 'Train': continue
                 if hists[1] is None: continue
 
-                mask_hists_1 = hists[1] == 0
-                hists_1_non_zero = deepcopy(hists[1])
-                hists_1_non_zero[mask_hists_1] = 1
-                
-                mask_y = y == 0
-                y_non_zero = deepcopy(y)
-                y_non_zero[mask_y] = 1
-                
-                
-                ratio = y / hists_1_non_zero
-                ratio[mask_hists_1] = float("nan")
-                
-                ratio_err = np.sqrt((y_err / y_non_zero)**2 + (hist_errors[1] / hists_1_non_zero)**2)
-                # ratio_isnan = np.isnan(ratio)
-                # ratio[ratio_isnan] = 1.
-                # ratio_err[ratio_isnan] = 0.
-                ratio_err[mask_hists_1] = float("nan")
-                ratio_err[mask_y] = float("nan")
-                
+                ratio = y / hists[1]
+                ratio_err = np.sqrt((y_err / y)**2 + (hist_errors[1] / hists[1])**2)
+                ratio_isnan = np.isnan(ratio)
+                ratio[ratio_isnan] = 1.
+                ratio_err[ratio_isnan] = 0.
 
                 axs[1].step(self.bins, dup_last(ratio), linewidth=1.0, where='post', color=color)
                 axs[1].step(self.bins, dup_last(ratio + ratio_err), color=color, alpha=0.5,
@@ -218,9 +183,8 @@ class Plotter:
             plt.xlabel(self.label, fontsize = FONTSIZE)
             if self.x_log:
                 plt.xscale('log')
-                plt.xlim(tuple(np.exp(np.array(self.range))))
-            else:
-                plt.xlim(tuple(self.range))
+            plt.xlim(tuple(self.range))
+
             fig.savefig(self.plot_name, bbox_inches='tight', format='pdf', pad_inches=0.05)
             plt.close()
 
