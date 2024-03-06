@@ -4,17 +4,16 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
+import math
+import torch
 
 import pandas as pd
 from matplotlib import cm
 # from matplotlib.transforms import Bbox
 
 import data_util
-from calc_obs import *
-import math
-import torch
-
-from evaluate_plotting_helper import *
+from caloch_eval.calc_obs import *
+from caloch_eval.evaluate_plotting_helper import *
 
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.default'] = 'rm'

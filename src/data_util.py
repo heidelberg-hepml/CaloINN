@@ -3,8 +3,8 @@ import h5py
 import torch
 
 from myDataLoader import MyDataLoader
-from XMLHandler import XMLHandler
-import HighLevelFeatures as HLF
+from caloch_eval.XMLHandler import XMLHandler
+import caloch_eval.HighLevelFeatures as HLF
 
 def load_data_calo(filename, layer_boundaries, energy=None):
     data = {}
@@ -12,7 +12,6 @@ def load_data_calo(filename, layer_boundaries, energy=None):
     if energy is not None:
         energy_mask = data_file["incident_energies"][:] == energy
         data["energy"] = data_file["incident_energies"][:][energy_mask].reshape(-1, 1) / 1.e3
-        print(energy_mask.shape)    
         for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
             data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end][energy_mask.flatten()] / 1.e3
     else:
@@ -189,14 +188,7 @@ def preprocess(data, layer_boundaries, eps=1.e-10, u0up_cut=7.0, u0low_cut=0.0, 
         
     # Remove all no-interaction events (only 0.7%)
     binary_mask = np.sum(x, axis=1) >= 0
-    #binary_mask &= np.sum(x, axis=1) < energy[:,0]
     
-    #x = x[binary_mask]
-    #c = energy[binary_mask]
-    
-    #completely ignore low energy
-    #x[x<1.0e-3] = 0.
-
     c = energy
     c, extra_dims = get_energy_dims(x, c, layer_boundaries, eps)
 
@@ -213,11 +205,9 @@ def preprocess(data, layer_boundaries, eps=1.e-10, u0up_cut=7.0, u0low_cut=0.0, 
     x = x[binary_mask]
     c = c[binary_mask]
     extra_dims = extra_dims[binary_mask]
-    #extra_dims[:, 0] /= extra_dims[:,0].max()
     print("final shape of dataset: ", x.shape)
 
     x = normalize_layers(x, c, layer_boundaries)
-    #x = normalize_layers_Einc(x, c, layer_boundaries)
 
     x = np.concatenate((x, extra_dims), axis=1)
    
@@ -234,13 +224,11 @@ def postprocess_wEinc(x, c, layer_boundaries, quantiles, threshold=1.0e-4):
     x = np.copy(x)
     c = np.copy(c)
 
-    print("shape in output:")
+    print("shape of output:")
     print(x.shape, c.shape)
     x[x<quantiles] = 0.0
     x = unnormalize_layers_wEinc(x, c, layer_boundaries)
     
-    print(x.min())
-
     data = {}
     data["energy"] = c[..., [0]]
     for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
@@ -257,13 +245,12 @@ def postprocess_wenergy(x, c, layer_boundaries, quantiles, threshold=1.0e-4, rew
     x = np.copy(x)
     c = np.copy(c)
 
-    print("shape in output:")
+    print("shape of output:")
     print(x.shape, c.shape)
     x[x<quantiles] = 0.0
     x = x**(1/rew)
     x = unnormalize_layers_wenergies(x, c, layer_boundaries)
     
-    print(x.min())
 
     data = {}
     data["energy"] = c[..., [0]]
@@ -293,15 +280,7 @@ def postprocess(x, c, layer_boundaries, quantiles, threshold=1e-4, rew=1.0):
     #reweight
     #x = x**(1/rew)
 
-    #ifft
-    #x = np.fft.ifftshift(x)
-
     x = unnormalize_layers(x, c, layer_boundaries)
-    #x = unnormalize_layers_Einc(x, c, layer_boundaries)
-
-    print(x.min())
-    #x[x < 0] = 0
-    #x[x < threshold] = 0
 
     # Create a new dict 'data' for the output
     data = {}
@@ -369,7 +348,6 @@ def unnormalize_layers_wenergies(x, c, layer_boundaries, eps=1.0e-10):
         output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]  / \
                                              (np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
  
-    print(output.min(), output.max())
     return output
 
 def unnormalize_layers_wEinc(x, c, layer_boundaries, eps=1.e-10):
@@ -391,7 +369,6 @@ def unnormalize_layers_wEinc(x, c, layer_boundaries, eps=1.e-10):
     # Normalize each layer and multiply it with its original energy
     for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
         output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * incident_energy
-    print(output.min(), output.max())
     return output
 
 
@@ -411,7 +388,6 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
     # Split up the conditions
     incident_energy = c[..., [0]]
     extra_dims = x[..., -number_of_layers:]
-    #extra_dims[:,0] *= 3.5
     extra_dims[:, (-number_of_layers+1):] = np.clip(extra_dims[:, (-number_of_layers+1):], a_min=0., a_max=1.)   #clipping 
     x = x[:, :-number_of_layers]
     
@@ -429,7 +405,6 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10):
     for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
         output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * layer_energies[..., [layer_index]]  / \
                                              (np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
-    print(output.min(), output.max())
     return output
 
 def save_hlf(hlf, filename):
@@ -448,11 +423,8 @@ def get_loaders(filename, xml_filename, particle_type, val_frac, batch_size,
     # load the data from the hdf5 file
     data, layer_boundaries = load_data(filename, particle_type, xml_filename=xml_filename, energy=energy)
 
-    print(data["energy"].shape, data["layer_0"].shape)
     # preprocess the data and append the extra dims
     x, c = preprocess(data, layer_boundaries, eps, u0up_cut=u0up_cut, u0low_cut=u0low_cut, rew=rew, dep_cut=dep_cut)
-    #x, c = preprocess_wenergy(data, layer_boundaries, eps, rew=rew)
-    #x, c = preprocess_wEinc(data, layer_boundaries, eps)
 
     # Create an index array, used for splitting into train and val set
     number_of_samples = len(x)

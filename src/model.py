@@ -319,22 +319,11 @@ class CINN(nn.Module):
         if self.use_norm:
             data /= cond
         data = torch.log(data + self.alpha)
-        #data1 = torch.log(data[:, :369] + self.alpha)
-        #data2 = torch.logit(data[:, -4:]*(1-2*self.alpha_logit)+self.alpha_logit)
-        #print(data1.shape, data2.shape)
-        #data = torch.cat((data1, data2), dim=1)
-        print(data[:, -5:])
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
         self.norm_m = torch.diag(1 / std)
         self.norm_b = - mean/std
 
-        #np.save('norm_m.npy', self.norm_m)
-        #np.save('norm_b.npy', self.norm_b)
-        
-        #data -= mean
-        #data /= std
-        print(torch.isnan(data).sum(), self.norm_m.dtype)
         print('num samples out of bounds:', torch.count_nonzero(torch.max(torch.abs(data), dim=1)[0] > self.params.get("bounds_init", 10)).item())
 
     def define_model_architecture(self, in_dim):

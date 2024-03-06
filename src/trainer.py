@@ -2,6 +2,7 @@ import sys
 import time
 
 import torch
+import torch.distributions as dist
 import numpy as np
 
 import data_util
@@ -9,8 +10,7 @@ from model import CINN
 import plotting
 from plotter import Plotter
 
-import evaluate
-import torch.distributions as dist
+import caloch_eval.evaluate as evaluate
 
 class LogUniform(dist.TransformedDistribution):
     def __init__(self, lb, ub):
@@ -69,7 +69,6 @@ class Trainer:
             test_loader.set_quantiles(q)
             data = train_loader.add_noise_v2(data)
         else:
-            #data = train_loader.add_noise(data)
             data = data
             self.q = torch.tensor(self.params.get("width_noise", 1e-7), device=self.device)
         cond = torch.clone(train_loader.cond)
@@ -90,16 +89,12 @@ class Trainer:
         self.losses_train = {'inn': [], 'kl': [], 'total': []}
         self.losses_test = {'inn': [], 'kl': [], 'total': []}
         self.learning_rates = []
-        print(self.train_loader.data.max(), self.test_loader.data.max())
-        print(self.train_loader.data.min(), self.test_loader.data.min())
 
     def eval_quantiles(self, data: torch.Tensor) -> torch.Tensor:
         cp = torch.clone(data)
         cp[cp==0] = torch.nan
         quantiles = torch.nanquantile(cp, q=0.01, dim=0).reshape(1, -1)
         print(quantiles.shape)
-        #quantiles = torch.tensor([1.0e-6], device=self.device)
-        #quantiles[quantiles==0.0] = torch.tensor([1.0e-6], device=self.device)
         cp[cp==torch.nan] = 0.0
         return quantiles
 

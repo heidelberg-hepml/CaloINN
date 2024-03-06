@@ -1,7 +1,7 @@
 # caloinn
 INN for Calorimeter Shower Generation
 
-Code used for "Detector Flows" (arxiv:XXXX) by 
+Code used for "Detector Flows" (arxiv:2312:09290) by 
 Ernst F., Favaro L., Krause C., Plehn T., and Shih D.
 
 Fast calorimeter generation for CaloGAN dataset and Fast Calorimeter Challenge
@@ -10,11 +10,12 @@ Fast calorimeter generation for CaloGAN dataset and Fast Calorimeter Challenge
 
 Running a training:
 ```
-python src/main.py --use_cuda params/example_bayesian.yaml
+python src/main.py params/<param_card>.yaml -c
 ```
 This creates a subfolder in the `results` folder named `yyyymmdd_hhmmss_run_name` where the
 prefix is the date and time and `run_name` is specified in the param card.
 
+Example param card used for pions in `params/pions.yaml`
 ## Parameters
 
 This is a list of the parameters that can be used in yaml parameter files. Many have default

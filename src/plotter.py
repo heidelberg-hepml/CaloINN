@@ -5,7 +5,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 import matplotlib.pyplot as plt
 
-import calc_obs
+import caloch_eval.calc_obs
 
 plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['mathtext.default'] = 'rm'
