@@ -1,10 +1,12 @@
 # caloinn
 INN for Calorimeter Shower Generation
 
-Code used for "Detector Flows" (arxiv:XXXX) by 
+Code used for "Detector Flows" (arxiv:2312.09290) by 
 Ernst F., Favaro L., Krause C., Plehn T., and Shih D.
 
-Fast calorimeter generation for CaloGAN dataset and Fast Calorimeter Challenge
+Fast calorimeter generation for the CaloGAN dataset
+
+Initially developed by Thorsted Buss.
 
 ## Usage
 
