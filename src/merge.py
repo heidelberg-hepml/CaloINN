@@ -11,14 +11,14 @@ def merge(file1, file2, new_file_name, ratio, N=100000):
 
     N1 = int(ratio*N)
     N2 = N-N1
-    perm = np.random.permutation(N)
+    #perm = np.random.permutation(N)
     print(N1, N2, N)
 
     for key in input_file_1.keys():
-        data1 = input_file_1[key][:N1]
-        data2 = input_file_2[key][:N2]
+        data1 = input_file_1[key] #[:N1]
+        data2 = input_file_2[key] #[:N2]
         data = np.concatenate([data1, data2])
-        new_file.create_dataset(key, data=data[perm])
+        new_file.create_dataset(key, data=data) #[perm])
 
     new_file.close()
 

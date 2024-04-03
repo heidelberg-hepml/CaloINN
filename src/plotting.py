@@ -4,10 +4,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
-
-import pandas as pd
 from matplotlib import cm
-# from matplotlib.transforms import Bbox
 
 import data_util
 from calc_obs import *
@@ -31,39 +28,6 @@ tickfont.set_family('serif')
 tickfont.set_name('Times New Roman')
 tickfont.set_size(20)
 
-
-
-def plot_average_table(data, save_file):
-    
-    number_of_runs = len(data)
-    row_indices = [f"Run {i+1}" for i in range(number_of_runs)]
-
-    row_indices.append("mean")
-    row_indices.append("std")
-
-    averaged = np.array([np.mean(data, axis=0), np.std(data, axis=0)])
-    data = np.concatenate([data, averaged])
-
-    df = pd.DataFrame(data, columns=["Accuracy", "AUC", "JSD", "best epoch"], index=row_indices)
-
-    number_of_cols = len(df.columns)
-    number_of_rows = len(list(df.iterrows()))
-    row_labels = np.array(list(df.iterrows()), dtype=object)[:,0]
-    fig, ax = plt.subplots(figsize=((number_of_rows+1), (number_of_cols)))
-
-    # hide axes
-    fig.patch.set_visible(False)
-    ax.axis('off')
-    ax.axis('tight')
-
-    ax.table(cellText=df.values.round(4), colLabels=df.columns, rowLabels=row_labels,
-            loc='center', cellLoc="left",colWidths = [0.1]*len(df.columns),
-            colLoc="center", rowLoc="center")
-    fig.tight_layout()
-
-    plt.savefig(save_file)
-    plt.close()
-
 def plot_hist(
         file_name,
         data,
@@ -76,11 +40,7 @@ def plot_hist(
         vmax=None,
         n_bins=100,
         ymin=None,
-        ymax=None,
-        ax=None,
-        panel_ax=None,
-        panel_scale="log",
-        density=True):
+        ymax=None,):
     data = data[np.isfinite(data)]
     reference = reference[np.isfinite(reference)]
 
@@ -98,6 +58,7 @@ def plot_hist(
     else:
         if isinstance(n_bins, int):
             bins = np.linspace(vmin, vmax, n_bins)
+            #bins = np.histogram_bin_edges(data, bins='auto')
         else:
             bins = n_bins
     
@@ -110,74 +71,40 @@ def plot_hist(
         color = colors[2]
     else:
         color = 'blue'
-        
-    create_fig = False
-    if ax is None:
-        create_fig = True
-        fig, ax = plt.subplots(1,1,figsize=(6,6))
+    fig, ax = plt.subplots(1,1,figsize=(6,6))
 
-    ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
-        alpha=1, color=color, density=density, label='CaloINN')
+    hist_data, _, _ = ax.hist(data, bins=bins, histtype='step', linewidth=2,
+        alpha=1, color=color, density='True', label='CaloINN')
 
-    ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
-            alpha=0.5, color=color, density=density, label='GEANT')
-
-    if panel_ax is not None:
-        assert len(bins_0) == len(bins_1)
-        assert (bins_0 - bins_1 < 1.e-7).all()
-        
-        # prevent divisions by 0! Set these bars to 0
-        mask = ns_1 == 0
-        ns_1[mask] = 1
-        panel_data = ns_0/ns_1
-        
-        panel_data[mask] = float("nan")
-        
-        widths = 1.2*(bins_1[1:] - bins_1[:-1])
-        
-        panel_ax.bar(bins_0[:-1], ns_0/ns_1, label='CaloINN/GEANT', width=widths)
-        
-        panel_ax.plot([vmin, vmax],[1,1], color="red", ls="--", marker=None)
+    hist_ref, _, _ = ax.hist(reference, bins=bins, histtype='stepfilled',
+            alpha=0.5, color=color, density='True', label='GEANT')
 
     ax.set_yscale(yscale)
     ax.set_xscale(xscale)
-    if panel_ax is not None:
-        panel_ax.set_yscale(panel_scale)
-        panel_ax.set_xscale(xscale)
 
     ax.set_xlim([vmin,vmax])
-    if panel_ax is not None:
-        panel_ax.set_xlim([vmin,vmax])
-        # panel_ax.set_ylim([0.9, 1.1])
-        
     if ymin is not None or ymax is not None:
         ax.set_ylim((ymin, ymax))
 
-    if panel_ax is not None:
-        panel_ax.legend()
+    #ax.legend()
 
     if axis_label:
-        if panel_ax is None:
-            ax.set_xlabel(axis_label, fontproperties=axislabelfont)
-        else:
-            panel_ax.set_xlabel(axis_label, fontproperties=axislabelfont)
-            
+        ax.set_xlabel(axis_label, fontproperties=axislabelfont)
+
     plt.xticks(fontproperties=tickfont)
     plt.yticks(fontproperties=tickfont)
 
-    if create_fig:
-        fig.tight_layout()
-        fig.savefig(file_name, bbox_inches='tight')
-        
-    if panel_ax is None:
-        plt.close()
-    
+    fig.tight_layout()
+    fig.savefig(file_name, bbox_inches='tight')
+
+    plt.close()
+    return hist_data, hist_ref, bins
+
 def plot_loss(
         file_name,
         loss_train,
-        loss_test,
-        skip_epochs=True):
-    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
+        loss_test):
+    fig, ax = plt.subplots(1,1,figsize=(6,6), dpi=300)
 
     c = len(loss_test)/len(loss_train)
     ax.plot(c*np.arange(1,len(loss_train)+1), loss_train, color='blue', label='train loss')
@@ -185,33 +112,7 @@ def plot_loss(
     ax.legend(loc='upper right', prop=labelfont)
 
     ax.set_xlim([0,len(loss_test)])
-    # nested np.mins needed for the case of different length
-    # print(len(loss_test))
-    if len(loss_test) <= 10 or (not skip_epochs):
-        y_min = np.min(np.min(np.array([loss_train, loss_test], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train, loss_test], dtype=object)))
-    elif len(loss_test) <= 20:
-        train_idx = 10 * len(loss_train) // len(loss_test)
-        y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[10:]], dtype=object)))
-    # elif len(loss_test) <= 20:
-    else:
-        train_idx = 20 * len(loss_train) // len(loss_test)
-        y_min = np.min(np.min(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
-        y_max = np.max(np.max(np.array([loss_train[train_idx:], loss_test[20:]], dtype=object)))
-        
-    # print(y_min, y_max)
-    if y_min > 0:
-        if y_max > 0:
-            ax.set_ylim([y_min*0.9, y_max*1.1])
-        else:
-            ax.set_ylim([y_min*0.9, y_max*0.9])
-    else:
-        if y_max > 0:
-            ax.set_ylim([y_min*1.1, y_max*1.1])
-        else:
-            ax.set_ylim([y_min*1.1, y_max*0.9])
-            
+    ax.set_ylim([min(loss_train)- 20,loss_test[0] + 20])
     ax.set_xlabel('epoch', fontproperties=axislabelfont)
     ax.set_ylabel('loss', fontproperties=axislabelfont)
 
@@ -242,61 +143,17 @@ def plot_lr(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
-    
-def plot_grad(
-        file_name,
-        gradients,
-        batches_per_epoch=1):
-    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
 
-    ax.plot(np.arange(1,len(gradients)+1)/batches_per_epoch, gradients, color='red', label='gradient')
-
-    ax.set_xlim([0,len(gradients)/batches_per_epoch])
-    ax.set_xlabel('epoch', fontproperties=axislabelfont)
-    ax.set_ylabel('gradient', fontproperties=axislabelfont)
-    ax.set_yscale("log")
-
-    plt.xticks(fontproperties=tickfont)
-    plt.yticks(fontproperties=tickfont)
-
-    fig.tight_layout()
-    fig.savefig(file_name, bbox_inches='tight')
-
-    plt.close()
-    
-def plot_logsig(
-        file_name,
-        logsigs):
-    
-    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
-
-    colors = ["red", "blue", "green", "orange"]
-    labels = ["max", "min", "mean", "median"]
-    for logsig, label, color in zip(logsigs, labels, colors):
-        
-        ax.plot(logsig, label=label, color=color)
-
-        ax.set_xlim([0,len(logsig)])
-        ax.set_xlabel('epoch', fontproperties=axislabelfont)
-        ax.set_ylabel('$log(\\sigma^2)$', fontproperties=axislabelfont)
-
-
-    ax.legend()
-    fig.tight_layout()
-    plt.xticks(fontproperties=tickfont)
-    plt.yticks(fontproperties=tickfont)
-    fig.savefig(file_name, bbox_inches='tight')
-
-    plt.close()
-    
-def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_layer=None, epoch=None, in_one_file=False, p_ref="e_plus"):
-    data_file = os.path.join(results_dir, 'samples.hdf5')
+def plot_all_hist(results_dir, reference_file, res_filename='samples.hdf5', p_ref='eplus', include_coro=False, mask=0, calo_layer=None, epoch=None):
+    data_file = os.path.join(results_dir, res_filename)
     if epoch:
         plot_dir = os.path.join(results_dir, 'plots', f'epoch_{epoch:03d}')
+    elif res_filename != 'samples.hdf5':
+        plot_dir = os.path.join(results_dir, 'plots/'+res_filename+'/')
     else:
         plot_dir = os.path.join(results_dir, 'plots/final')
     os.makedirs(plot_dir, exist_ok=True)
-  
+
     if calo_layer is None:
         plots = [
                 (calc_e_ratio, 'e_ratio.pdf', {}, {'axis_label': r'\(E_{tot}/E_{part}\)', 'p_ref': p_ref}),
@@ -362,102 +219,30 @@ def plot_all_hist(results_dir, reference_file, include_coro=False, mask=0, calo_
         if include_coro:
             plots.append( (calc_coro, f'coro02_{layer}.pdf', {'layer': layer},
                 {'axis_label': f'\\(C_{{0.2}}\\) layer {layer}', 'xscale': 'linear', 'yscale': 'log', 'p_ref': p_ref}) )
-    
+
     data = data_util.load_data(data_file)
     reference = data_util.load_data(reference_file, mask)
- 
+    hists = []
+
     for function, name, args1, args2 in plots:
         data_coppy = {k: np.copy(v) for k, v in data.items()}
         reference_coppy = {k: np.copy(v) for k, v in reference.items()}
-        plot_hist(
+        hist_data, hist_ref, bins = plot_hist(
             file_name=os.path.join(plot_dir, name),
             data=function(data_coppy, **args1),
             reference=function(reference_coppy, **args1),
             **args2
         )
+        hists.append([hist_data, hist_ref, bins, name, args2['axis_label']])
+    return hists
 
-    if in_one_file:
-    # if True:
-        number_of_plots = len(plots)
-        rows = number_of_plots // 6
-        if number_of_plots%6 != 0:
-            rows += 1
-        heights = [1, 0.3, 0.3]*rows
-
-        fig, axs = plt.subplots(rows*3,6, dpi=500, figsize=(6*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
-
-        data_coppy = {k: np.copy(v) for k, v in data.items()}
-        reference_coppy = {k: np.copy(v) for k, v in reference.items()}
-
-        iteration = 0
-        for i in range(rows*3):
-            
-            if i%3 == 1:
-                iteration -= 6
-                
-            for j in range(6):
-                
-                if i % 3 == 2:
-                    # Add one (small) invisible plot as whitespace
-                    axs[i,j].set_visible(False)
-                    continue
-                
-                elif iteration >= number_of_plots:
-                        # Plots are empty remove them
-                        axs[i,j].set_visible(False)
-                        iteration += 1
-                        continue
-                
-                
-                # Select the correct plot input for this axis
-                function, name, args1, args2 = plots[iteration]
-                
-                
-                if i % 3 == 0:
-                    # plot the main data
-                    plot_hist(
-                            file_name=None,
-                            data=function(data_coppy, **args1),
-                            reference=function(reference_coppy, **args1),
-                            ax=axs[i,j],
-                            panel_ax=axs[i+1,j],
-                            **args2)
-                    
-                    # Hide the (shared) x-axis
-                    axs[i,j].xaxis.set_visible(False)
-                    
-                    # Hide the first tick label
-                    plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
-                    iteration += 1
-
-                if i % 3 == 1:
-                    fig.canvas.draw()
-                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
-                    iteration += 1             
-
-        fig.subplots_adjust(hspace=0)
-        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
-        # Dont use tight_layout!
-        plt.close()
-        
 def plot_latent(samples, results_dir, epoch=None):
     if epoch is not None:
         plot_dir = os.path.join(results_dir, 'latent', f'epoch_{epoch:03d}')
     else:
         plot_dir = os.path.join(results_dir, 'latent')
     os.makedirs(plot_dir, exist_ok=True)
-    
-    max_dims = samples.shape[1]
-    
-    # previously:
-    # latent_dims = [1, 150, 300, 400, 500, 504, 505, 506]
-    np.linspace(0, max_dims-4, 5)
-    
-    # Cover the space equally and look at the extra dims dimensions
-    latent_dims = list(np.linspace(0, max_dims-4, 5).astype(int)) + [max_dims-3, max_dims-2, max_dims-1]
-        
-    
-    for idx in latent_dims:
+    for idx in (1, 150, 300, 400, 500, 504, 505, 506):
         min_v = -3
         max_v = 3
         bins = np.linspace(min_v, max_v, 51)

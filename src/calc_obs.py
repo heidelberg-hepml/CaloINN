@@ -63,7 +63,7 @@ def calc_layer_diff(data, layer1=0, layer2=1, dir='phi'):
     mean_2 = calc_centroid_mean(data, layer2, dir)
     return mean_2 - mean_1
 
-def calc_sparsity(data, layer=0, threshold=1e-5):
+def calc_sparsity(data, layer=0, threshold=1e-6):
     layer = data[f'layer_{layer}']
     return (layer > threshold).mean((1, 2))
 
