@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 import data_util
-from model import CINN, CVAE, KernelVAE, ConvVAE
+from model import CINN, CVAE, KernelVAE
 import plotting
 from plotter import Plotter
 
@@ -63,6 +63,8 @@ class VAETrainer:
         else:
             self.gamma_updates = params['VAE_n_epochs']+2
             
+        self.dataset = params.get('dataset', 1)
+            
         # self.model = CAE(input = data,
         self.model = CVAE(input = data,
                           cond = cond,
@@ -87,10 +89,18 @@ class VAETrainer:
                           learn_energies=params.get("VAE_learn_energies", False),
                           sparsity_loss=params.get("sparsity_loss", None), 
                           BCE_mode=params.get("BCE_mode", None),
+                          wrong_norm=params.get("VAE_wrong_norm", False),
+                          batch_norm_prep=params.get("VAE_batch_norm_prep", False),
+                          learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
         self.model = self.model.to(self.device)
         
+        def count_parameters(model):
+            return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        print("Number of parameters", count_parameters(self.model))
+                
         
         # Set the optimizer
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("VAE_lr", 1.e-4), weight_decay=self.params.get("VAE_weight_decay", 0.))
@@ -146,11 +156,8 @@ class VAETrainer:
         # Initialize the best validation loss
         min_test_loss = np.inf
         
-        # log_c_weights = 50*[0] + list(range(100))
-        # log_c_weights = np.array(log_c_weights)/100
         
-        
-        for epoch in range(self.epoch_offset+1, self.params['VAE_n_epochs']+1):
+        for epoch in  tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
@@ -163,14 +170,6 @@ class VAETrainer:
             
             if epoch % self.gamma_updates == 0:
                 self.model.update_gamma()
-
-            # Remember the best model so far
-            if test_loss < min_test_loss:
-                min_test_loss = test_loss
-                self.save("_best")
-                
-            # print("new log_c_weight: ", log_c_weights[epoch-1])
-            # self.model.update_log_c_weight(log_c_weights[epoch-1])
                 
             # Print the data saved for documentation
             self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss,
@@ -188,14 +187,7 @@ class VAETrainer:
             if epoch%self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
                 self.save()
                 
-                self.plot_results(epoch) 
-                
-            # if epoch == 101:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.9, share_weight=0.025)
-            # elif epoch == 201:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.95, share_weight=0.0125)
-            # elif epoch == 301:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=1, share_weight=0.)         
+                self.plot_results(epoch)         
          
     def __train_one_epoch(self):
         """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
@@ -215,6 +207,10 @@ class VAETrainer:
         # Iterate over all batches
         # x=data, c=condition
         for x, c in self.train_loader:
+            
+            if self.dataset == 3:
+                x = x.to(self.device)
+                c = c.to(self.device)
             
             # Initialize the gradient value for the documentation
             max_grad_batch = 0.0
@@ -289,6 +285,10 @@ class VAETrainer:
         self.model.eval()
         with torch.no_grad():
             for x, c in self.test_loader:
+                
+                if self.dataset == 3:
+                    x = x.to(self.device)
+                    c = c.to(self.device)
                 
                 # Get the reconstruction loss
                 loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
@@ -359,26 +359,6 @@ class VAETrainer:
         latent = self.model.reparameterize(mu, logvar)
         return latent
             
-    # def generate_from_latent(self, latent, condition, batch_size = 10000):
-    #     self.model.eval()
-    #     with torch.no_grad():
-    #         num_samples = condition.shape[0]
-
-    #         # Prepares an "empty" container for the samples
-    #         samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
-    #         for batch in range((num_samples+batch_size-1)//batch_size):
-    #             start = batch_size*batch
-    #             stop = min(batch_size*(batch+1), num_samples)
-    #             condition_l = condition[start:stop].to(self.device)
-    #             latent_l = latent[start:stop].to(self.device)
-    #             samples[start:stop] = self.model.decode(latent=latent_l, c=condition_l).cpu()
-
-            
-    #         # Postprocessing (Reshape the layers and return a dict)
-    #         data = data_util.postprocess(samples, condition)
-
-    #         return data      
-    
     def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
@@ -498,8 +478,7 @@ class VAETrainer:
         self.model.to(self.device)
         print(f"loaded VAE state from epoch {state_dicts.get('epoch', 0)}")
                                           
- 
-
+                                          
 class KVAETrainer:
     def __init__(self, params, device, doc):
         
@@ -536,6 +515,8 @@ class KVAETrainer:
         else:
             self.gamma_updates = params['VAE_n_epochs']+2
             
+        self.dataset = params.get('dataset', 1)
+            
         # self.model = CAE(input = data,
         self.model = KernelVAE(input = data,
                           cond = cond,
@@ -564,9 +545,19 @@ class KVAETrainer:
                           learn_energies=params.get("VAE_learn_energies", False),
                           sparsity_loss=params.get("sparsity_loss", None), 
                           BCE_mode=params.get("BCE_mode", None),
+                          wrong_norm=params.get("VAE_wrong_norm", False),
+                          batch_norm_prep=params.get("VAE_batch_norm_prep", False),
+                          learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
         self.model = self.model.to(self.device)
+        
+                
+        def count_parameters(model):
+            return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        print("Number of parameters", count_parameters(self.model))
+                
         
         
         # Set the optimizer
@@ -623,11 +614,9 @@ class KVAETrainer:
         # Initialize the best validation loss
         min_test_loss = np.inf
         
-        # log_c_weights = 50*[0] + list(range(100))
-        # log_c_weights = np.array(log_c_weights)/100
         
         
-        for epoch in range(self.epoch_offset+1, self.params['VAE_n_epochs']+1):
+        for epoch in  tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
@@ -640,14 +629,6 @@ class KVAETrainer:
             
             if epoch % self.gamma_updates == 0:
                 self.model.update_gamma()
-
-            # Remember the best model so far
-            if test_loss < min_test_loss:
-                min_test_loss = test_loss
-                self.save("_best")
-                
-            # print("new log_c_weight: ", log_c_weights[epoch-1])
-            # self.model.update_log_c_weight(log_c_weights[epoch-1])
                 
             # Print the data saved for documentation
             self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss,
@@ -665,14 +646,7 @@ class KVAETrainer:
             if epoch%self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
                 self.save()
                 
-                self.plot_results(epoch) 
-                
-            # if epoch == 101:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.9, share_weight=0.025)
-            # elif epoch == 201:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.95, share_weight=0.0125)
-            # elif epoch == 301:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=1, share_weight=0.)         
+                self.plot_results(epoch)       
          
     def __train_one_epoch(self):
         """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
@@ -692,6 +666,11 @@ class KVAETrainer:
         # Iterate over all batches
         # x=data, c=condition
         for x, c in self.train_loader:
+            
+            
+            if self.dataset == 3:
+                x = x.to(self.device)
+                c = c.to(self.device)
             
             # Initialize the gradient value for the documentation
             max_grad_batch = 0.0
@@ -766,6 +745,10 @@ class KVAETrainer:
         self.model.eval()
         with torch.no_grad():
             for x, c in self.test_loader:
+                
+                if self.dataset == 3:
+                    x = x.to(self.device)
+                    c = c.to(self.device)
                 
                 # Get the reconstruction loss
                 loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
@@ -857,8 +840,6 @@ class KVAETrainer:
         plotting.plot_all_hist(
             data, cond, generated, cond, self.params,
             self.layer_boundaries, plot_dir)
-        # except:
-        #     print("error during plotting")
 
         
         with torch.no_grad():
@@ -954,517 +935,7 @@ class KVAETrainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
         print(f"loaded VAE state from epoch {state_dicts.get('epoch', 0)}")
-                                          
-class ConvVAETrainer:
-    def __init__(self, params, device, doc):
-        
-        self.params = params
-        self.device = device
-        print(self.device)
-        print(params.get("dataset", 1))
-        self.doc = doc
-
-        # Load the data  
-        self.train_loader, self.test_loader, self.layer_boundaries = data_util.get_loaders(
-            filename=params['data_path'],
-            particle_type=params['particle_type'],
-            val_frac=params["val_frac"],
-            batch_size=params['VAE_batch_size'],
-            eps=params.get("eps", 1.e-10),
-            device=device,
-            drop_last=True,
-            shuffle=True,
-            dataset=params.get("dataset", 1),
-            e_inc_index=params.get("e_inc_index", None),)
-        
-        data = self.train_loader.data
-        cond = self.train_loader.cond
-        
-        # Create the VAE
-        self.latent_dim = params["VAE_latent_dim"]
-        hidden_sizes = params["VAE_hidden_sizes"]
-        
-        learn_gamma = False
-        self.gamma_updates = params.get("VAE_gamma_updates", None)
-        if self.gamma_updates is not None:
-            learn_gamma = True
-        else:
-            self.gamma_updates = params['VAE_n_epochs']+2
-            
-            
-
-        self.model = ConvVAE(input = data,
-                          cond = cond,
-                          latent_dim = self.latent_dim,
-                          hidden_sizes = hidden_sizes,
-                          hidden_channels = params["VAE_hidden_channels"],
-                          layer_boundaries_detector = self.layer_boundaries,
-                          batch_norm=params.get("VAE_batch_norm", False),
-                          particle_type = params['particle_type'],
-                          dataset = params.get('dataset', 1),
-                          dropout = params.get("VAE_dropout", 0.0),
-                          alpha = params.get("alpha", 1.e-6),
-                          beta = params.get("VAE_beta", 1.e-5),
-                          gamma = params.get("VAE_gamma", 1.e+3),
-                          learn_gamma = learn_gamma,
-                          eps = params.get("eps", 1.e-10),
-                          noise_width=params.get("VAE_width_noise", None),
-                          smearing_self=params.get("VAE_smearing_self", 1.0),
-                          smearing_share=params.get("VAE_smearing_share", 0),
-                          einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
-                          subtract_noise=params.get("VAE_subtract_noise", False),
-                          threshold=params.get("VAE_internal_threshold", False), 
-                          learn_energies=params.get("VAE_learn_energies", False),
-                          sparsity_loss=params.get("sparsity_loss", None), 
-                          BCE_mode=params.get("BCE_mode", None),
-        )
-        
-        self.model = self.model.to(self.device)
-        
-        
-        # Set the optimizer
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.params.get("VAE_lr", 1.e-4), weight_decay=self.params.get("VAE_weight_decay", 0.))
-        
-        # Configure a possible LR scheduler
-        self.set_scheduler()
-        
-        # Print the model
-        print(self.model)
-        sys.stdout.flush()
-        
-        # Needed for documentation (printing & plotting)
-        self.losses_train = {'mse': [], 'mse_logit': [],'kl': [], 'sparsity': [], 'log_c': [], 'total': []}
-        self.losses_test = {'mse': [], 'mse_logit': [], 'kl': [], 'sparsity': [], 'log_c': [], 'total': []}
-        self.learning_rates = []
-        self.max_grad = []
-        self.gammas = []
-        
-        # Nedded for printing if the model was loaded
-        self.epoch_offset = 0
-
-    def set_scheduler(self):
-        
-        steps_per_epoch = len(self.train_loader)
-        
-        if self.params.get("VAE_lr_sched_mode", None) == "step":
-            self.scheduler = torch.optim.lr_scheduler.StepLR(
-                self.optim,
-                step_size = self.params["lr_decay_epochs"],
-                gamma = self.params["lr_decay_factor"],
-            )
-        elif self.params.get("VAE_lr_sched_mode", None) == "reduce_on_plateau":
-            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                self.optim,
-                factor = 0.4,
-                patience = 50,
-                cooldown = 100,
-                threshold = 5e-5,
-                threshold_mode = "rel",
-                verbose=True
-            )
-        elif self.params.get("VAE_lr_sched_mode", None) == "one_cycle_lr":
-            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                self.optim,
-                self.params.get("VAE_max_lr", self.params["VAE_lr"]*10),
-                epochs = self.params.get("VAE_opt_epochs") or self.params["VAE_n_epochs"],
-                steps_per_epoch=steps_per_epoch)
-            
-        elif self.params.get("VAE_lr_sched_mode", None) is None:
-            self.scheduler = None
-
-    def train(self):
-        # Initialize the best validation loss
-        min_test_loss = np.inf
-        
-        # log_c_weights = 50*[0] + list(range(100))
-        # log_c_weights = np.array(log_c_weights)/100
-        
-        
-        for epoch in tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
-            
-            # Save the latest epoch of the training (just the number)
-            self.epoch = epoch
-            
-            # Do training and validation for the current epoch
-            max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss = self.__train_one_epoch()
-            test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss = self.__do_validation()
-            
-            self.gammas.append(self.model.gamma.item())
-            
-            if epoch % self.gamma_updates == 0:
-                self.model.update_gamma()
-
-            # Remember the best model so far
-            # if test_loss < min_test_loss:
-            #     min_test_loss = test_loss
-            #     self.save("_best")
-                
-            # print("new log_c_weight: ", log_c_weights[epoch-1])
-            # self.model.update_log_c_weight(log_c_weights[epoch-1])
-                
-            # Print the data saved for documentation
-            self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss,
-                              test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss, test_loss, max_grad)
-            
-            # Plot the losses as well
-            if epoch >= 1:
-                self.plot_losses()
-                
-            # If we reach the save interval, create all histograms for the observables,
-            # plot the latent distribution and save the model
-            if epoch % self.params.get("VAE_keep_models", self.params["VAE_n_epochs"]+1) == 0:
-                self.save(epoch=epoch)
-            
-            if epoch%self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
-                self.save()
-                
-                self.plot_results(epoch) 
-                
-            # if epoch == 101:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.9, share_weight=0.025)
-            # elif epoch == 201:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=0.95, share_weight=0.0125)
-            # elif epoch == 301:
-            #     self.model.update_smearing_matrix(self.train_loader.data, self.train_loader.cond, self_weight=1, share_weight=0.)         
-         
-    def __train_one_epoch(self):
-        """Trains the model for one epoch. Saves the losses inplace for plotting and returns the losses that are needed for printing.
-        """
-        # Initialize the loss values for the documentation
-        train_loss = 0
-        train_mse_loss = 0
-        train_mse_loss_logit = 0
-        train_kl_loss = 0
-        train_sparsity_loss = 0
-        train_log_c_loss = 0
-        max_grad = 0.0
-
-        # Set model to training mode
-        self.model.train()
-        
-        # Iterate over all batches
-        # x=data, c=condition
-        for x, c in self.train_loader:
-            
-            # Initialize the gradient value for the documentation
-            max_grad_batch = 0.0
-            
-            # Reset the optimizer
-            self.optim.zero_grad()
-            
-            # Get the reconstruction loss
-            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
-                
-            # Calculate the gradients
-            loss.backward()
-            
-            # Update the parameters
-            self.optim.step()
-
-            # Save the losses for documentation
-            self.losses_train['mse'].append(mse_loss.item())
-            self.losses_train['mse_logit'].append(mse_loss_logit.item())
-            self.losses_train['total'].append(loss.item())
-            self.losses_train['kl'].append(kl_loss.item())
-            self.losses_train['sparsity'].append(sparsity_loss.item())
-            self.losses_train['log_c'].append(log_c_loss.item())
-            
-            train_loss += loss.item()*len(x)
-            train_mse_loss += mse_loss.item()*len(x)
-            train_mse_loss_logit += mse_loss_logit.item()*len(x)
-            train_kl_loss += kl_loss.item()*len(x)
-            train_sparsity_loss += sparsity_loss.item()*len(x)
-            train_log_c_loss += log_c_loss.item()*len(x)
-            
-            # Save the LR if a scheduler is used
-            if self.scheduler is not None:
-                self.scheduler.step()
-                self.learning_rates.append(self.scheduler.get_last_lr()[0])
-
-            # Save the maximum gradient for documentation
-            for param in self.model.parameters():
-                if param.grad is not None:
-                    max_grad_batch = max(max_grad_batch, torch.max(torch.abs(param.grad)).item())
-            max_grad = max(max_grad_batch, max_grad)
-            self.max_grad.append(max_grad_batch)
-                
-        # Normalize the losses to the dataset length and return them.
-        # We need a different normalization here compared to the plotting because we summed over the whole epoch!
-        train_mse_loss /= len(self.train_loader.data)
-        train_mse_loss_logit /= len(self.train_loader.data)
-        train_kl_loss /= len(self.train_loader.data)
-        train_sparsity_loss /= len(self.train_loader.data)
-        train_loss /= len(self.train_loader.data)
-        train_log_c_loss /= len(self.train_loader.data)         
-
-        return max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss
-                       
-    def __do_validation(self):
-        """Evaluates the model on the test set.
-        Saves the losses inplace for plotting and returns the losses that are needed for printing.
-        """
-        # Initialize the loss values for the documentation
-        test_loss = 0
-        test_mse_loss = 0
-        test_mse_loss_logit = 0
-        test_kl_loss = 0
-        test_sparsity_loss = 0
-        test_log_c_loss = 0
-        
-        # Evaluate the model on the test dataset and save the losses
-        self.model.eval()
-        with torch.no_grad():
-            for x, c in self.test_loader:
-                
-                # Get the reconstruction loss
-                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
-                
-                # Save the losses
-                test_loss += loss.item() * len(x)
-                test_mse_loss += mse_loss.item() * len(x)
-                test_mse_loss_logit += mse_loss_logit.item() * len(x)
-                test_kl_loss += kl_loss.item() * len(x)
-                test_sparsity_loss += sparsity_loss.item() * len(x)
-                test_log_c_loss += log_c_loss.item() * len(x)
-                
-        
-        # Normalize the losses for printing and plotting and store them also in the corresponding dict
-        test_mse_loss /= len(self.test_loader.data)
-        test_mse_loss_logit /= len(self.test_loader.data)
-        test_loss /= len(self.test_loader.data)
-        test_kl_loss /= len(self.test_loader.data)
-        test_sparsity_loss /= len(self.test_loader.data)
-        test_log_c_loss /= len(self.test_loader.data)
-               
-        self.losses_test['mse'].append(test_mse_loss)
-        self.losses_test['mse_logit'].append(test_mse_loss_logit)
-        self.losses_test['total'].append(test_loss)
-        self.losses_test['kl'].append(test_kl_loss)
-        self.losses_test['sparsity'].append(test_sparsity_loss)
-        self.losses_test['log_c'].append(test_log_c_loss)
-
-        return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss
-
-    def get_reco(self, data, cond, batch_size=10000):
-        
-        
-        self.model.eval()
-        reconstructed = torch.zeros((data.shape[0],data.shape[1]))
-        
-        with torch.no_grad():
-            # Generate the data in batches according to batch_size
-            for batch in range((data.shape[0]+batch_size-1)//batch_size):
-                start = batch_size*batch
-                stop = min(batch_size*(batch+1), data.shape[0])
-                cond_l = cond[start:stop].to(self.device)
-                data_l = data[start:stop].to(self.device)
-                reconstructed[start:stop] = self.model(data_l, cond_l).cpu()
-            
-        reconstructed = reconstructed[:,...]
-        
-        return reconstructed
-        
-    def get_mu_logvar(self, data, cond):
-                    
-        mu, logvar = self.model.encode(data, cond)
-        mu_logvar = torch.cat((mu, logvar), axis=1)
-        return mu_logvar
-    
-    def get_mu(self, data, cond):
-                    
-        mu, logvar = self.model.encode(data, cond)
-        return mu
-        
-    def get_latent(self, data, cond):
-        
-        mu, logvar = self.model.encode(x=data, c=cond)
-        latent = self.model.reparameterize(mu, logvar)
-        return latent 
-    
-    def plot_results(self, epoch, plot_path=None):
-        """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
-        """
-        
-        self.model.eval()
-        # try:
-        # Generate the reconstructions
-        data = self.test_loader.data
-        cond = self.test_loader.cond
-        generated = self.get_reco(data, cond, batch_size=1000)
-                    
-        # Now create the no-errorbar histograms
-        if plot_path is None:
-            subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-            plot_dir = self.doc.get_file(subdir)
-        else:
-            plot_dir = plot_path
-            
-        plotting.plot_all_hist(
-            data, cond, generated, cond, self.params,
-            self.layer_boundaries, plot_dir)
-        # except:
-        #     print("error during plotting")
-
-        
-        with torch.no_grad():
-            
-            if self.params.get("dataset", 1) == 1:
-                mu, logvar = self.model.encode(x=data, c=cond)
-                mu0 = mu[:, 0].cpu().numpy()
-                mu1 = mu[:, 1].cpu().numpy()
-                
-                plt.figure(dpi=300)
-                plt.plot(mu0, mu1, lw=0, marker=",")
-                plt.title(r"$\mu_0$ and $\mu_1$ correlations")
-                # plt.xscale("log")
-                plt.xlabel(r"$\mu_0$")
-                plt.ylabel(r"$\mu_1$")
-                # plt.xlim(1.e-9, 5.e1)
-                if plot_path is None:
-                    plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "0_1_latent.png")))
-                else:
-                    plt.savefig(os.path.join(plot_path, "0_1_latent.png"))
-                plt.close()
-        
-        
-        # self.model.eval()
-        # try:
-        #     with torch.no_grad():
-        #         # Generate the reconstructions
-        #         generated = torch.zeros(self.test_loader.data.shape)
-                
-        #         index = 0
-                
-        #         for data, cond in self.test_loader:
-        #             generated[index:index+len(data)] = self.get_reco(data, cond).cpu()
-        #             index += len(data)
-                            
-        #         # Now create the no-errorbar histograms
-        #         if plot_path is None:
-        #             subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-        #             plot_dir = self.doc.get_file(subdir)
-        #         else:
-        #             plot_dir = plot_path
-                    
-                    
-        #         data = self.test_loader.data.cpu()
-        #         cond = self.test_loader.cond.cpu()
-        #         plotting.plot_all_hist(
-        #             data, cond, generated, cond, self.params,
-        #             self.layer_boundaries, plot_dir)
-            
-                
-        #         if self.params.get("dataset", 1) == 1:
-        #             mu, logvar = torch.zeros(data.shape[0], self.latent_dim), torch.zeros(data.shape[0], self.latent_dim)
-        #             index = 0
-        #             for data, cond in self.test_loader:
-        #                 mu[index:index+len(data)], logvar[index:index+len(data)] = self.model.encode(data, cond).cpu()
-        #                 index += len(data)
-                
-
-        #             mu0 = mu[:, 0].cpu().numpy()
-        #             mu1 = mu[:, 1].cpu().numpy()
-                    
-        #             plt.figure(dpi=300)
-        #             plt.plot(mu0, mu1, lw=0, marker=",")
-        #             plt.title(r"$\mu_0$ and $\mu_1$ correlations")
-        #             # plt.xscale("log")
-        #             plt.xlabel(r"$\mu_0$")
-        #             plt.ylabel(r"$\mu_1$")
-        #             # plt.xlim(1.e-9, 5.e1)
-        #             if plot_path is None:
-        #                 plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "0_1_latent.png")))
-        #             else:
-        #                 plt.savefig(os.path.join(plot_path, "0_1_latent.png"))
-        #             plt.close()
-            
-        # except:
-        #     print("error during plotting")
-        #     raise
-
-        
-    def plot_losses(self):
-        # Plot the losses
-        plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
-        plotting.plot_loss(self.doc.get_file('loss_mse_data.pdf'), self.losses_train['mse'], self.losses_test['mse'])
-        plotting.plot_loss(self.doc.get_file('loss_mse_logit.pdf'), self.losses_train['mse_logit'], self.losses_test['mse_logit'])
-        plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
-        plotting.plot_loss(self.doc.get_file('loss_sparsity.pdf'), self.losses_train['sparsity'], self.losses_test['sparsity'])
-        plotting.plot_loss(self.doc.get_file('loss_log_c.pdf'), self.losses_train['log_c'], self.losses_test['log_c'])
-        
-        # Plot the learning rate (if we use a scheduler)
-        if self.scheduler is not None:
-            plotting.plot_lr(self.doc.get_file('learning_rate.pdf'), self.learning_rates, len(self.train_loader))
-        
-        # Plot the gradients
-        plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
-        
-        if self.gamma_updates is not None:
-            plotting.plot_gamma(self.doc.get_file('gamma.pdf'), self.gammas, 1)
-
-    def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss, 
-                     test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss, test_loss, max_grad):
-        print('')
-        print(f'=== epoch {epoch} ===')
-        
-        print(f'mse data-loss (train): {train_mse_loss}')
-        print(f'mse logit-loss (train): {train_mse_loss_logit}')
-        print(f'kl loss (train): {train_kl_loss}')
-        print(f'sparsity loss (train): {train_sparsity_loss}')
-        print(f'log c loss (train): {train_log_c_loss}')
-        print(f'total loss (train): {train_loss}')
-        
-        print(f'mse data-loss (test): {test_mse_loss}')
-        print(f'mse logit-loss (test): {test_mse_loss_logit}')
-        print(f'kl loss (test): {test_kl_loss}')
-        print(f'sparsity loss (test): {test_sparsity_loss}')
-        print(f'log c loss (test): {test_log_c_loss}')
-        print(f'total loss (test): {test_loss}')
-        
-        if self.scheduler is not None:
-                print(f'lr: {self.scheduler.get_last_lr()[0]}')
-
-        print(f'maximum gradient: {max_grad}')
-        
-        print(f"gamma: {self.gammas[-1]}")
-        sys.stdout.flush()
-         
-    def save(self, epoch="", name=None):
-        """ Save the model, its optimizer, losses and the epoch """
-        torch.save({"opt": self.optim.state_dict(),
-                    "net": self.model.state_dict(),
-                    "losses_test": self.losses_test,
-                    "losses_train": self.losses_train,
-                    "grads": self.max_grad,
-                    "epoch": self.epoch,
-                    "learning_rates": self.learning_rates,}, 
-                   
-                   self.doc.get_file(f"model{epoch}.pt"))
-                         
-    def load(self, epoch="", update_offset=True):
-        """ Load the model, its optimizer, losses and the epoch """
-        name = self.doc.get_file(f"model{epoch}.pt")
-        state_dicts = torch.load(name, map_location=self.device)
-        self.model.load_state_dict(state_dicts["net"])
-        self.losses_test = state_dicts.get("losses_test", {})
-        self.losses_train = state_dicts.get("losses_train", {})
-        self.epoch = state_dicts.get("epoch", 0)
-        self.max_grad = state_dicts.get("grads", [])
-        self.learning_rates = state_dicts.get("learing_rates", [])
-        if update_offset:
-            self.epoch_offset = state_dicts.get("epoch", 0)
-        self.optim.load_state_dict(state_dicts["opt"])
-        self.model.to(self.device)
-        print(f"loaded VAE state from epoch {state_dicts.get('epoch', 0)}")
-                                            
+                                                                             
        
 class ECAETrainer:
     def __init__(self, params, device, doc, vae_dir=None):
@@ -1473,19 +944,33 @@ class ECAETrainer:
         self.params = params
         self.device = device
         self.doc = doc
+        self.dataset = params.get("dataset", 1)
         
         # Create a VAE trainer, train it and make sure, that the plots of the VAE are put in a different directory
         if vae_dir is None:
             vae_basedir = os.path.join(doc.basedir, "VAE")
             vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_basedir, log_name="log_jupyter.txt", read_only=True)
-            self.vae_trainer = VAETrainer(params, device, vae_doc)
+            
+            if self.params.get("VAE_type", "VAE") == "KVAE":
+                self.vae_trainer = KVAETrainer(params, device, vae_doc)
+            elif self.params.get("VAE_type", "VAE") == "VAE":
+                self.vae_trainer = VAETrainer(params, device, vae_doc)
+            else:
+                raise NotImplementedError("Only VAE and KVAE are implemented")
+            
             print("\n\nStart training of CVAE\n\n")
             self.vae_trainer.train()
             print("\n\nEnd training of CVAE\n\n")
         
         else:
             vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_dir, log_name="log_jupyter.txt", read_only=True)
-            self.vae_trainer = VAETrainer(params, device, vae_doc)
+            
+            if self.params.get("VAE_type", "VAE") == "KVAE":
+                self.vae_trainer = KVAETrainer(params, device, vae_doc)
+            elif self.params.get("VAE_type", "VAE") == "VAE":
+                self.vae_trainer = VAETrainer(params, device, vae_doc)
+            else:
+                raise NotImplementedError("Only VAE and KVAE are implemented")
             
         self.vae_trainer.model.subtract_noise = False
         self.vae_trainer.model.last_noise = None
@@ -1493,8 +978,6 @@ class ECAETrainer:
         self.layer_boundaries = self.vae_trainer.layer_boundaries
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
-        # TODO: Best or last? Maybe add toggle in params file
-        # self.vae_trainer.load("_best")
         self.vae_trainer.load()
         
         # Nedded for printing if the model was loaded
@@ -1559,10 +1042,7 @@ class ECAETrainer:
         batch_size = self.params.get('batch_size')
         
         if not self.params.get("Resample_by_VAE", False):
-            
-            # TODO: Might actually use shallow copy for the datasets.
-            # Could lead to memory problems for larger datasets otherwise
-            
+                        
             with torch.no_grad():
                 latent_type = self.params.get("latent_type", "pre_sampling")
                 # Create training and test data:
@@ -1580,8 +1060,6 @@ class ECAETrainer:
                     raise KeyError("Don't know this latent type")
             
             # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-            # TODO: Watch out for numerical problems later
-            # TODO: We do not logit preprocess here!!
             
             extra_dims_train = self.vae_trainer.train_loader.cond[:, 1:-n]
             extra_dims_test = self.vae_trainer.test_loader.cond[:, 1:-n]
@@ -1601,12 +1079,16 @@ class ECAETrainer:
             cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
             cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
             
+            device = self.device
+            
+            
+            
             # Put into the dataloader
-            data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
-            cond_train = torch.tensor(cond_train, device=self.device, dtype=torch.get_default_dtype())
+            data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
+            cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
 
-            data_test = torch.tensor(data_test, device=self.device, dtype=torch.get_default_dtype())
-            cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
+            data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
+            cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
             
             # Create the dataloaders
             loader_train = MyDataLoader(data_train, cond_train, batch_size)
@@ -1635,12 +1117,17 @@ class ECAETrainer:
             cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
             cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
             
+            # if self.dataset == 3:
+            #     device="cpu"
+            # else:
+            device = self.device
+            
             # Put into the dataloader
-            data_train = torch.tensor(data_train, device=self.device, dtype=torch.get_default_dtype())
-            cond_train = torch.tensor(cond_train, device=self.device, dtype=torch.get_default_dtype())
+            data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
+            cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
 
-            data_test = torch.tensor(data_test, device=self.device, dtype=torch.get_default_dtype())
-            cond_test = torch.tensor(cond_test, device=self.device, dtype=torch.get_default_dtype())
+            data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
+            cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
             
             # Create the dataloaders
             loader_train = MyDataLoader(data_train, cond_train, batch_size)
@@ -1684,11 +1171,7 @@ class ECAETrainer:
             else:       
                 max_grad, train_loss, train_inn_loss = self.__train_one_epoch()
                 test_loss, test_inn_loss = self.__do_validation()
-                
-            if test_loss < min_test_loss:
-                min_test_loss = test_loss
-                self.save("_best")
-                
+                                
             # Print the data saved for documentation
             print('')
             print(f'=== epoch {epoch} ===')
@@ -1834,6 +1317,7 @@ class ECAETrainer:
         self.model.eval()
         with torch.no_grad():
             for x, c in self.test_loader:
+                
                 inn_loss = - torch.mean(self.model.log_prob(x,c))
                 if self.model.bayesian:
                     kl_loss = self.model.get_kl() / len(self.train_loader.data) # must normalize for consistency
@@ -1897,12 +1381,16 @@ class ECAETrainer:
         
         return max_bias, max_mu_w, min_logsig2_w, max_logsig2_w
      
-    def plot_results(self, epoch):
+    def plot_results(self, epoch, n_samples=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
         
         # If we are in the final epoch: use more samples!
-        if (not epoch == self.params['n_epochs']):
+        if n_samples is not None:
+            num_samples = n_samples
+            num_rand = 30
+        
+        elif (not epoch == self.params['n_epochs']):
                 num_samples = 10000
                 num_rand = 30
         else:
@@ -1930,10 +1418,6 @@ class ECAETrainer:
             plt.close()
             bins_2 = plt.hist(generated[:, -self.num_detector_layers:].flatten(), bins=100)[1]
             plt.close()
-            # start = generated[:, -self.num_detector_layers:].flatten().min()
-            # end = generated[:, -self.num_detector_layers:].flatten().max()
-            # print(start, end)
-            # bins_2 = np.logspace(np.log(start), np.log(end), 100)
             n = int(np.ceil(generated.shape[1] / 6))
 
             fig, axs = plt.subplots(n, 6, figsize=(6*6,6*n))
@@ -1954,19 +1438,6 @@ class ECAETrainer:
             fig.savefig(os.path.join(self.doc.basedir, "plots",  f'epoch_{epoch:03d}',"in_vae_latent.pdf"), bbox_inches='tight', dpi=500)
             plt.close()
         
-        # Plot also the errorbar plots if a bayesian model is used
-        if self.model.bayesian:
-            # TODO: Add uncertainty plots later (How would I do this with a VAE structure ???)
-                        
-            plotting.plot_overview(self.doc.get_file("overwiev.pdf"),
-                                            train_loss=self.losses_train["total"], train_inn_loss=self.losses_train["inn"],
-                                            test_loss=self.losses_test["total"], test_inn_loss=self.losses_test["inn"],
-                                            learning_rate=self.learning_rates, close_to_prior=self.close_to_prior,
-                                            logsigs=[self.max_logsig, self.min_logsig, self.mean_logsig, self.median_logsig],
-                                            logsig2_prior=self.logsig2_prior, batches_per_epoch=len(self.train_loader))
-            
-            plotting.plot_correlation_plots(model = self.model, doc =self.doc, epoch = epoch)
-
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
         if params is None:
@@ -2061,19 +1532,6 @@ class ECAETrainer:
 
     def generate_expanded_cond(self, e_inc, extra_dims):
         
-        
-        # # Compute the generalized extra dimensions
-        # extra_dims = [np.sum(layer_energies_np, axis=1, keepdims=True) / c]
-
-        # for layer_index in range(len(layer_boundaries)-2):
-        #     extra_dim = layer_energies_np[..., [layer_index]] / (np.sum(layer_energies_np[..., layer_index:], axis=1, keepdims=True) + eps)
-        #     extra_dims.append(extra_dim)
-            
-        # # Collect all the conditions
-        # all_conditions = [c] + extra_dims + layer_energies
-        # c = np.concatenate(all_conditions, axis=1)
-        
-        
         layer_energies = []
         
         e_tot = extra_dims[..., [0]] * e_inc
@@ -2148,12 +1606,46 @@ class ECAETrainer:
 
         with torch.no_grad():
             
-            # Check if the input data seems to be discrete
-            # -> If yes use multinomial sampling
+            # Check if the input data seems to be discrete           
             if len(energy_values) < 100:
-                dist = torch.distributions.Categorical(probabilities)
-                # samples = dist.sample((100,))
-                energies = energy_values[dist.sample((num_samples,1))]
+
+                
+                if self.params["particle_type"] == "pion": # 120800 samples
+                    energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  9800,  5000,  3000,  2000,  1000]
+                elif self.params["particle_type"] == "photon": # 121000 samples
+                    energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  5000,  3000,  2000,  1000]
+                else:
+                    raise ValueError("Unknown particle type!")
+                    
+                
+                energy_values = torch.tensor([
+                    2.560000e-03, 5.120000e-03, 1.024000e-02, 2.048000e-02,
+                    4.096000e-02, 8.192000e-02, 1.638400e-01, 3.276800e-01,
+                    6.553600e-01, 1.310720e+00, 2.621440e+00, 5.242880e+00,
+                    1.048576e+01, 2.097152e+01, 4.194304e+01])
+                
+
+                einc_index = self.params.get("e_inc_index", None) 
+
+                # Use exact energy list if possible
+                if num_samples == np.sum(energy_numbers) and einc_index is None:                    
+                    energies = np.array([])
+                    for energy_value, energy_number in zip(energy_values, energy_numbers):
+                        energies = np.append(energies, np.ones(energy_number)*energy_value.item())
+                        
+                    energies = torch.tensor(energies, dtype=torch.get_default_dtype()).unsqueeze(-1)
+                
+                # Use multinomial sampling -> any sample size possible
+                else:
+                    probabilities = torch.tensor(energy_numbers) / np.sum(energy_numbers)
+                    
+                    if einc_index is not None:
+                        if len(energy_values) > 1:
+                            energy_values = energy_values[[einc_index]]
+                            probabilities = probabilities[[einc_index]]
+                    
+                    dist = torch.distributions.Categorical(probabilities)
+                    energies = energy_values[dist.sample((num_samples,1))]
             
             # Else scale the energies uniformly in the logspace
             else:

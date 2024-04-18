@@ -449,45 +449,90 @@ class LogitTransformationVAE:
         else:
             z = torch.sigmoid(x)
             z = (z - self.alpha)/(1-2*self.alpha)
-        
-        # if self.rev:
-        #     z = torch.exp(x) - self.alpha
-        #     jac = torch.sum( x, dim=1)
-        # else:
-        #     z = torch.log(x + self.alpha)
-        #     jac = - torch.sum( z, dim=1)
 
         return z
-    
-    # def forward(self, x):
-    #     if self.rev:
-    #         z = torch.exp(x) - self.alpha
-    #         jac = torch.sum( x, dim=1)
-    #     else:
-    #         z = torch.log(x + self.alpha)
-    #         jac = - torch.sum( z, dim=1)
-    #     return z
         
     def __call__(self, x):
         return self.forward(x)
  
-class Identity:
-    def __init__(self, rev=False, alpha=1.e-6):
-        self.alpha = alpha
-        self.rev = rev
-        
-    def forward(self, x):
-        return x
+ 
+class NormPlaceholder:
+    def __init__(self) -> None:
+        return
     
+    def forward(self, x, rev=False):
+        return [x]
+    
+    def __call__(self, x, rev=False):
+        return self.forward(x, rev)
+ 
+
+class LearnableNorm(nn.Module):
+    def __init__(self, num_features):
+        super(LearnableNorm, self).__init__()
         
-    def __call__(self, x):
-        return self.forward(x)
+        num_features = num_features[0][0]
+        
+        self.scale = nn.Parameter(torch.ones(num_features))
+        self.bias = nn.Parameter(torch.zeros(num_features))
+
+    def forward(self, x, rev=False):
+        if rev:
+            return [((x[0] - self.bias[:x[0].shape[1]]) / self.scale[:x[0].shape[1]],)]
+        else:
+            return [(x[0] * self.scale[:x[0].shape[1]] + self.bias[:x[0].shape[1]],)]
+
+
+class NormTrafo(nn.Module):
+    def __init__(self, inp_dim, M, b, use_batch_norm=False) -> None:
+        
+        super().__init__()
+        print("Initializing norm trafo")
+        self.M = M
+        self.b = b
+        
+        inp_dim = inp_dim[0][0]
+
+        
+        if use_batch_norm:
+            print("Using batch norm with size ", inp_dim)
+            self.trafo=torch.nn.BatchNorm1d(num_features=inp_dim)
+        else:
+            self.trafo=None
+        
+    def forward(self, x, rev=False):
+        
+        if self.trafo is not None:
+            # print(x[0].device)
+            return [(self.trafo(x[0]), )]
+                
+        if x[0].device != self.M.device:
+            self.M = self.M.to(x[0].device)
+            self.b = self.b.to(x[0].device)
+        
+        if not rev:
+            z = x[0] * self.M + self.b
+            
+        else:
+            z = (x[0] - self.b) / self.M
+            
+        return [(z, )]
+    
+
+    # def __call__(self, x, rev=False):
+    #     return self.forward(x, rev)
+ 
  
 class noise_layer(nn.Module):
     def __init__(self, noise_width, layer_boundaries, device, rev):
         super().__init__()
         
         self.noise_width = noise_width
+        
+        # TODO: Change this hacky solution
+        
+        device="cuda:0"
+        
         self.noise_distribution = torch.distributions.Uniform(torch.tensor(0., device=device), torch.tensor(1., device=device))
         self.rev = rev
         
@@ -500,6 +545,12 @@ class noise_layer(nn.Module):
                                    
             # add noise to the input
             noise = self.noise_distribution.sample(input.shape)*self.noise_width
+            
+            
+            # TODO: This as well.
+            if noise.device != input.device:
+                noise = noise.to(input.device)
+            
             input_with_noise = input + noise.view(input.shape)
                         
             return input_with_noise,  noise
@@ -508,20 +559,23 @@ class noise_layer(nn.Module):
             if noise is None:
                 input = input - self.noise_width/2
             else:
+                
+                if noise.device != input.device:
+                    noise = noise.to(input.device)
+                
                 input = input - noise
                 
             input = torch.where(input<self.noise_width, torch.tensor(0, device=input.device), input)
             
             return input
-        
-def smooth_sparsity(input, threshold, strength=0.2):
-    return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)  
+ 
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
                  eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None):
+                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None,
+                 wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
         
         super(CVAE, self).__init__()
         
@@ -533,11 +587,14 @@ class CVAE(nn.Module):
         
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
-        
-        # self.CE_scaling = 1 / torch.std(input, dim=0)
-        # self.CE_scaling = self.CE_scaling / torch.mean(self.CE_scaling)
-        
+
         self.log_c_weight = 1
+        self.wrong_norm = wrong_norm
+        self.batch_norm_prep = batch_norm_prep
+        self.learnable_norm = learnable_norm
+        
+        assert not (self.learnable_norm and self.batch_norm_prep), "Cannot use both learnable norm and batch norm preprocessing"
+
         
         # Save some important parameters:
         
@@ -594,14 +651,12 @@ class CVAE(nn.Module):
         
         # Create a logit preprocessing
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
-        # self.logit_trafo_in = Identity(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
         self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=batch_norm)
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
-        # self.logit_trafo_out = Identity(alpha=alpha, rev=True)
         
         # Add a noise removal layer
         if noise_width is not None:
@@ -611,10 +666,15 @@ class CVAE(nn.Module):
               
         # get normalization for normalization layer and to ensure that the incident energy parameter is
         # between 0 and 1:
-        self._set_normalizations(input, cond)
         
-        # Create the smearing matrix. It is used in the reco-loss
-        self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
+                
+        self._set_normalizations(input, cond)
+
+        if dataset != 3 and (dataset != 2 or self.BCE_mode != "discrete"):
+            # Create the smearing matrix. It is used in the reco-loss
+            self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
+        else:
+            self.smearing_matrix = None
 
     def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=False):
         # Create decoder and encoder
@@ -674,11 +734,24 @@ class CVAE(nn.Module):
         with torch.no_grad():
             data = self._preprocess_encoding(data, cond, without_norm=True)
         mean = torch.mean(data, dim=0)
-        std = torch.std(data, dim=0)      
-        self.norm_m_x = torch.diag(1 / std)
+        std = torch.std(data, dim=0)
+        
+        
+        if self.learnable_norm:
+            self.norm_x_in = LearnableNorm([(data.shape[1], )])
+            self.norm_x_out = self.norm_x_in
+            return
+        
+        if self.wrong_norm: 
+            print("Using the wrong normalization")
+            self.norm_m_x = std
+        else:
+            self.norm_m_x = 1 / std
+            
+            
         self.norm_b_x = - mean/std
         
-        self.norm_x_in = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
+        self.norm_x_in = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x, use_batch_norm=self.batch_norm_prep)
   
         # Find out the slicing boundaries for the norm matrices in the output:
         # (True layer energies and e_inc are removed before the first contact with the norm trafo)
@@ -697,10 +770,28 @@ class CVAE(nn.Module):
             cut = n_furhter_conds+n_extra_dims
             
         if cut != 0:
-            self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x[:-cut, :-cut], b=self.norm_b_x[:-cut])
+            self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut], use_batch_norm=self.batch_norm_prep)
         else:
-            self.norm_x_out = fm.FixedLinearTransform([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
- 
+            self.norm_x_out = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x, use_batch_norm=self.batch_norm_prep)
+    
+    def _set_normalizations_batch_norm(self, data, cond):
+        """Uses batch norm as first norm layer"""
+        # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
+        # The other conditions are allready between 0 and 1 and will not be modified
+        # TODO: Problems if test set is more than 15% off
+        max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]
+        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)*1.15
+        
+        # Set the normalization layer operating on the x space (before the actual encoder)
+        with torch.no_grad():
+            data = self._preprocess_encoding(data, cond, without_norm=True)
+        
+        print("Using batch-norm normalization")
+        
+        self.norm_x_in = torch.nn.BatchNorm1d(num_features=data.shape[1])
+              
+        self.norm_x_out = torch.nn.BatchNorm1d(num_features=data.shape[1])
+
     def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
         """Computes the smearing matrix that is used in the loss to make neighboring voxels get similar gradients
 
@@ -798,10 +889,10 @@ class CVAE(nn.Module):
             for index, elem in enumerate(reduced_data):
                 neighbors = get_neighboring_indices(index, num_alpha, num_radial)
 
-                smearing_matrix[index+offset, index+offset] = self_weight
                 for neighbor in neighbors:
                     smearing_matrix[index+offset, neighbor+offset] = share_weight
                 
+                smearing_matrix[index+offset, index+offset] = self_weight
 
         # hlf_true.DrawSingleShower(smearing_matrix @ hlf_true.showers[0])
         # hlf_true.DrawSingleShower(hlf_true.showers[0])
@@ -837,7 +928,6 @@ class CVAE(nn.Module):
             
         # append all extra energy dimensions (the u variables) & Possible other needed conditions
         # We add einc after the normalization since it would results in nans for a single slice, otherwise
-        # TODO: Cross check if results get worse. Since I am only using hot one right now, I cannot check it easily...
         
         # max_cond is not moved with .to() since it is not a parameter
         if self.max_cond.device != x_noise.device:
@@ -936,8 +1026,6 @@ class CVAE(nn.Module):
             
         layer_energies.append(e_tot - cumsum_previous_layers)
         
-        # print(extra_dims[0, 0], c[0, 1])
-        
         c[..., 1:number_of_layers+1] = extra_dims
         c[..., -number_of_layers:] = torch.cat(layer_energies, axis=1)
         return x, c
@@ -1002,20 +1090,6 @@ class CVAE(nn.Module):
         
         if self.learn_e:
             x_recon_noise, c = self._update_c(x_recon_noise, c)
-        
-        # Might be used to compute mu for the continuous BCE    
-        # if not train:
-        #     if self.BCE_mode == "continuous":
-        #         x_recon_noise = self._get_CB_mu(x_recon_noise)
-        
-        
-        # Revert to original normalization -> Enforce layer energies to be correct
-        # NOTE: When normalizing to a noise width != 0, I found weird artifacts in the layer energy distribution and bad classifier scores
-        # -> Maybe inverstigate...
-        # x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=self.noise_width)
-        
-        # if not train:
-        #     x_recon_noise[x_recon_noise<self.alpha] = 0
         
         x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=None)
         
@@ -1103,8 +1177,6 @@ class CVAE(nn.Module):
         # For data loss part
         x_dimensionless = x / torch.sqrt(x.mean(axis=1, keepdims=True))
         x_reco_dimensionless = x_reco_shifted / torch.sqrt(x.mean(axis=1, keepdims=True))
-        # x_dimensionless = x / torch.sqrt(c[..., [0]])
-        # x_reco_dimensionless = x_reco / torch.sqrt(c[..., [0]])
         
         # For BCE loss part
         x_0_1      = data_util.normalize_layers(x, self.layer_boundaries, eps=self.eps) * 0.9
@@ -1113,7 +1185,6 @@ class CVAE(nn.Module):
         
         # Could also add a possibility to sample here?
         if self.BCE_mode == "continuous":
-            # mu_reco_x_0_1 = self._get_CB_mu(x_reco_0_1)
             mu_reco_x_0_1 = x_reco_0_1
         else:
             mu_reco_x_0_1 = x_reco_0_1
@@ -1138,12 +1209,22 @@ class CVAE(nn.Module):
         else:
             sparsity_loss = torch.tensor(0.0, device=x.device)
 
+
         # Reconstruction loss
         # Logit loss
-        if not MAE_logit:
-            reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+        if zero_logit:
+            reco_loss_logit = torch.tensor(0.).to(x.device)
+            
+        elif not MAE_logit:
+            if self.smearing_matrix is not None:
+                reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            else:
+                reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit, x_logit, reduction="mean")
         else:
-            reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            if self.smearing_matrix is not None:
+                reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
+            else:
+                reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit, x_logit, reduction="mean")
         
         # Data MSE loss
         if self.BCE_mode is None:
@@ -1170,7 +1251,6 @@ class CVAE(nn.Module):
             log_c = torch.tensor(0.0, device=x.device)
             
         elif self.BCE_mode == "non_binary":
-            # reco_loss_data = self.gamma * cross_entropy(x_reco_0_1, self.CE_scaling * x_0_1, reduction="mean")
             reco_loss_data = self.gamma * cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
             
             # Only needed for the continuous bernoulli approach
@@ -1195,8 +1275,7 @@ class CVAE(nn.Module):
         # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
-        if zero_logit:
-            reco_loss_logit = torch.tensor(0.).to(reco_loss_logit.device)
+            
             
         if zero_data:
             reco_loss_data = torch.tensor(0.).to(reco_loss_logit.device)
@@ -1248,17 +1327,19 @@ class CVAE(nn.Module):
     def update_log_c_weight(self, value):
         self.log_c_weight = value
 
-
+# Building block for the Kernel-VAE
 class Block(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_sizes):
+    def __init__(self, input_dim, output_dim, hidden_sizes, batch_norm=False):
         super(Block, self).__init__()
         
         self.layers = nn.Sequential()
         
         last_size = input_dim
         for i, hidden_size in enumerate(hidden_sizes):
-            self.layers.add_module(f"relu{i}", nn.ReLU())
             self.layers.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
+            if batch_norm:
+                self.layers.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
+            self.layers.add_module(f"relu{i}", nn.ReLU())
             last_size = hidden_size
             
         self.layers.add_module("fc_out", nn.Linear(last_size, output_dim))
@@ -1269,7 +1350,7 @@ class Block(torch.nn.Module):
 
 class KernelEncoder(nn.Module):
     
-    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries):
+    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries, batch_norm=False):
         super().__init__()
         
         number_detector_layers = len(layer_boundaries)-1
@@ -1309,7 +1390,7 @@ class KernelEncoder(nn.Module):
                 output_dim_block = kernel_latent
                 
                 # Create the block
-                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel))
+                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel, batch_norm=batch_norm))
 
 
         self.gathering_subnet = nn.Sequential()
@@ -1317,8 +1398,11 @@ class KernelEncoder(nn.Module):
         # Gather all the individual latent spaces
         last_size = number_of_blocks*kernel_latent + self.cond_dim
         for i, hidden_size in enumerate(hidden_sizes):
-            self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
             self.gathering_subnet.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
+            if batch_norm:
+                self.gathering_subnet.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
+            self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
+            
             last_size = hidden_size
             
         self.gathering_subnet.add_module("fc_out", nn.Linear(last_size, output_dim))
@@ -1326,17 +1410,13 @@ class KernelEncoder(nn.Module):
     def forward(self, x):
         
         outputs = []
-        # num_params = 0
 
         for i, block in enumerate(self.blocks):
             
             start_index, end_index = self.block_boundaries[i]
             
             block_data = torch.cat([x[..., self.layer_boundaries[start_index]:self.layer_boundaries[end_index]], x[..., -self.cond_dim:]], dim=-1)
-            
-            # print(block_data.shape)
-            # num_params += sum(p.numel() for p in block.parameters() if p.requires_grad)
-            
+
             outputs.append(block(block_data))
             
             
@@ -1348,7 +1428,7 @@ class KernelEncoder(nn.Module):
             
 class KernelDecoder(nn.Module):
     
-    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries):
+    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries, batch_norm=False):
         super().__init__()
         
         number_detector_layers = len(layer_boundaries)-1
@@ -1374,8 +1454,10 @@ class KernelDecoder(nn.Module):
         self.gathering_subnet = nn.Sequential()
         last_size = input_dim
         for i, hidden_size in enumerate(hidden_sizes):
-            self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
             self.gathering_subnet.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
+            if batch_norm:
+                self.gathering_subnet.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
+            self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
             last_size = hidden_size
         self.gathering_subnet.add_module("fc_out", nn.Linear(last_size, number_of_blocks*kernel_latent))
         
@@ -1400,7 +1482,7 @@ class KernelDecoder(nn.Module):
                 output_dim_block = layer_boundaries[end_index] - layer_boundaries[start_index]
                 
                 # Create the block
-                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel))
+                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel, batch_norm=batch_norm))
         
     def forward(self, x):
         
@@ -1421,15 +1503,16 @@ class KernelDecoder(nn.Module):
         return output
 
         
-# TODO: Does only work with logit prepocessing right now!
+# NOTE: Does only work with logit prepocessing right now!
 class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
                  learn_gamma=False, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0,
                  einc_preprocessing="logit", subtract_noise=False, threshold=None, learn_energies=False,
-                 sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, learn_gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode)
+                 sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
+                 wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, learn_gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
     
 
         self.kernel_size = kernel_size
@@ -1446,7 +1529,7 @@ class KernelVAE(CVAE):
         # Create decoder and encoder
         
         assert dropout == 0, "Dropout is not supported for the kernel VAE"
-        assert batch_norm == False, "Batch norm is not supported for the kernel VAE"
+        # assert batch_norm == False, "Batch norm is not supported for the kernel VAE"
         
         number_detector_layers = len(self.layer_boundaries)-1
         
@@ -1461,7 +1544,8 @@ class KernelVAE(CVAE):
                                      kernel_size=self.kernel_size,
                                      kernel_stride=self.kernel_stride,
                                      kernel_latent=self.kernel_latent,
-                                     layer_boundaries=self.layer_boundaries)
+                                     layer_boundaries=self.layer_boundaries,
+                                     batch_norm=batch_norm)
         
         self.decoder = KernelDecoder(input_dim=latent_dim+cond_dim,
                                      cond_dim=cond_dim,
@@ -1471,434 +1555,13 @@ class KernelVAE(CVAE):
                                      kernel_size=self.kernel_size,
                                      kernel_stride=self.kernel_stride,
                                      kernel_latent=self.kernel_latent,
-                                     layer_boundaries=self.layer_boundaries)
-        
-        
-class CylindricalConvTrans(nn.Module):
-    #assumes format of channels,zbin,phi_bin,rbin
-    def __init__(self, dim_in, dim_out, kernel_size = (3,4,4), stride= (1,2,2), groups = 1, padding = 1, output_padding = 0):
-        super().__init__()
-        if(type(padding) != int):
-            self.padding_orig = copy.copy(padding)
-            padding = list(padding)
-        else:
-            padding = [padding]*3
-            self.padding_orig = copy.copy(padding)
-            
-        padding[1] = kernel_size[1] - 1
-        self.convTrans = nn.ConvTranspose3d(dim_in, dim_out, kernel_size = kernel_size, stride = stride, padding = padding, output_padding = output_padding)
-
-    def forward(self, x):
-        #out size is : O = (i-1)*S + K - 2P
-        #to achieve 'same' use padding P = ((S-1)*W-S+F)/2, with F = filter size, S = stride, W = input size
-        #pad last dim with nothing, 2nd to last dim is circular one
-        circ_pad = self.padding_orig[1]
-        x = F.pad(x, pad = (0,0, circ_pad, circ_pad, 0, 0), mode = 'circular')
-        x = self.convTrans(x)
-        return x
+                                     layer_boundaries=self.layer_boundaries,
+                                     batch_norm=batch_norm)
 
 
-class CylindricalConv(nn.Module):
-    #assumes format of channels,zbin,phi_bin,rbin
-    def __init__(self, dim_in, dim_out, kernel_size = 3, stride=1, groups = 1, padding = 0, bias = True):
-        super().__init__()
-        
-        if(type(padding) != int):
-            self.padding_orig = copy.copy(padding)
-            padding = list(padding)
-            padding[1] = 0
-        else:
-            padding = [padding]*3
-            self.padding_orig = copy.copy(padding)
-            padding[1] = 0
-            
-        self.kernel_size = kernel_size
-        self.conv = nn.Conv3d(dim_in, dim_out, kernel_size=kernel_size, stride = stride, groups = groups, padding = padding, bias = bias)
-
-    def forward(self, x):
-        #to achieve 'same' use padding P = ((S-1)*W-S+F)/2, with F = filter size, S = stride, W = input size
-        #pad last dim with nothing, 2nd to last dim is circular one
-        circ_pad = self.padding_orig[1]
-        
-        # TODO: Might try own padding once it works
-        x = F.pad(x, pad = (0,0, circ_pad, circ_pad, 0, 0), mode = 'circular')
-        x = self.conv(x)
-        return x
-
-        
-
-class ConvVAE(CVAE):
-# VAE with convolutional layers
-
-    # Classes for the convolutional part of the VAE
-    class ResnetBlock(nn.Module):
-        """https://arxiv.org/abs/1512.03385"""
-        
-        
-        class Block(nn.Module):
-            def __init__(self, channels_in, channels_out, groups = 8):
-                super().__init__()
-                
-                self.proj = CylindricalConv(channels_in, channels_out, kernel_size = 3, padding = 1)
-                # TODO: Try also batchnorm
-                self.norm = nn.GroupNorm(groups, channels_out)
-                self.act = nn.ReLU()
-                # TODO: try SiLU
-                # self.act = nn.SiLU()
-
-            def forward(self, x):
-                x = self.proj(x)
-                x = self.norm(x)
-
-                x = self.act(x)
-                return x
-        
-        
-        def __init__(self, channels_in, channels_out, groups=8):
-            super().__init__()
-        
-
-            conv = CylindricalConv(channels_in, channels_out, kernel_size = 1)
-            self.block1 = self.Block(channels_in, channels_out, groups=groups)
-            self.block2 = self.Block(channels_out, channels_out, groups=groups)
-            
-            # Added to the output (residual connection)
-            self.res_conv = conv if channels_in != channels_out else nn.Identity()
-
-        def forward(self, x):
-            h = self.block1(x)
-            
-            h = self.block2(h)
-            return h + self.res_conv(x)
-
-
-    class Upsample(nn.Module):
-        def __init__(self, dim, extra_upsample = [0,0,0], compress_Z = False):
-            super().__init__()
-            
-            self.Z_stride = 2 if compress_Z else 1
-            self.Z_kernel = 4 if extra_upsample[0] > 0 else 3
-            
-            self.extra_upsample = extra_upsample
-            self.extra_upsample[0] = 0
-            
-            self.conv = CylindricalConvTrans(dim, dim, kernel_size = (self.Z_kernel,4,4), stride = (self.Z_stride,2,2), padding = 1, output_padding = extra_upsample)
-
-        def forward(self, x):
-            return self.conv(x)
-
-
-    class Downsample(nn.Module):
-        def __init__(self, dim, compress_Z = False):
-            super().__init__()
-            
-            self.Z_stride = 2 if compress_Z else 1
-            self.conv = CylindricalConv(dim, dim, kernel_size = (3,4,4), stride = (self.Z_stride,2,2), padding = 1)
-
-        def forward(self, x):
-            return self.conv(x)
-    
-    # TODO: Might want to add options for kernel size, stride and padding...
-    def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_channels, layer_boundaries_detector, batch_norm=False,
-                 particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
-                 learn_gamma=False, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0,
-                 einc_preprocessing="logit", subtract_noise=False, threshold=None, learn_energies=False,
-                 sparsity_loss=None, BCE_mode=None):
-        
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, learn_gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode)
-
-        assert self.einc_preprocessing == "logit", "Only logit preprocessing is supported for the convolutional VAE"
-        
-        self.number_detector_layers = len(self.layer_boundaries)-1
-        
-        # We do not pass the actual layer energies
-        self.cond_dim = cond.shape[1] - self.number_detector_layers
-        self.input_dim = input.shape[1]
-        
-        x = self._preprocess_encoding(input[:10], cond[:10])
-        c = x[..., -(self.cond_dim):]
-        x = x[..., :-(self.cond_dim)]
-        # x = self.unroll_data(x)
-        assert len(np.unique(self.num_alphas)) == 1, "Different number of alpha bins for different layers is not supported"
-        assert len(np.unique(self.num_radials)) == 1, "Different number of radial bins for different layers is not supported"
-        x = x.view(x.shape[0], 1,  self.number_detector_layers, self.num_alphas[0], self.num_radials[0])
-        
-        self._update_submodels(x, c, hidden_channels, hidden_sizes, resnet_block_groups=8, compress_Z=True)
-    
-    def _update_submodels(
-        self,
-        data,
-        cond,
-        hidden_channels = None,
-        hidden_sizes = None,
-        resnet_block_groups=8,
-        compress_Z = True,
-    ):
-
-        # Number of input channels
-        self.channels_in = data.shape[1]
-        
-        channel_iterator = list(zip(hidden_channels[:-1], hidden_channels[1:]))
-        self.channels_iterators = channel_iterator
-        number_of_blocks = len(channel_iterator)
-        
-        
-
-        # Main VAE blocks
-        self.encoder_convs = nn.Sequential()
-        
-        self.decoder_convs = nn.Sequential()
-        
-        self.extra_upsamples = []
-        
-        
-        # TODO: Might want to use a whole block here?
-        # First convolution that goes to the number of channels of the first hidden layer
-        self.encoder_convs.append(CylindricalConv(self.channels_in, hidden_channels[0], kernel_size = 3, padding = 1))
-        
-        
-        cur_data_shape = data.shape[-3:]
-        
-        print("Data shape: ", cur_data_shape)
-
-        for ind, (dim_in, dim_out) in enumerate(channel_iterator):
-            is_last = (ind >= (number_of_blocks - 1))
-            if(not is_last):
-                extra_upsample_dim = [(cur_data_shape[0] + 1)%2, cur_data_shape[1]%2, cur_data_shape[2]%2]
-                Z_dim = cur_data_shape[0] if not compress_Z else math.ceil(cur_data_shape[0]/2.0)
-                cur_data_shape = (Z_dim, cur_data_shape[1] // 2, cur_data_shape[2] //2)
-                self.extra_upsamples.append(extra_upsample_dim)
-
-            self.encoder_convs.append(
-                nn.Sequential(
-                    self.ResnetBlock(dim_in, dim_out, groups=resnet_block_groups),
-                    self.ResnetBlock(dim_out, dim_out, groups=resnet_block_groups),
-                    self.Downsample(dim_out, compress_Z = compress_Z) if not is_last else nn.Identity(),
-                )
-            )
-            
-
-        for ind, (dim_in, dim_out) in enumerate(reversed(channel_iterator)):
-            is_last = (ind >= (number_of_blocks - 1))
-
-            if(not is_last): 
-                extra_upsample = self.extra_upsamples.pop()
-
-
-            self.decoder_convs.append(
-                nn.Sequential(
-                    self.ResnetBlock(dim_out, dim_in, groups=resnet_block_groups),
-                    self.ResnetBlock(dim_in, dim_in, groups=resnet_block_groups),
-                    self.Upsample(dim_in, extra_upsample, compress_Z = compress_Z) if not is_last else nn.Identity(),
-                )
-            )
-
-        # Go back to the initial channels
-        final_lay = CylindricalConv(hidden_channels[0], self.channels_in, kernel_size=1)
-        
-        self.decoder_convs.append(nn.Sequential( self.ResnetBlock(hidden_channels[0], hidden_channels[0]),  final_lay ))
-        
-        
-        with torch.no_grad():
-            self.conv_latent_shape = self.encoder_convs(data[[0]].cpu()).shape[-4:]
-        
-        
-        self.fc_input_dim = torch.prod(torch.tensor(self.conv_latent_shape))
-        
-        ##################################################################################################################
-        
-        # Modify the FC part to fit to the convolutional part
-
-        
-        in_size = self.fc_input_dim + cond.shape[1]
-        
-        self.encoder[0] = nn.Linear(in_size, hidden_sizes[0])
-        self.decoder[-1] = nn.Linear(hidden_sizes[0], self.fc_input_dim)
-        
-        ##################################################################################################################
-
-
-    # TODO: Check that the function is correct
-    # NOTE: Not used anymore. Replaced by a single view command
-    def unroll_data(self, data):
-        """Unrolls and slices the input data such that the conv operations can use the data"""
-        
-        unrolled_data_list = []
-        for layer_nr in range(self.num_detector_layers):
-            
-            # Load the data for the current layer
-            reduced_data = data[..., self.layer_boundaries[layer_nr]:self.layer_boundaries[layer_nr+1]]
-            
-            # reshape the data
-            if self.num_alphas[layer_nr] > 1:
-                unrolled_data_list.append(reduced_data.view(-1, self.num_alphas[layer_nr], self.num_radials[layer_nr]))
-            else:
-                unrolled_data_list.append(reduced_data)
-                
-        
-        # index: [batch_size, channel, detector_layer, angle, radius]
-            
-        return torch.stack(unrolled_data_list, axis=1).unsqueeze(1)
-
-    
-    def encode(self, x, c):
-        """Takes a point in the dataspace and returns a point in the latent space before sampling.
-        Does apply the logit preprocessing and the layer normalization
-        noise=True decides, if the noise layer should be used (if it exists)
-    
-        Output: mu, logvar"""
-        
-        # Input sanity check
-        assert len(x.shape) == 2
-        assert len(c.shape) == 2
-        assert c.shape[0] == x.shape[0]
-        
-        # Add noise, normalize layer energies, do logit, normalize to zero mean and unit variance
-        x = self._preprocess_encoding(x, c)
-        
-        c_conv = x[..., -(self.cond_dim):]
-        x_conv = x[..., :-(self.cond_dim)]
-        x_conv = x_conv.view(x_conv.shape[0], 1, self.number_detector_layers, self.num_alphas[0], self.num_radials[0])
-        
-        # Call the encoder
-        conv_encoder_latent = self.encoder_convs(x_conv)
-        mu_logvar = self.encoder(torch.cat([conv_encoder_latent.view(conv_encoder_latent.shape[0], -1), c_conv], dim=-1))
-
-        mu, logvar = mu_logvar[:, :self.latent_dim], mu_logvar[:, self.latent_dim:]
-        
-
-        
-        return mu, logvar
-    
-       
-    def decode(self, latent, c, return_directly_after_decoder=False, train=False):
-        """Takes a point in the latent space after sampling and returns a point in the dataspace.
-        Output: Reconstructed image in data-space """
-        
-        # old code
-        ##########################################################################################################################
-        
-        # max_cond is not moved with .to() since it is not a parameter
-        if self.max_cond.device != c.device:
-            self.max_cond = self.max_cond.to(c.device)
-            if self.einc_preprocessing == "hot_one":
-                self.incident_energies = self.incident_energies.to(c.device)
-        
-        # Append the extra dims if we did not learn them
-        if not self.learn_e:
-            c_clipped = torch.clamp((c / self.max_cond)[:, 1:-self.num_detector_layers], min=0, max=1)
-            
-        # Only append possible further conditions
-        else:
-            c_clipped = torch.clamp((c / self.max_cond)[:, self.num_detector_layers+2:-self.num_detector_layers], min=0, max=1)
-            
-        
-        # Transform cond into logit space and append to latent results
-        c_logit = self.logit_trafo_in(c_clipped)
-        latent = torch.cat((latent, c_logit), axis=1)
-        
-        
-        # Compute the one hot encoding if needed
-        if self.einc_preprocessing == "hot_one":
-            # append all possible incident energies to make sure that every index is always the same
-            index_tensor = torch.unique(torch.cat((c[:, 0], self.incident_energies)), sorted=True, return_inverse=True)[1]
-            
-            # Remove the appended list of incident energies(completely artificial and unneeded)
-            hot_one_encoding = torch.nn.functional.one_hot(index_tensor)[:-len(self.incident_energies)]
-            
-            # Append the correct hot one encoding to the latent space
-            latent = torch.cat((latent, hot_one_encoding), axis=1)
-            
-        # Otherwise append e_inc
-        elif self.einc_preprocessing == "logit":
-            e_inc = torch.clamp( c[:, [0]] / self.max_cond[:, [0]], min=0, max=1 )
-            e_inc_logit = self.logit_trafo_in( e_inc )
-            latent = torch.cat((latent, e_inc_logit ), axis=1)
-            
-            
-        ##########################################################################################################################
-            
-                  
-        # decode
-        x_recon_logit_noise = self.decoder(latent)
-        
-        x_recon_logit_noise = self.decoder_convs(x_recon_logit_noise.view(-1, *self.conv_latent_shape)).view(x_recon_logit_noise.shape[0], -1)
-        
-        if return_directly_after_decoder:
-            return x_recon_logit_noise
-        
-        
-        # old code
-        ###########################################################################################################################
-        
-        # Undo normalization step (zero mean, unit variance)
-        x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
-            
-        # Leave the logit space
-        x_recon_noise = self.logit_trafo_out(x_recon_logit_noise)
-        
-        x_recon_noise[x_recon_noise<0] = 0
-        
-        if self.learn_e:
-            x_recon_noise, c = self._update_c(x_recon_noise, c)
-        
-        # Might be used to compute mu for the continuous BCE    
-        # if not train:
-        #     if self.BCE_mode == "continuous":
-        #         x_recon_noise = self._get_CB_mu(x_recon_noise)
-        
-        
-        # Revert to original normalization -> Enforce layer energies to be correct
-        # NOTE: When normalizing to a noise width != 0, I found weird artifacts in the layer energy distribution and bad classifier scores
-        # -> Maybe inverstigate...
-        # x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=self.noise_width)
-        x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=None)
-        
-        
-        # Remove noise by thresholding, if needed
-        if self.noise_width is not None:
-            if self.last_noise is not None:
-                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
-                self.last_noise = None
-            else:
-                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
-        else:
-            x_recon = x_recon_noise
-            
-        if self.threshold is not None:
-            x_recon[x_recon < self.threshold] = 0
-        else:
-            # Otherwise the norm before the logit in the reco loss might produce wrong results!
-            x_recon[x_recon < 0] = 0
-            
-            
-        if self.noise_width is not None:
-                        
-            # Enforce the total energy to be correct
-            # total_energy = c[..., [0]]*c[..., [1]]
-            # x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
-            x_recon_shifted = x_recon
-            
-            
-        else:
-            # total_energy = c[..., [0]]*c[..., [1]]
-            # x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
-            x_recon_shifted = x_recon
-                    
-        if not train:
-            # Might be used to compute mu for the continuous BCE    
-            # if self.BCE_mode == "continuous":
-            #     x_reco_0_1 = data_util.normalize_layers(x_recon_shifted, self.layer_boundaries, eps=self.eps) * 0.9
-            #     mu_reco_x_0_1 = self._get_CB_mu(x_reco_0_1)
-            #     x_recon_shifted  = data_util.unnormalize_layers(mu_reco_x_0_1, c, self.layer_boundaries, eps=self.eps)
-            return x_recon_shifted
-        else:
-            return x_recon_shifted, c
-      
-        ###########################################################################################################################
-        
-
-
+def smooth_sparsity(input, threshold, strength=0.2):
+    return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)  
+     
 def cross_entropy(inp, trg, reduction="mean"):
     """Calculates the cross entropy between two distributions."""
     

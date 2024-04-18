@@ -1,11 +1,5 @@
 import numpy as np
 
-# def Etot_Einc_discrete(hlf):
-#     target_energies = 2**np.linspace(8, 23, 16)
-#     which_showers = ((hlf.Einc.squeeze() >= target_energies[i]) & (hlf.Einc.squeeze() < target_energies[i+1])).squeeze()
-    
-#     return hlf.GetEtot()[which_showers] / hlf.Einc.squeeze()[which_showers]
-
 def Etot_Einc(hlf):
     return hlf.GetEtot() / hlf.Einc.squeeze()
 

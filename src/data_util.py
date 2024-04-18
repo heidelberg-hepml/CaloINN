@@ -18,10 +18,10 @@ def load_data(filename, particle_type, dataset=1):
     # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
     if dataset==1:
         xml_handler = XMLHandler(particle_name=particle_type, 
-        filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml')
+        filename=f'binning_dataset_1_{particle_type}s.xml')
     else:
         xml_handler = XMLHandler(particle_name=particle_type, 
-        filename=f'/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_{dataset}.xml')
+        filename=f'binning_dataset_{dataset}.xml')
     
     layer_boundaries = np.unique(xml_handler.GetBinEdges())
 
@@ -124,8 +124,8 @@ def save_data(data, filename, mask=None):
         showers[..., mask] = 0
     
     save_file = h5py.File(filename, 'w')
-    save_file.create_dataset('incident_energies', data=incident_energies)
-    save_file.create_dataset('showers', data=showers)
+    save_file.create_dataset('incident_energies', data=incident_energies, compression="gzip")
+    save_file.create_dataset('showers', data=showers, compression="gzip")
     save_file.close()
     
     return showers, incident_energies           
@@ -190,11 +190,6 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
     binary_mask &= np.sum(x, axis=1) < energy[:,0]
     # Remove all no-interaction events (only 0.7%)
     binary_mask &= np.sum(x, axis=1) > 0
-    
-    # # TODO: hard-coded strict cutting, revisit if it works
-    # x[x<1.e-8] = 0
-    
-    # x = np.log(x+1.e-8)    
 
     x = x[binary_mask]
     c = energy[binary_mask]
@@ -203,7 +198,7 @@ def preprocess(data, layer_boundaries, eps=1.e-10):
     
     return x, c
 
-def postprocess(x, c, layer_boundaries, threshold=1e-4):
+def postprocess(x, c, layer_boundaries, threshold=1e-4, inplace=False):
     """Reverses the effect of the preprocess funtion"""
     
     # Input sanity checks
@@ -211,12 +206,11 @@ def postprocess(x, c, layer_boundaries, threshold=1e-4):
     assert len(x.shape) == 2
     assert len(x.shape) == 2
     
-    # Makes sure, that the original set is not modified inplace
-    x = torch.clone(x)
-    c = torch.clone(c)
+    if not inplace:
+        # Makes sure, that the original set is not modified inplace
+        x = torch.clone(x)
+        c = torch.clone(c)
            
-    # x = torch.exp(x)-1.e-8
-
     # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
     # the logit preprocessing
     x[x < threshold] = 0.
@@ -245,19 +239,14 @@ def normalize_layers(x, layer_boundaries, c=None, eps=1.e-10):
     if c is not None:
         # Use the exact layer energies for numerical stability  
         layer_energies = c[..., -number_of_layers:]
-        # brightest_voxels = c[..., number_of_layers+1:(2*number_of_layers)+1]
         
         for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
             output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energies[..., [layer_index]] + eps)
-        # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (brightest_voxels[..., [layer_index]] + eps)
     
     # We have to recompute the layer normalization 
     else:
         for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
             output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
-        # for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        #     output[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
         
     return output
 
@@ -293,9 +282,6 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, noise_width=None):
         
         output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * (layer_energies[..., [layer_index]] + noise_correction) / \
             (torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True) + eps)
-                                            
-        # output[..., layer_start:layer_end] = x[..., layer_start:layer_end] * (brightest_voxels[..., [layer_index]] + noise_width/2) / \
-        #     (torch.max(x[..., layer_start:layer_end], axis=1, keepdims=True)[0] + eps)
 
     return output
 
@@ -307,10 +293,10 @@ def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     
     if dataset == 1:
         hlf = HLF.HighLevelFeatures(particle_type,
-                                    f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_1_{particle_type}s.xml")
+                                    f"binning_dataset_1_{particle_type}s.xml")
     else:
         hlf = HLF.HighLevelFeatures(particle_type,
-                                    f"/remote/gpu06/ernst/Master_Thesis/vae_calo_challenge/CaloINN/calo_challenge/code/binning_dataset_{dataset}.xml")
+                                    f"binning_dataset_{dataset}.xml")
     
     # Maybe we will do more than just thresholding in postprocess someday. So, we should call it here as well.
     data = postprocess(x, c, layer_boundaries, threshold)
@@ -321,9 +307,7 @@ def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
     
     # renormalize the energies
     incident_energies *= 1.e5
-    
-    # TODO: Pass to the function once I am sure that it is good.
-    # Would be a major code change to pipe e_min here
+
     sparsity_threshold = 1.e-3
     
     # concatenate the layers and renormalize them, too           
@@ -389,6 +373,9 @@ def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, devic
     
     x_val = x[val_index]
     c_val = c[val_index]  
+    
+    if dataset==3:
+        device="cpu"
     
     # Cast into torch tensors
     x_trn = torch.tensor(x_trn, device=device, dtype=torch.get_default_dtype())

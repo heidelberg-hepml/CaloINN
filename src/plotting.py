@@ -580,7 +580,84 @@ def get_all_plot_parameters(hlf, params):
                      'n_bins': 20, 'vmin': -0.05, 'vmax': 1.05}))
     
     return plots
+
+def plot_all_hist_hlf(hlf_true, hlf_fake, params, plot_dir, single_plots=False, summary_plot=True):
+    
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    plots = get_all_plot_parameters(hlf_true, params)
  
+    # Plot every histrogramn in its own file
+    if single_plots:
+        for function, name, args1, args2 in plots:
+            plot_hist(
+                file_name=os.path.join(plot_dir, name),
+                data=function(hlf_fake, **args1),
+                reference=function(hlf_true, **args1),
+                **args2
+            )
+
+    # Plot all the histogramms in one file
+    if summary_plot:
+        number_of_plots = len(plots)
+        rows = number_of_plots // 6
+        if number_of_plots%6 != 0:
+            rows += 1
+        heights = [1, 0.3, 0.3]*rows
+
+        fig, axs = plt.subplots(rows*3,6, dpi=500, figsize=(6*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
+
+        iteration = 0
+        for i in range(rows*3):
+            
+            if i%3 == 1:
+                iteration -= 6
+                
+            for j in range(6):
+                
+                if i % 3 == 2:
+                    # Add one (small) invisible plot as whitespace
+                    axs[i,j].set_visible(False)
+                    continue
+                
+                elif iteration >= number_of_plots:
+                        # Plots are empty remove them
+                        axs[i,j].set_visible(False)
+                        iteration += 1
+                        continue
+                
+                
+                # Select the correct plot input for this axis
+                function, name, args1, args2 = plots[iteration]
+                
+                
+                if i % 3 == 0:
+                    # plot the main data
+                    plot_hist(
+                            file_name=None,
+                            data=function(hlf_fake, **args1),
+                            reference=function(hlf_true, **args1),
+                            ax=axs[i,j],
+                            panel_ax=axs[i+1,j],
+                            **args2)
+                    
+                    # Hide the (shared) x-axis
+                    axs[i,j].xaxis.set_visible(False)
+                    
+                    # Hide the first tick label
+                    plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
+                    iteration += 1
+
+                if i % 3 == 1:
+                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
+                    iteration += 1             
+
+        fig.subplots_adjust(hspace=0)
+        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
+        fig.savefig(plot_dir+"/summary.pdf", bbox_inches='tight', dpi=500)
+        # Dont use tight_layout!
+        plt.close()   
+
 def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir,
                   single_plots=False, summary_plot=True):
     
