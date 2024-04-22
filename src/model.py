@@ -527,7 +527,7 @@ class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 threshold=None, sparsity_loss=None, BCE_mode=None,
+                 threshold=None, sparsity_loss=None,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
         
         super(CVAE, self).__init__()
@@ -557,7 +557,6 @@ class CVAE(nn.Module):
         
         # the hyperparamters for the loss
         self.sparsity_loss_strength = sparsity_loss
-        self.BCE_mode = BCE_mode
         self.alpha = alpha
         self.beta = beta
         self.gamma = torch.tensor(gamma)
@@ -604,7 +603,7 @@ class CVAE(nn.Module):
                 
         self._set_normalizations(input, cond)
 
-        if dataset != 3 and (dataset != 2 or self.BCE_mode != "discrete"):
+        if dataset != 3 and dataset != 2:
             # Create the smearing matrix. It is used in the reco-loss
             self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
         else:
@@ -1071,10 +1070,7 @@ class CVAE(nn.Module):
         
         
         # Could also add a possibility to sample here?
-        if self.BCE_mode == "continuous":
-            mu_reco_x_0_1 = x_reco_0_1
-        else:
-            mu_reco_x_0_1 = x_reco_0_1
+        mu_reco_x_0_1 = x_reco_0_1
         
         # For logit loss part
         x_logit = self.logit_trafo_in(x_0_1)
@@ -1106,47 +1102,14 @@ class CVAE(nn.Module):
             else:
                 reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit, x_logit, reduction="mean")
         
-        # Data MSE loss
-        if self.BCE_mode is None:
-            if not MAE_data:
-                reco_loss_data = self.gamma * 0.5*nn.functional.mse_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
-            else:
-                reco_loss_data = self.gamma * 0.5*nn.functional.l1_loss(x_reco_dimensionless @ self.smearing_matrix, x_dimensionless @ self.smearing_matrix, reduction="mean")
-            
-            # Not needed for gaussian approach
-            log_c = torch.tensor(0.0, device=x.device)
-                
-        # Data BCE loss
-        elif self.BCE_mode == "discrete":
-            reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
-            
-            # Only needed for the continuous bernoulli approach
-            log_c = torch.tensor(0.0, device=x.device)
-            
-        # Data BCE loss
-        elif self.BCE_mode == "discrete_with_smearing":
-            reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1 @ self.smearing_matrix, x_0_1 @ self.smearing_matrix, reduction="mean")
-            
-            # Only needed for the continuous bernoulli approach
-            log_c = torch.tensor(0.0, device=x.device)
-            
-        elif self.BCE_mode == "non_binary":
-            reco_loss_data = self.gamma * cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
-            
-            # Only needed for the continuous bernoulli approach
-            log_c = torch.tensor(0.0, device=x.device)
-            
-            
-        elif self.BCE_mode == "continuous":
-            reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
-            
-            # Calculates the normalization constant for the continuous bernoulli
-            log_c = self.gamma * self.log_c_weight * self._get_CB_log_c(x_reco_0_1, reduction="mean")
-            
-        else:
-            raise ValueError("BCE_mode must be None, discrete or continuous")
 
+        # Data BCE loss
+        reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
         
+        # Only needed for the continuous bernoulli approach
+        log_c = torch.tensor(0.0, device=x.device)
+        
+
         # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
@@ -1374,9 +1337,9 @@ class KernelVAE(CVAE):
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
                  eps=1e-10, smearing_self=1, smearing_share=0,
                  einc_preprocessing="logit", threshold=None,
-                 sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
+                 sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, wrong_norm, batch_norm_prep, learnable_norm)
     
 
         self.kernel_size = kernel_size
