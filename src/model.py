@@ -527,7 +527,7 @@ class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None,
+                 threshold=None, sparsity_loss=None, BCE_mode=None,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
         
         super(CVAE, self).__init__()
@@ -550,9 +550,6 @@ class CVAE(nn.Module):
 
         
         # Save some important parameters:
-        
-        # Should we learn an energy embedding?
-        self.learn_e = learn_energies
         
         # Save the layer boundaries and the number of layers (both for the dataset). Needed for the layer normalization
         self.layer_boundaries = layer_boundaries_detector
@@ -635,11 +632,8 @@ class CVAE(nn.Module):
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
         # add the layers to the decoder
-        if not self.learn_e:
-            in_size = latent_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
-        else:
-            in_size = latent_dim + cond_dim-(2*self.num_detector_layers) # Also remove extra dims -> they are already part of the latent space
-            
+        in_size = latent_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
+
         
         # Increase input dim if we use a hot one encoding
         if self.einc_preprocessing == "hot_one":
@@ -653,9 +647,6 @@ class CVAE(nn.Module):
             self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
             
-        # we want to predict the extra dimensions as well
-        if self.learn_e:
-            input_dim += self.num_detector_layers
             
         self.decoder.add_module("fc_out", nn.Linear(in_size, input_dim))
     
@@ -698,13 +689,9 @@ class CVAE(nn.Module):
         n_furhter_conds = cond[..., number_of_layers+2: -number_of_layers].shape[1]       
         print(f"Found {n_furhter_conds} unusual additional conditions during the VAE initialization")
         
-        # We do not predict possible further dimensions
-        if self.learn_e:
-            cut = n_furhter_conds
         
         # The decoder does not predict the extra dimensions and possible further conditions
-        else:
-            cut = n_furhter_conds+n_extra_dims
+        cut = n_furhter_conds+n_extra_dims
             
         if cut != 0:
             self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut], use_batch_norm=self.batch_norm_prep)
@@ -967,13 +954,9 @@ class CVAE(nn.Module):
             if self.einc_preprocessing == "hot_one":
                 self.incident_energies = self.incident_energies.to(c.device)
         
-        # Append the extra dims if we did not learn them
-        if not self.learn_e:
-            c_clipped = torch.clamp((c / self.max_cond)[:, 1:-self.num_detector_layers], min=0, max=1)
+        # Append the extra dims and possible further conditions if we did not learn them
+        c_clipped = torch.clamp((c / self.max_cond)[:, 1:-self.num_detector_layers], min=0, max=1)
             
-        # Only append possible further conditions
-        else:
-            c_clipped = torch.clamp((c / self.max_cond)[:, self.num_detector_layers+2:-self.num_detector_layers], min=0, max=1)
             
         
         # Transform cond into logit space and append to latent results
@@ -1014,10 +997,7 @@ class CVAE(nn.Module):
         x_recon_noise = self.logit_trafo_out(x_recon_logit_noise)
         
         x_recon_noise[x_recon_noise<0] = 0
-        
-        if self.learn_e:
-            x_recon_noise, c = self._update_c(x_recon_noise, c)
-        
+            
         x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=None)
         
         
@@ -1026,6 +1006,7 @@ class CVAE(nn.Module):
             
         if self.threshold is not None:
             x_recon[x_recon < self.threshold] = 0
+            
         else:
             # Otherwise the norm before the logit in the reco loss might produce wrong results!
             x_recon[x_recon < 0] = 0
@@ -1098,10 +1079,6 @@ class CVAE(nn.Module):
         # For logit loss part
         x_logit = self.logit_trafo_in(x_0_1)
         x_reco_logit = self.logit_trafo_in(mu_reco_x_0_1)
-
-        if self.learn_e:
-            x_0_1 = torch.cat((x_0_1, c[..., 1:self.num_detector_layers+1]*0.9), axis=1)
-            x_reco_0_1 = torch.cat((x_reco_0_1, c_reco[..., 1:self.num_detector_layers+1]*0.9), axis=1)
         
         # Compute the losses
         
@@ -1396,10 +1373,10 @@ class KernelVAE(CVAE):
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
                  eps=1e-10, smearing_self=1, smearing_share=0,
-                 einc_preprocessing="logit", threshold=None, learn_energies=False,
+                 einc_preprocessing="logit", threshold=None,
                  sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
     
 
         self.kernel_size = kernel_size
