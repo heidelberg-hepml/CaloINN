@@ -572,7 +572,7 @@ class noise_layer(nn.Module):
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
-                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, learn_gamma=False, 
+                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
                  subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
@@ -611,12 +611,6 @@ class CVAE(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.gamma = torch.tensor(gamma)
-        
-        self.learn_gamma = learn_gamma
-        if self.learn_gamma:
-            with torch.no_grad():
-                self.data_sum = 0
-                self.logit_sum = 0
         
         # needed for the smearing matrix (geometry info)
         self.particle_type = particle_type
@@ -1267,11 +1261,6 @@ class CVAE(nn.Module):
             raise ValueError("BCE_mode must be None, discrete or continuous")
 
         
-        if self.training and self.learn_gamma: # Make sure to only track the loss from training, and not from validation!!!
-            with torch.no_grad():
-                self.data_sum += reco_loss_data
-                self.logit_sum += reco_loss_logit
-        
         # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
 
@@ -1282,17 +1271,6 @@ class CVAE(nn.Module):
 
 
         return reco_loss_logit + reco_loss_data + KLD + sparsity_loss - log_c, reco_loss_logit, reco_loss_data, KLD, sparsity_loss, log_c
-
-    def update_gamma(self):
-                
-        if self.learn_gamma:
-            with torch.no_grad():
-                self.gamma = self.gamma * (self.logit_sum/self.data_sum)
-                self.data_sum = 0
-                self.logit_sum = 0
-        else:
-            print("Updating gamma is disabled!")
-        return
 
     def _get_CB_log_c(self, x, eps=1.e-5, reduction="mean"):
         """ Calculates the normalization constant for the continuous bernoulli distribution."""
@@ -1508,11 +1486,11 @@ class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
-                 learn_gamma=False, eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0,
+                 eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0,
                  einc_preprocessing="logit", subtract_noise=False, threshold=None, learn_energies=False,
                  sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, learn_gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
     
 
         self.kernel_size = kernel_size

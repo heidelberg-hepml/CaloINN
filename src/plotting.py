@@ -464,7 +464,6 @@ def get_all_plot_parameters(hlf, params):
     plots = []
 
     particle_type = params.get("particle_type", "pion")
-    min_energy = params.get("min_energy", 10)
 
     # Etot vs Einc
     plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
