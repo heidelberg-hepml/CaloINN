@@ -202,11 +202,7 @@ class VAETrainer:
             self.optim.zero_grad()
             
             # Get the reconstruction loss
-            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
+            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
             # Calculate the gradients
             loss.backward()
@@ -274,11 +270,7 @@ class VAETrainer:
                     c = c.to(self.device)
                 
                 # Get the reconstruction loss
-                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
+                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
                 # Save the losses
                 test_loss += loss.item() * len(x)
@@ -641,11 +633,7 @@ class KVAETrainer:
             self.optim.zero_grad()
             
             # Get the reconstruction loss
-            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
+            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
             # Calculate the gradients
             loss.backward()
@@ -713,11 +701,7 @@ class KVAETrainer:
                     c = c.to(self.device)
                 
                 # Get the reconstruction loss
-                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c,
-                                                                            MAE_logit=self.params.get("VAE_MAE_logit", True),
-                                                                            MAE_data=self.params.get("VAE_MAE_data", False),
-                                                                            zero_logit=self.params.get("VAE_zero_logit", False),
-                                                                            zero_data=self.params.get("VAE_zero_data", False))
+                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
                 # Save the losses
                 test_loss += loss.item() * len(x)

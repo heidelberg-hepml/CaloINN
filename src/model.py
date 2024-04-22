@@ -541,7 +541,6 @@ class CVAE(nn.Module):
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
 
-        self.log_c_weight = 1
         self.wrong_norm = wrong_norm
         self.batch_norm_prep = batch_norm_prep
         self.learnable_norm = learnable_norm
@@ -1054,15 +1053,12 @@ class CVAE(nn.Module):
             
             return x_reco_shifted, c, mu, logvar
     
-    def reco_loss(self, x, c, MAE_logit=True, MAE_data=False, zero_logit=False, zero_data=False):
+    def reco_loss(self, x, c, zero_logit=True):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
         # Model forward pass
         x_reco_shifted, c_reco, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
                 
-        # For data loss part
-        x_dimensionless = x / torch.sqrt(x.mean(axis=1, keepdims=True))
-        x_reco_dimensionless = x_reco_shifted / torch.sqrt(x.mean(axis=1, keepdims=True))
         
         # For BCE loss part
         x_0_1      = data_util.normalize_layers(x, self.layer_boundaries, eps=self.eps) * 0.9
@@ -1091,11 +1087,6 @@ class CVAE(nn.Module):
         if zero_logit:
             reco_loss_logit = torch.tensor(0.).to(x.device)
             
-        elif not MAE_logit:
-            if self.smearing_matrix is not None:
-                reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
-            else:
-                reco_loss_logit = 0.5*nn.functional.mse_loss(x_reco_logit, x_logit, reduction="mean")
         else:
             if self.smearing_matrix is not None:
                 reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
@@ -1106,53 +1097,16 @@ class CVAE(nn.Module):
         # Data BCE loss
         reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
         
-        # Only needed for the continuous bernoulli approach
+        # TODO: Should remove log_c completely
         log_c = torch.tensor(0.0, device=x.device)
         
 
         # KL loss
-        KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))       
-
-            
-            
-        if zero_data:
-            reco_loss_data = torch.tensor(0.).to(reco_loss_logit.device)
+        KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
 
 
         return reco_loss_logit + reco_loss_data + KLD + sparsity_loss - log_c, reco_loss_logit, reco_loss_data, KLD, sparsity_loss, log_c
 
-    def _get_CB_log_c(self, x, eps=1.e-5, reduction="mean"):
-        """ Calculates the normalization constant for the continuous bernoulli distribution."""
-        
-        # The output of the network, cliped to avoid numerical instabilities
-        x = torch.clamp(x, 1.e-6, 1.-1.e-6) 
-        
-        # For values close to the critical point the analytical expression is unstable. Thus we use a taylor expansion around 0.5 for these values.
-        mask = (torch.abs(x - 0.5) >= eps)
-        anayltical_c = torch.log( (torch.log(1. - x) - torch.log(x)) / (1. - 2. * x) )
-        approx_c = torch.log(2. + 2./3.*( 1. - 2. * x)**2 )
-        log_c  = torch.where(mask, anayltical_c, approx_c)
-        
-        if reduction=="sum":
-            return log_c.sum()
-        elif reduction=="mean":
-            return log_c.mean()
-        else:
-            raise ValueError("reduction must be sum or mean")
-    
-    def _get_CB_mu(self, x, eps=1.e-5):
-        """Calculate the expectation value of the continuous bernoulli distribution."""
-        
-        x = torch.clamp(x, eps, 1.-eps)
-        
-        mu = x / (2. * x - 1.) + 1 / (2 * torch.arctanh(1 - 2 * x))
-        
-        mu = torch.where(x==0, 0.5, mu)
-        
-        return mu
-        
-    def update_log_c_weight(self, value):
-        self.log_c_weight = value
 
 # Building block for the Kernel-VAE
 class Block(torch.nn.Module):
