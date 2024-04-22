@@ -72,11 +72,9 @@ class VAETrainer:
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
                           eps = params.get("eps", 1.e-10),
-                          noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
                           smearing_share=params.get("VAE_smearing_share", 0),
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
-                          subtract_noise=params.get("VAE_subtract_noise", False),
                           threshold=params.get("VAE_internal_threshold", False), 
                           learn_energies=params.get("VAE_learn_energies", False),
                           sparsity_loss=params.get("sparsity_loss", None), 
@@ -512,11 +510,9 @@ class KVAETrainer:
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
                           eps = params.get("eps", 1.e-10),
-                          noise_width=params.get("VAE_width_noise", None),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
                           smearing_share=params.get("VAE_smearing_share", 0),
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
-                          subtract_noise=params.get("VAE_subtract_noise", False),
                           threshold=params.get("VAE_internal_threshold", False), 
                           learn_energies=params.get("VAE_learn_energies", False),
                           sparsity_loss=params.get("sparsity_loss", None), 
@@ -937,10 +933,7 @@ class ECAETrainer:
                 self.vae_trainer = VAETrainer(params, device, vae_doc)
             else:
                 raise NotImplementedError("Only VAE and KVAE are implemented")
-            
-        self.vae_trainer.model.subtract_noise = False
-        self.vae_trainer.model.last_noise = None
-            
+                        
         self.layer_boundaries = self.vae_trainer.layer_boundaries
         self.num_detector_layers = len(self.layer_boundaries) - 1
         

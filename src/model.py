@@ -522,59 +522,12 @@ class NormTrafo(nn.Module):
     # def __call__(self, x, rev=False):
     #     return self.forward(x, rev)
  
- 
-class noise_layer(nn.Module):
-    def __init__(self, noise_width, layer_boundaries, device, rev):
-        super().__init__()
-        
-        self.noise_width = noise_width
-        
-        # TODO: Change this hacky solution
-        
-        device="cuda:0"
-        
-        self.noise_distribution = torch.distributions.Uniform(torch.tensor(0., device=device), torch.tensor(1., device=device))
-        self.rev = rev
-        
-        self.layer_boundaries = layer_boundaries
-        self.num_detector_layers = len(self.layer_boundaries) - 1
-        
-    def forward(self, input, c, noise=None):
-        
-        if not self.rev:
-                                   
-            # add noise to the input
-            noise = self.noise_distribution.sample(input.shape)*self.noise_width
-            
-            
-            # TODO: This as well.
-            if noise.device != input.device:
-                noise = noise.to(input.device)
-            
-            input_with_noise = input + noise.view(input.shape)
-                        
-            return input_with_noise,  noise
-               
-        else:
-            if noise is None:
-                input = input - self.noise_width/2
-            else:
-                
-                if noise.device != input.device:
-                    noise = noise.to(input.device)
-                
-                input = input - noise
-                
-            input = torch.where(input<self.noise_width, torch.tensor(0, device=input.device), input)
-            
-            return input
- 
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
-                 eps=1.e-10, noise_width=None, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 subtract_noise=False, threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None,
+                 eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
+                 threshold=None, learn_energies=False, sparsity_loss=None, BCE_mode=None,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
         
         super(CVAE, self).__init__()
@@ -620,7 +573,6 @@ class CVAE(nn.Module):
         self.eps = eps
         
         # Save whether noise layers were used
-        self.noise_width = noise_width
         self.threshold = threshold
         
         # Save the latent dimension
@@ -628,15 +580,11 @@ class CVAE(nn.Module):
         
         # Initialize the last_noise parameter
         self.last_noise = None
-        self.subtract_noise = subtract_noise
 
 
 
         # Now build the network layers:
         
-        # Add a noise adding layer
-        if noise_width is not None:
-            self.noise_layer_in = noise_layer(noise_width, layer_boundaries=self.layer_boundaries, device=input.device, rev=False)
         
         # Save the einc preprocessing type
         self.einc_preprocessing = einc_preprocessing
@@ -650,12 +598,7 @@ class CVAE(nn.Module):
         self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=batch_norm)
         
         # Add sigmoid layer
-        self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)
-        
-        # Add a noise removal layer
-        if noise_width is not None:
-            self.noise_layer_out = noise_layer(noise_width, layer_boundaries=self.layer_boundaries, device=input.device, rev=True)
-        
+        self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)        
 
               
         # get normalization for normalization layer and to ensure that the incident energy parameter is
@@ -902,20 +845,10 @@ class CVAE(nn.Module):
         """First part of the encoder function. Seperated such that it can be used by the
         initialization of the normalization to zero mean and unit variance"""
         
-        # Adds noise to the data and updates c s.t. the layer normalization will work.
-        
-        # Add noise -> We must recompute the layer energies
-        if self.noise_width is not None:
-            x_noise, self.last_noise = self.noise_layer_in(x, c)
-            x_noise = data_util.normalize_layers(x_noise, self.layer_boundaries, eps=self.eps)
-            
+
         # Add no noise -> Reuse layer energies
-        else:
-            x_noise = x
-            x_noise = data_util.normalize_layers(x_noise, self.layer_boundaries, c=c, eps=self.eps)
-            
-        if not self.subtract_noise:
-            self.last_noise = None
+        x_noise = x
+        x_noise = data_util.normalize_layers(x_noise, self.layer_boundaries, c=c, eps=self.eps)
         
         # Needed to ensure numerical stability
         x_noise = x_noise*0.9
@@ -1089,14 +1022,7 @@ class CVAE(nn.Module):
         
         
         # Remove noise by thresholding, if needed
-        if self.noise_width is not None:
-            if self.last_noise is not None:
-                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
-                self.last_noise = None
-            else:
-                x_recon = self.noise_layer_out(x_recon_noise, c, noise=self.last_noise)
-        else:
-            x_recon = x_recon_noise
+        x_recon = x_recon_noise
             
         if self.threshold is not None:
             x_recon[x_recon < self.threshold] = 0
@@ -1105,26 +1031,12 @@ class CVAE(nn.Module):
             x_recon[x_recon < 0] = 0
             
             
-        if self.noise_width is not None:
-                        
-            # Enforce the total energy to be correct
-            # total_energy = c[..., [0]]*c[..., [1]]
-            # x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
-            x_recon_shifted = x_recon
-            
-            
-        else:
-            # total_energy = c[..., [0]]*c[..., [1]]
-            # x_recon_shifted = x_recon * total_energy / (x_recon.sum(axis=1, keepdims=True)+self.eps)
-            x_recon_shifted = x_recon
+
+        x_recon_shifted = x_recon
                     
         if not train:
-            # Might be used to compute mu for the continuous BCE    
-            # if self.BCE_mode == "continuous":
-            #     x_reco_0_1 = data_util.normalize_layers(x_recon_shifted, self.layer_boundaries, eps=self.eps) * 0.9
-            #     mu_reco_x_0_1 = self._get_CB_mu(x_reco_0_1)
-            #     x_recon_shifted  = data_util.unnormalize_layers(mu_reco_x_0_1, c, self.layer_boundaries, eps=self.eps)
             return x_recon_shifted
+        
         else:
             return x_recon_shifted, c
        
@@ -1195,10 +1107,7 @@ class CVAE(nn.Module):
         
         # Sparsity loss
         if self.sparsity_loss_strength is not None:
-            if self.noise_width is not None:
-                sparsity_loss = self.sparsity_loss_strength*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, self.noise_width), smooth_sparsity(x, self.noise_width))
-            else:
-                sparsity_loss = self.sparsity_loss_strength*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, 1.e-6), smooth_sparsity(x, 1.e-6))
+            sparsity_loss = self.sparsity_loss_strength*0.5*nn.functional.mse_loss(smooth_sparsity(x_reco_shifted, 1.e-6), smooth_sparsity(x, 1.e-6))
                 
         else:
             sparsity_loss = torch.tensor(0.0, device=x.device)
@@ -1486,11 +1395,11 @@ class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
-                 eps=1e-10, noise_width=None, smearing_self=1, smearing_share=0,
-                 einc_preprocessing="logit", subtract_noise=False, threshold=None, learn_energies=False,
+                 eps=1e-10, smearing_self=1, smearing_share=0,
+                 einc_preprocessing="logit", threshold=None, learn_energies=False,
                  sparsity_loss=None, BCE_mode=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
                  wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, noise_width, smearing_self, smearing_share, einc_preprocessing, subtract_noise, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, learn_energies, sparsity_loss, BCE_mode, wrong_norm, batch_norm_prep, learnable_norm)
     
 
         self.kernel_size = kernel_size
