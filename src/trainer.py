@@ -111,13 +111,13 @@ class VAETrainer:
         
         steps_per_epoch = len(self.train_loader)
         
-        if self.params.get("VAE_lr_sched_mode", None) == "step":
+        if self.params.get("VAE_lr_scheduler", None) == "step":
             self.scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optim,
                 step_size = self.params["lr_decay_epochs"],
                 gamma = self.params["lr_decay_factor"],
             )
-        elif self.params.get("VAE_lr_sched_mode", None) == "reduce_on_plateau":
+        elif self.params.get("VAE_lr_scheduler", None) == "reduce_on_plateau":
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optim,
                 factor = 0.4,
@@ -127,14 +127,14 @@ class VAETrainer:
                 threshold_mode = "rel",
                 verbose=True
             )
-        elif self.params.get("VAE_lr_sched_mode", None) == "one_cycle_lr":
+        elif self.params.get("VAE_lr_scheduler", None) == "one_cycle_lr":
             self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 self.optim,
                 self.params.get("VAE_max_lr", self.params["VAE_lr"]*10),
                 epochs = self.params.get("VAE_opt_epochs") or self.params["VAE_n_epochs"],
                 steps_per_epoch=steps_per_epoch)
             
-        elif self.params.get("VAE_lr_sched_mode", None) is None:
+        elif self.params.get("VAE_lr_scheduler", None) is None:
             self.scheduler = None
 
     def train(self):
@@ -538,13 +538,13 @@ class KVAETrainer:
         
         steps_per_epoch = len(self.train_loader)
         
-        if self.params.get("VAE_lr_sched_mode", None) == "step":
+        if self.params.get("VAE_lr_scheduler", None) == "step":
             self.scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optim,
                 step_size = self.params["lr_decay_epochs"],
                 gamma = self.params["lr_decay_factor"],
             )
-        elif self.params.get("VAE_lr_sched_mode", None) == "reduce_on_plateau":
+        elif self.params.get("VAE_lr_scheduler", None) == "reduce_on_plateau":
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optim,
                 factor = 0.4,
@@ -554,14 +554,14 @@ class KVAETrainer:
                 threshold_mode = "rel",
                 verbose=True
             )
-        elif self.params.get("VAE_lr_sched_mode", None) == "one_cycle_lr":
+        elif self.params.get("VAE_lr_scheduler", None) == "one_cycle_lr":
             self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 self.optim,
                 self.params.get("VAE_max_lr", self.params["VAE_lr"]*10),
                 epochs = self.params.get("VAE_opt_epochs") or self.params["VAE_n_epochs"],
                 steps_per_epoch=steps_per_epoch)
             
-        elif self.params.get("VAE_lr_sched_mode", None) is None:
+        elif self.params.get("VAE_lr_scheduler", None) is None:
             self.scheduler = None
 
     def train(self):
