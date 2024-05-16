@@ -484,7 +484,7 @@ class LearnableNorm(nn.Module):
 
 
 class NormTrafo(nn.Module):
-    def __init__(self, inp_dim, M, b, use_batch_norm=False) -> None:
+    def __init__(self, inp_dim, M, b) -> None:
         
         super().__init__()
         print("Initializing norm trafo")
@@ -492,20 +492,9 @@ class NormTrafo(nn.Module):
         self.b = b
         
         inp_dim = inp_dim[0][0]
-
-        
-        if use_batch_norm:
-            print("Using batch norm with size ", inp_dim)
-            self.trafo=torch.nn.BatchNorm1d(num_features=inp_dim)
-        else:
-            self.trafo=None
         
     def forward(self, x, rev=False):
-        
-        if self.trafo is not None:
-            # print(x[0].device)
-            return [(self.trafo(x[0]), )]
-                
+                    
         if x[0].device != self.M.device:
             self.M = self.M.to(x[0].device)
             self.b = self.b.to(x[0].device)
@@ -528,7 +517,7 @@ class CVAE(nn.Module):
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
                  threshold=None, sparsity_loss=None,
-                 wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
+                 wrong_norm=False, learnable_norm=False):
         
         super(CVAE, self).__init__()
         
@@ -542,10 +531,7 @@ class CVAE(nn.Module):
         cond_dim = cond.shape[1]
 
         self.wrong_norm = wrong_norm
-        self.batch_norm_prep = batch_norm_prep
         self.learnable_norm = learnable_norm
-        
-        assert not (self.learnable_norm and self.batch_norm_prep), "Cannot use both learnable norm and batch norm preprocessing"
 
         
         # Save some important parameters:
@@ -677,7 +663,7 @@ class CVAE(nn.Module):
             
         self.norm_b_x = - mean/std
         
-        self.norm_x_in = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x, use_batch_norm=self.batch_norm_prep)
+        self.norm_x_in = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
   
         # Find out the slicing boundaries for the norm matrices in the output:
         # (True layer energies and e_inc are removed before the first contact with the norm trafo)
@@ -692,9 +678,9 @@ class CVAE(nn.Module):
         cut = n_furhter_conds+n_extra_dims
             
         if cut != 0:
-            self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut], use_batch_norm=self.batch_norm_prep)
+            self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut])
         else:
-            self.norm_x_out = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x, use_batch_norm=self.batch_norm_prep)
+            self.norm_x_out = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
     
     def _set_normalizations_batch_norm(self, data, cond):
         """Uses batch norm as first norm layer"""
@@ -1292,8 +1278,8 @@ class KernelVAE(CVAE):
                  eps=1e-10, smearing_self=1, smearing_share=0,
                  einc_preprocessing="logit", threshold=None,
                  sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
-                 wrong_norm=False, batch_norm_prep=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, wrong_norm, batch_norm_prep, learnable_norm)
+                 wrong_norm=False, learnable_norm=False):
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, wrong_norm, learnable_norm)
     
 
         self.kernel_size = kernel_size

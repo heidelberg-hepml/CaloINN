@@ -78,7 +78,6 @@ class VAETrainer:
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
                           wrong_norm=params.get("VAE_wrong_norm", False),
-                          batch_norm_prep=params.get("VAE_batch_norm_prep", False),
                           learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
@@ -395,7 +394,6 @@ class VAETrainer:
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
 
-
     def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss, 
                      test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss, test_loss, max_grad):
         print('')
@@ -506,7 +504,6 @@ class KVAETrainer:
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
                           wrong_norm=params.get("VAE_wrong_norm", False),
-                          batch_norm_prep=params.get("VAE_batch_norm_prep", False),
                           learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
