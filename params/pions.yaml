@@ -1,6 +1,5 @@
 # General
-data_path: ... # TODO: Path to the data
-
+# data_path: ... # TODO: Path to the data
 
 # Documenter information
 run_name: pions
@@ -19,28 +18,19 @@ min_energy: 1.e-3 # corresponds to the threshold combined with a 10^5 normalizat
 
 # VAE Preprocessing
 alpha: 1.e-6
-VAE_width_noise: null
 VAE_internal_threshold: 1.e-8
-VAE_subtract_noise: False
 VAE_einc_preprocessing: "logit"
-# VAE_einc_preprocessing: "hot_one"
 e_inc_index: null
 # VAE Training
 VAE_lr_scheduler: null
 VAE_max_lr: 1.e-4
 VAE_lr: 1.e-4
-VAE_gamma_updates: null # Int or null
 VAE_weight_decay: 1.e-7
 VAE_batch_size: 256
-# VAE_n_epochs: 1000
-VAE_n_epochs: 1
+VAE_n_epochs: 1000
 VAE_save_interval: 50
 VAE_keep_models: 3001
-VAE_MAE_logit: True # Use MAE instead of MSE for logit loss
-VAE_MAE_data: False # Use MAE instead of MSE for data loss
 VAE_zero_logit: True # Set the logit loss to 0
-VAE_zero_data: False # Set the data loss to 0
-BCE_mode: discrete # replaces the data mse by an BCE if not null
 sparsity_loss: null
 VAE_smearing_self: 0.6
 VAE_smearing_share: 0.05
@@ -49,9 +39,6 @@ VAE_hidden_sizes: [5000, 1000, 500]
 VAE_latent_dim: 50
 VAE_beta: 1.e-5
 VAE_gamma: 1.e+4
-VAE_dropout: 0.0
-VAE_batch_norm: False
-VAE_learn_energies: False
 
 
 # INN
@@ -68,8 +55,7 @@ batch_size: 256
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
-# n_epochs: 200
-n_epochs: 1
+n_epochs: 200
 save_interval: 50
 keep_models: 1000
 # Bayesian Setup
