@@ -454,18 +454,7 @@ class LogitTransformationVAE:
         
     def __call__(self, x):
         return self.forward(x)
- 
- 
-class NormPlaceholder:
-    def __init__(self) -> None:
-        return
-    
-    def forward(self, x, rev=False):
-        return [x]
-    
-    def __call__(self, x, rev=False):
-        return self.forward(x, rev)
- 
+
 
 class LearnableNorm(nn.Module):
     def __init__(self, num_features):
@@ -516,8 +505,7 @@ class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
-                 threshold=None, sparsity_loss=None,
-                 wrong_norm=False, learnable_norm=False):
+                 threshold=None, sparsity_loss=None, learnable_norm=False):
         
         super(CVAE, self).__init__()
         
@@ -530,7 +518,6 @@ class CVAE(nn.Module):
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
 
-        self.wrong_norm = wrong_norm
         self.learnable_norm = learnable_norm
 
         
@@ -540,9 +527,11 @@ class CVAE(nn.Module):
         self.layer_boundaries = layer_boundaries_detector
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
+        # Logit regularization
+        self.alpha = alpha
+        
         # the hyperparamters for the loss
         self.sparsity_loss_strength = sparsity_loss
-        self.alpha = alpha
         self.beta = beta
         self.gamma = torch.tensor(gamma)
         
@@ -558,14 +547,6 @@ class CVAE(nn.Module):
         
         # Save the latent dimension
         self.latent_dim = latent_dim
-        
-        # Initialize the last_noise parameter
-        self.last_noise = None
-
-
-
-        # Now build the network layers:
-        
         
         # Save the einc preprocessing type
         self.einc_preprocessing = einc_preprocessing
@@ -584,23 +565,22 @@ class CVAE(nn.Module):
               
         # get normalization for normalization layer and to ensure that the incident energy parameter is
         # between 0 and 1:
-        
-                
         self._set_normalizations(input, cond)
 
         if dataset != 3 and dataset != 2:
-            # Create the smearing matrix. It is used in the reco-loss
+            # Create the smearing matrix. It is used in the reco-loss (For DS 2&3 it is to large for the ram)
             self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
         else:
             self.smearing_matrix = None
 
     def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=False):
+        """Creates the encoder and decoder model as fully connected neural networks."""
         # Create decoder and encoder
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
         
         # Add the layers to the encoder
-        in_size = input_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
+        in_size = input_dim + (cond_dim-self.num_detector_layers) # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set! (Also: Redundant)
         
         # Increase input dim if we use a hot one encoding
         if self.einc_preprocessing == "hot_one":
@@ -616,7 +596,7 @@ class CVAE(nn.Module):
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
         # add the layers to the decoder
-        in_size = latent_dim + cond_dim-self.num_detector_layers # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set!
+        in_size = latent_dim + (cond_dim-self.num_detector_layers) # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set! (Also: Redundant)
 
         
         # Increase input dim if we use a hot one encoding
@@ -654,15 +634,12 @@ class CVAE(nn.Module):
             self.norm_x_out = self.norm_x_in
             return
         
-        if self.wrong_norm: 
-            print("Using the wrong normalization")
-            self.norm_m_x = std
-        else:
-            self.norm_m_x = 1 / std
-            
-            
+
+        # Calculate the normalization parameters only once, during the initialization
+        self.norm_m_x = 1 / std
         self.norm_b_x = - mean/std
         
+        # Input tranfo
         self.norm_x_in = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
   
         # Find out the slicing boundaries for the norm matrices in the output:
@@ -684,9 +661,9 @@ class CVAE(nn.Module):
     
     def _set_normalizations_batch_norm(self, data, cond):
         """Uses batch norm as first norm layer"""
-        # to normalize the incident energy c[:, 0] afterwards. It is not between 0 and 1.
+        # Normalize the incident energy c[:, 0], it is not between 0 and 1.
         # The other conditions are allready between 0 and 1 and will not be modified
-        # TODO: Problems if test set is more than 15% off
+        # NOTE: Problems if test set is more than 15% off - but never encountered problems here...
         max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]
         self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)*1.15
         
@@ -890,43 +867,6 @@ class CVAE(nn.Module):
         std = torch.exp(0.5*logvar)
         eps = torch.randn_like(std)
         return eps * std + mu
-         
-    def _update_c(self, x, c):
-        
-        number_of_layers = self.num_detector_layers
-        
-        incident_energy = c[..., [0]]
-        extra_dims = x[..., -number_of_layers:]
-        x = x[..., :-number_of_layers]
-        
-        
-        # Just as a reference:
-        # extra_dims = c[..., 1:number_of_layers+1]
-        # layer_energies = c[..., -number_of_layers:]
-        # further_conds = c[..., number_of_layers+2: -number_of_layers]
-        
-        layer_energies = []
-        
-        e_tot = extra_dims[..., [0]] * incident_energy
-        
-        for layer in range(self.num_detector_layers-1):
-            
-            if layer == 0:
-                layer_energy = (e_tot) * extra_dims[..., [layer+1]]
-                cumsum_previous_layers = layer_energy
-                # TODO: removed clone command, might cause bugs
-                # cumsum_previous_layers = torch.clone(layer_energy)
-            else:
-                layer_energy = (e_tot - cumsum_previous_layers) * extra_dims[..., [layer+1]] 
-                cumsum_previous_layers += layer_energy
-                
-            layer_energies.append(layer_energy)
-            
-        layer_energies.append(e_tot - cumsum_previous_layers)
-        
-        c[..., 1:number_of_layers+1] = extra_dims
-        c[..., -number_of_layers:] = torch.cat(layer_energies, axis=1)
-        return x, c
             
     def decode(self, latent, c, return_directly_after_decoder=False, train=False):
         """Takes a point in the latent space after sampling and returns a point in the dataspace.
@@ -1270,17 +1210,17 @@ class KernelDecoder(nn.Module):
         return output
 
         
-# NOTE: Does only work with logit prepocessing right now!
 class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
                  particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
-                 eps=1e-10, smearing_self=1, smearing_share=0,
-                 einc_preprocessing="logit", threshold=None,
-                 sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50,
-                 wrong_norm=False, learnable_norm=False):
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, wrong_norm, learnable_norm)
+                 eps=1e-10, smearing_self=1, smearing_share=0, einc_preprocessing="logit", threshold=None,
+                 sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50, learnable_norm=False):
+        
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, learnable_norm)
     
+
+        assert einc_preprocessing == "logit", "Only logit preprocessing is supported for the kernel VAE"
 
         self.kernel_size = kernel_size
         self.kernel_stride = kernel_stride
@@ -1328,20 +1268,4 @@ class KernelVAE(CVAE):
 
 def smooth_sparsity(input, threshold, strength=0.2):
     return (1 / ( 1 + torch.exp( -( (input-threshold) / (strength * threshold))  ) )).mean(axis=1)  
-     
-def cross_entropy(inp, trg, reduction="mean"):
-    """Calculates the cross entropy between two distributions."""
     
-    # batch_size = inp.shape[0]
-    # return torch.nn.functional.cross_entropy(inp.view(-1, 1), trg.view(-1, 1), reduction=reduction)
-    
-    inp = torch.clamp(inp, 1.e-15, 1)
-    
-    if reduction == "sum":
-        return -torch.sum(trg * torch.log(inp))
-    
-    elif reduction == "mean":
-        return -torch.mean(trg * torch.log(inp))
-    
-    else:
-        raise ValueError("reduction must be sum or mean")

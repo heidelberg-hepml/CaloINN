@@ -77,7 +77,6 @@ class VAETrainer:
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
-                          wrong_norm=params.get("VAE_wrong_norm", False),
                           learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
@@ -503,7 +502,6 @@ class KVAETrainer:
                           einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
-                          wrong_norm=params.get("VAE_wrong_norm", False),
                           learnable_norm=params.get("VAE_learnable_norm", False),
         )
         
