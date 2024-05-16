@@ -502,8 +502,8 @@ class NormTrafo(nn.Module):
  
 
 class CVAE(nn.Module):
-    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm=False,
-                 particle_type="photon",dataset=1,dropout=0, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
+    def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector,
+                 particle_type="photon",dataset=1, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
                  eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
                  threshold=None, sparsity_loss=None, learnable_norm=False):
         
@@ -557,7 +557,7 @@ class CVAE(nn.Module):
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
         # Create encoder and decoder model as DNNs
-        self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=batch_norm)
+        self._set_submodels(input_dim, cond_dim, latent_dim, hidden_sizes)
         
         # Add sigmoid layer
         self.logit_trafo_out = LogitTransformationVAE(alpha=alpha, rev=True)        
@@ -573,7 +573,7 @@ class CVAE(nn.Module):
         else:
             self.smearing_matrix = None
 
-    def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, dropout, batch_norm=False):
+    def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes):
         """Creates the encoder and decoder model as fully connected neural networks."""
         # Create decoder and encoder
         self.encoder = nn.Sequential()
@@ -589,9 +589,6 @@ class CVAE(nn.Module):
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.encoder.add_module(f"relu{i}", nn.ReLU())
-            if batch_norm:
-                self.encoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
-            self.encoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
         self.encoder.add_module("fc_mu_logvar", nn.Linear(in_size, latent_dim*2))
     
@@ -606,9 +603,6 @@ class CVAE(nn.Module):
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
             self.decoder.add_module(f"relu{i}", nn.ReLU())
-            if batch_norm:
-                self.decoder.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
-            self.decoder.add_module(f"dropout{i}", nn.Dropout(p=dropout))
             in_size = hidden_size
             
             
@@ -659,24 +653,6 @@ class CVAE(nn.Module):
         else:
             self.norm_x_out = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
     
-    def _set_normalizations_batch_norm(self, data, cond):
-        """Uses batch norm as first norm layer"""
-        # Normalize the incident energy c[:, 0], it is not between 0 and 1.
-        # The other conditions are allready between 0 and 1 and will not be modified
-        # NOTE: Problems if test set is more than 15% off - but never encountered problems here...
-        max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]
-        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)*1.15
-        
-        # Set the normalization layer operating on the x space (before the actual encoder)
-        with torch.no_grad():
-            data = self._preprocess_encoding(data, cond, without_norm=True)
-        
-        print("Using batch-norm normalization")
-        
-        self.norm_x_in = torch.nn.BatchNorm1d(num_features=data.shape[1])
-              
-        self.norm_x_out = torch.nn.BatchNorm1d(num_features=data.shape[1])
-
     def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
         """Computes the smearing matrix that is used in the loss to make neighboring voxels get similar gradients
 
@@ -878,7 +854,7 @@ class CVAE(nn.Module):
             if self.einc_preprocessing == "hot_one":
                 self.incident_energies = self.incident_energies.to(c.device)
         
-        # Append the extra dims and possible further conditions if we did not learn them
+        # Append the extra dims and possible further conditions
         c_clipped = torch.clamp((c / self.max_cond)[:, 1:-self.num_detector_layers], min=0, max=1)
             
             
@@ -1036,7 +1012,7 @@ class CVAE(nn.Module):
 
 # Building block for the Kernel-VAE
 class Block(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_sizes, batch_norm=False):
+    def __init__(self, input_dim, output_dim, hidden_sizes):
         super(Block, self).__init__()
         
         self.layers = nn.Sequential()
@@ -1044,8 +1020,6 @@ class Block(torch.nn.Module):
         last_size = input_dim
         for i, hidden_size in enumerate(hidden_sizes):
             self.layers.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
-            if batch_norm:
-                self.layers.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
             self.layers.add_module(f"relu{i}", nn.ReLU())
             last_size = hidden_size
             
@@ -1057,7 +1031,7 @@ class Block(torch.nn.Module):
 
 class KernelEncoder(nn.Module):
     
-    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries, batch_norm=False):
+    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries):
         super().__init__()
         
         number_detector_layers = len(layer_boundaries)-1
@@ -1097,7 +1071,7 @@ class KernelEncoder(nn.Module):
                 output_dim_block = kernel_latent
                 
                 # Create the block
-                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel, batch_norm=batch_norm))
+                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel))
 
 
         self.gathering_subnet = nn.Sequential()
@@ -1106,8 +1080,6 @@ class KernelEncoder(nn.Module):
         last_size = number_of_blocks*kernel_latent + self.cond_dim
         for i, hidden_size in enumerate(hidden_sizes):
             self.gathering_subnet.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
-            if batch_norm:
-                self.gathering_subnet.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
             self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
             
             last_size = hidden_size
@@ -1135,7 +1107,7 @@ class KernelEncoder(nn.Module):
             
 class KernelDecoder(nn.Module):
     
-    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries, batch_norm=False):
+    def __init__(self, input_dim, cond_dim, output_dim, hidden_sizes, hidden_sizes_kernel, kernel_size, kernel_stride, kernel_latent, layer_boundaries):
         super().__init__()
         
         number_detector_layers = len(layer_boundaries)-1
@@ -1162,8 +1134,6 @@ class KernelDecoder(nn.Module):
         last_size = input_dim
         for i, hidden_size in enumerate(hidden_sizes):
             self.gathering_subnet.add_module(f"fc{i}", nn.Linear(last_size, hidden_size))
-            if batch_norm:
-                self.gathering_subnet.add_module(f"batchnorm{i}", torch.nn.BatchNorm1d(num_features=hidden_size))
             self.gathering_subnet.add_module(f"relu{i}", nn.ReLU())
             last_size = hidden_size
         self.gathering_subnet.add_module("fc_out", nn.Linear(last_size, number_of_blocks*kernel_latent))
@@ -1189,7 +1159,7 @@ class KernelDecoder(nn.Module):
                 output_dim_block = layer_boundaries[end_index] - layer_boundaries[start_index]
                 
                 # Create the block
-                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel, batch_norm=batch_norm))
+                self.blocks.append(Block(input_dim_block, output_dim_block, hidden_sizes_kernel))
         
     def forward(self, x):
         
@@ -1212,12 +1182,12 @@ class KernelDecoder(nn.Module):
         
 class KernelVAE(CVAE):
 
-    def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector, batch_norm=False,
-                 particle_type="photon", dataset=1, dropout=0, alpha=0.000001, beta=0.00001, gamma=1000,
+    def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector,
+                 particle_type="photon", dataset=1, alpha=0.000001, beta=0.00001, gamma=1000,
                  eps=1e-10, smearing_self=1, smearing_share=0, einc_preprocessing="logit", threshold=None,
                  sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50, learnable_norm=False):
         
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, batch_norm, particle_type, dataset, dropout, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, learnable_norm)
     
 
         assert einc_preprocessing == "logit", "Only logit preprocessing is supported for the kernel VAE"
@@ -1230,13 +1200,10 @@ class KernelVAE(CVAE):
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
         
-        self._update_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, hidden_sizes_kernel, dropout, batch_norm=batch_norm)    
+        self._update_submodels(input_dim, cond_dim, latent_dim, hidden_sizes, hidden_sizes_kernel)    
     
-    def _update_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, hidden_sizes_kernel, dropout=0, batch_norm=False):
+    def _update_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes, hidden_sizes_kernel):
         # Create decoder and encoder
-        
-        assert dropout == 0, "Dropout is not supported for the kernel VAE"
-        # assert batch_norm == False, "Batch norm is not supported for the kernel VAE"
         
         number_detector_layers = len(self.layer_boundaries)-1
         
@@ -1251,8 +1218,7 @@ class KernelVAE(CVAE):
                                      kernel_size=self.kernel_size,
                                      kernel_stride=self.kernel_stride,
                                      kernel_latent=self.kernel_latent,
-                                     layer_boundaries=self.layer_boundaries,
-                                     batch_norm=batch_norm)
+                                     layer_boundaries=self.layer_boundaries)
         
         self.decoder = KernelDecoder(input_dim=latent_dim+cond_dim,
                                      cond_dim=cond_dim,
@@ -1262,8 +1228,7 @@ class KernelVAE(CVAE):
                                      kernel_size=self.kernel_size,
                                      kernel_stride=self.kernel_stride,
                                      kernel_latent=self.kernel_latent,
-                                     layer_boundaries=self.layer_boundaries,
-                                     batch_norm=batch_norm)
+                                     layer_boundaries=self.layer_boundaries)
 
 
 def smooth_sparsity(input, threshold, strength=0.2):
