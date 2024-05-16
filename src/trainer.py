@@ -163,9 +163,6 @@ class VAETrainer:
             self.scheduler = None
 
     def train(self):
-        # Initialize the best validation loss
-        min_test_loss = np.inf
-        
         
         for epoch in  tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
             
@@ -190,7 +187,7 @@ class VAETrainer:
             if epoch % self.params.get("VAE_keep_models", self.params["VAE_n_epochs"]+1) == 0:
                 self.save(epoch=epoch)
             
-            if epoch%self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
+            if epoch % self.params.get("VAE_save_interval", 100) == 0 or epoch == self.params['VAE_n_epochs']:
                 self.save()
                 
                 self.plot_results(epoch)         
@@ -378,8 +375,6 @@ class VAETrainer:
         plotting.plot_all_hist(
             data, cond, generated, cond, self.params,
             self.layer_boundaries, plot_dir)
-        # except:
-        #     print("error during plotting")
 
         
         with torch.no_grad():
@@ -630,7 +625,6 @@ class ECAETrainer:
                 data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
 
             # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-            # TODO: Watch out for numerical problems later
             data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
             data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
             
@@ -682,7 +676,6 @@ class ECAETrainer:
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
-            min_test_loss = np.inf
             
             # Do training and validation for the current epoch
             if self.model.bayesian:

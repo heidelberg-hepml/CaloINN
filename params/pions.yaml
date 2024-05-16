@@ -7,15 +7,15 @@ vae_dir: null
 # Data
 dtype: float32
 particle_type: pion
+dataset: 1
 val_frac: 0.2
 eps: 1.e-10
 threshold: 1.e-10
-# Plotting
-min_energy: 1.e-3 # corresponds to the threshold combined with a 10^5 normalization
 
 
 # VAE
-
+VAE_type: CVAE
+VAE_learnable_norm: False
 # VAE Preprocessing
 alpha: 1.e-6
 VAE_internal_threshold: 1.e-8
