@@ -328,8 +328,7 @@ def save_hlf(hlf, filename):
         pickle.dump(hlf, file)
     print("Saving file with high-level features DONE.")
 
-def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False, dataset=1,
-                e_inc_index=None):
+def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False, dataset=1):
     """Creates the dataloaders used to train the VAE model."""
     
     # load the data from the hdf5 file
@@ -337,20 +336,6 @@ def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, devic
 
     # preprocess the data and append the extra dims
     x, c = preprocess(data, layer_boundaries, eps)
-
-    if e_inc_index is not None:
-        assert type(e_inc_index) == int
-        e_incs = np.unique(c[..., 0])
-        mask = (c[..., 0] == e_incs[e_inc_index])
-        print(f"Use incident energy {e_incs[e_inc_index]} ({mask.sum()} events)")
-        
-        print(x.shape, c.shape)
-        x = x[mask]
-        c = c[mask]
-        
-        print(x.shape, c.shape)
-        
-        
     
     # Create an index array, used for splitting into train and val set
     number_of_samples = len(x)

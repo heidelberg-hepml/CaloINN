@@ -46,8 +46,7 @@ class VAETrainer:
             device=device,
             drop_last=True,
             shuffle=True,
-            dataset=params.get("dataset", 1),
-            e_inc_index=params.get("e_inc_index", None),)
+            dataset=params.get("dataset", 1),)
         
         data = self.train_loader.data
         cond = self.train_loader.cond

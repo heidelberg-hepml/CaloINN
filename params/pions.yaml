@@ -20,7 +20,6 @@ VAE_learnable_norm: False
 alpha: 1.e-6
 VAE_internal_threshold: 1.e-8
 VAE_einc_preprocessing: "logit"
-e_inc_index: null
 # VAE Training
 VAE_lr_scheduler: null
 VAE_max_lr: 1.e-4
