@@ -56,7 +56,7 @@ VAE\_lr\_scheduler        | Type of LR scheduling: "none", "reduce\_on\_plateau"
 VAE\_max\_lr              | Only one-cycle scheduler: Maximum learning rate. Defaults to $10 \cdot$ VAE\_lr
 VAE\_lr\_decay\_epochs    | Only step scheduler: decay interval in epochs
 VAE\_lr\_decay\_factor    | Only step scheduler: decay factor
-weight\_decay             | L2 weight decay
+VAE\_weight\_decay             | L2 weight decay
 VAE\_batch\_size          | Batch size
 VAE\_n\_epochs            | Number of training epochs
 VAE\_save\_interval       | Interval in epochs for saving (plotting and (temporary) model checkpoint)
