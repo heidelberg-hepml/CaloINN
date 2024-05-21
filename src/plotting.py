@@ -748,7 +748,6 @@ def plot_all_hist_old(x_true, c_true, x_fake, c_fake, params, layer_boundaries, 
     
     def get_args_for_plotting(params, plot_dir):
         """Returns a args element for the plotting"""
-        # TODO: Needs update for dataset 2 & 3
         
         parser_replacement = {"dataset" : params["particle_type"] + "s",
                             "output_dir" : plot_dir,

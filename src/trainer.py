@@ -138,8 +138,8 @@ class VAETrainer:
         if self.params.get("VAE_lr_scheduler", None) == "step":
             self.scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optim,
-                step_size = self.params["lr_decay_epochs"],
-                gamma = self.params["lr_decay_factor"],
+                step_size = self.params["VAE_lr_decay_epochs"],
+                gamma = self.params["VAE_lr_decay_factor"],
             )
         elif self.params.get("VAE_lr_scheduler", None) == "reduce_on_plateau":
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -960,7 +960,7 @@ class ECAETrainer:
             self.model.params_trainable,
             lr = params.get("lr", 0.0002),
             betas = params.get("betas", [0.9, 0.999]),
-            eps = params.get("eps", 1e-6),
+            eps = 1e-6,
             weight_decay = params.get("weight_decay", 0.)
         )
 
