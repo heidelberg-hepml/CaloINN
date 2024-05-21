@@ -4,8 +4,6 @@ INN for Calorimeter Shower Generation
 Mainly developed by Thorsten Buss,
 repo forked from ThorstenBuss/caloinn.
 
-test
-
 ## Usage
 
 Running a training:
