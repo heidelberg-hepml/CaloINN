@@ -457,13 +457,19 @@ class LogitTransformationVAE:
 
 
 class LearnableNorm(nn.Module):
-    def __init__(self, num_features):
+    def __init__(self, num_features, trainable=True, initial_scale=None, initial_bias=None):
         super(LearnableNorm, self).__init__()
         
         num_features = num_features[0][0]
         
-        self.scale = nn.Parameter(torch.ones(num_features))
-        self.bias = nn.Parameter(torch.zeros(num_features))
+        if initial_scale is None:
+            initial_scale = torch.ones(num_features)
+            
+        if initial_bias is None:
+            initial_bias = torch.zeros(num_features)
+        
+        self.scale = nn.Parameter(initial_scale, requires_grad=trainable)
+        self.bias = nn.Parameter(initial_bias, requires_grad=trainable)
 
     def forward(self, x, rev=False):
         if rev:
@@ -472,29 +478,29 @@ class LearnableNorm(nn.Module):
             return [(x[0] * self.scale[:x[0].shape[1]] + self.bias[:x[0].shape[1]],)]
 
 
-class NormTrafo(nn.Module):
-    def __init__(self, inp_dim, M, b) -> None:
+# class NormTrafo(nn.Module):
+#     def __init__(self, inp_dim, M, b) -> None:
         
-        super().__init__()
-        print("Initializing norm trafo")
-        self.M = M
-        self.b = b
+#         super().__init__()
+#         print("Initializing norm trafo")
+#         self.M = M
+#         self.b = b
         
-        inp_dim = inp_dim[0][0]
+#         inp_dim = inp_dim[0][0]
         
-    def forward(self, x, rev=False):
+#     def forward(self, x, rev=False):
                     
-        if x[0].device != self.M.device:
-            self.M = self.M.to(x[0].device)
-            self.b = self.b.to(x[0].device)
+#         if x[0].device != self.M.device:
+#             self.M = self.M.to(x[0].device)
+#             self.b = self.b.to(x[0].device)
         
-        if not rev:
-            z = x[0] * self.M + self.b
+#         if not rev:
+#             z = x[0] * self.M + self.b
             
-        else:
-            z = (x[0] - self.b) / self.M
+#         else:
+#             z = (x[0] - self.b) / self.M
             
-        return [(z, )]
+#         return [(z, )]
  
 
 class CVAE(nn.Module):
@@ -605,31 +611,18 @@ class CVAE(nn.Module):
         
         
         if self.learnable_norm:
+            # Just learn the parameters of the affine transformation
             self.norm_x_in = LearnableNorm([(data.shape[1], )])
             self.norm_x_out = self.norm_x_in
-            return
         
-
-        # Calculate the normalization parameters only once, during the initialization
-        self.norm_m_x = 1 / std
-        self.norm_b_x = - mean/std
-        
-        # Input tranfo
-        self.norm_x_in = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
-  
-        # Find out the slicing boundaries for the norm matrices in the output:
-        # (True layer energies and e_inc are removed before the first contact with the norm trafo)
-        
-        number_of_layers = self.num_detector_layers
-        n_extra_dims = cond[..., 1:number_of_layers+1].shape[1]
-        n_further_conds = cond[..., number_of_layers+2: -number_of_layers].shape[1]       
-        print(f"Found {n_further_conds} unusual additional conditions during the VAE initialization")
-        
-        
-        # The decoder does not predict the incident energy, the extra dimensions and possible further conditions
-        cut = n_further_conds+n_extra_dims+1
+        else:
+            # Calculate the normalization parameters only once, during the initialization
+            initial_scale = 1 / std
+            initial_bias = - mean/std
             
-        self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut])
+            self.norm_x_in = LearnableNorm([(data.shape[1], )], trainable=False, initial_scale=initial_scale, initial_bias=initial_bias)
+        
+        return
     
     def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
         """Computes the smearing matrix that is used in the loss to make neighboring voxels get similar gradients
@@ -931,16 +924,13 @@ class CVAE(nn.Module):
 
         # Data BCE loss
         reco_loss_data = self.gamma * 0.5*torch.nn.functional.binary_cross_entropy(x_reco_0_1, x_0_1, reduction="mean")
-        
-        # TODO: Should remove log_c completely
-        log_c = torch.tensor(0.0, device=x.device)
-        
+                
 
         # KL loss
         KLD = self.beta*torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), axis=1))
 
 
-        return reco_loss_logit + reco_loss_data + KLD + sparsity_loss - log_c, reco_loss_logit, reco_loss_data, KLD, sparsity_loss, log_c
+        return reco_loss_logit + reco_loss_data + KLD + sparsity_loss, reco_loss_logit, reco_loss_data, KLD, sparsity_loss
 
 
 # Building block for the Kernel-VAE

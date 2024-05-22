@@ -120,8 +120,8 @@ class VAETrainer:
         sys.stdout.flush()
         
         # Needed for documentation (printing & plotting)
-        self.losses_train = {'mse': [], 'mse_logit': [],'kl': [], 'sparsity': [], 'log_c': [], 'total': []}
-        self.losses_test = {'mse': [], 'mse_logit': [], 'kl': [], 'sparsity': [], 'log_c': [], 'total': []}
+        self.losses_train = {'bce': [], 'mae_logit': [], 'kl': [], 'sparsity': [], 'total': []}
+        self.losses_test = {'bce': [], 'mae_logit': [], 'kl': [], 'sparsity': [], 'total': []}
         self.learning_rates = []
         self.max_grad = []
         
@@ -166,13 +166,13 @@ class VAETrainer:
             self.epoch = epoch
             
             # Do training and validation for the current epoch
-            max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss = self.__train_one_epoch()
-            test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss = self.__do_validation()
+            max_grad, train_loss, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss = self.__train_one_epoch()
+            test_loss, test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss = self.__do_validation()
             
                 
             # Print the data saved for documentation
-            self.print_losses(epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss,
-                              test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss, test_loss, max_grad)
+            self.print_losses(epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss,
+                              test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss, test_loss, max_grad)
             
             # Plot the losses as well
             if epoch >= 1:
@@ -193,11 +193,10 @@ class VAETrainer:
         """
         # Initialize the loss values for the documentation
         train_loss = 0
-        train_mse_loss = 0
-        train_mse_loss_logit = 0
+        train_bce_loss = 0
+        train_logit_loss = 0
         train_kl_loss = 0
         train_sparsity_loss = 0
-        train_log_c_loss = 0
         max_grad = 0.0
 
         # Set model to training mode
@@ -218,7 +217,7 @@ class VAETrainer:
             self.optim.zero_grad()
             
             # Get the reconstruction loss
-            loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
+            loss, logit_loss, bce_loss, kl_loss, sparsity_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
             # Calculate the gradients
             loss.backward()
@@ -227,19 +226,17 @@ class VAETrainer:
             self.optim.step()
 
             # Save the losses for documentation
-            self.losses_train['mse'].append(mse_loss.item())
-            self.losses_train['mse_logit'].append(mse_loss_logit.item())
+            self.losses_train['bce'].append(bce_loss.item())
+            self.losses_train['mae_logit'].append(logit_loss.item())
             self.losses_train['total'].append(loss.item())
             self.losses_train['kl'].append(kl_loss.item())
             self.losses_train['sparsity'].append(sparsity_loss.item())
-            self.losses_train['log_c'].append(log_c_loss.item())
             
             train_loss += loss.item()*len(x)
-            train_mse_loss += mse_loss.item()*len(x)
-            train_mse_loss_logit += mse_loss_logit.item()*len(x)
+            train_bce_loss += bce_loss.item()*len(x)
+            train_logit_loss += logit_loss.item()*len(x)
             train_kl_loss += kl_loss.item()*len(x)
             train_sparsity_loss += sparsity_loss.item()*len(x)
-            train_log_c_loss += log_c_loss.item()*len(x)
             
             # Save the LR if a scheduler is used
             if self.scheduler is not None:
@@ -255,14 +252,13 @@ class VAETrainer:
                 
         # Normalize the losses to the dataset length and return them.
         # We need a different normalization here compared to the plotting because we summed over the whole epoch!
-        train_mse_loss /= len(self.train_loader.data)
-        train_mse_loss_logit /= len(self.train_loader.data)
+        train_bce_loss /= len(self.train_loader.data)
+        train_logit_loss /= len(self.train_loader.data)
         train_kl_loss /= len(self.train_loader.data)
         train_sparsity_loss /= len(self.train_loader.data)
         train_loss /= len(self.train_loader.data)
-        train_log_c_loss /= len(self.train_loader.data)         
 
-        return max_grad, train_loss, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss
+        return max_grad, train_loss, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss
                        
     def __do_validation(self):
         """Evaluates the model on the test set.
@@ -270,11 +266,10 @@ class VAETrainer:
         """
         # Initialize the loss values for the documentation
         test_loss = 0
-        test_mse_loss = 0
-        test_mse_loss_logit = 0
+        test_bce_loss = 0
+        test_logit_loss = 0
         test_kl_loss = 0
         test_sparsity_loss = 0
-        test_log_c_loss = 0
         
         # Evaluate the model on the test dataset and save the losses
         self.model.eval()
@@ -286,33 +281,29 @@ class VAETrainer:
                     c = c.to(self.device)
                 
                 # Get the reconstruction loss
-                loss, mse_loss_logit, mse_loss, kl_loss, sparsity_loss, log_c_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
+                loss, logit_loss, bce_loss, kl_loss, sparsity_loss  = self.model.reco_loss(x, c, zero_logit=self.params.get("VAE_zero_logit", True))
                 
                 # Save the losses
                 test_loss += loss.item() * len(x)
-                test_mse_loss += mse_loss.item() * len(x)
-                test_mse_loss_logit += mse_loss_logit.item() * len(x)
+                test_bce_loss += bce_loss.item() * len(x)
+                test_logit_loss += logit_loss.item() * len(x)
                 test_kl_loss += kl_loss.item() * len(x)
-                test_sparsity_loss += sparsity_loss.item() * len(x)
-                test_log_c_loss += log_c_loss.item() * len(x)
-                
+                test_sparsity_loss += sparsity_loss.item() * len(x)                
         
         # Normalize the losses for printing and plotting and store them also in the corresponding dict
-        test_mse_loss /= len(self.test_loader.data)
-        test_mse_loss_logit /= len(self.test_loader.data)
+        test_bce_loss /= len(self.test_loader.data)
+        test_logit_loss /= len(self.test_loader.data)
         test_loss /= len(self.test_loader.data)
         test_kl_loss /= len(self.test_loader.data)
         test_sparsity_loss /= len(self.test_loader.data)
-        test_log_c_loss /= len(self.test_loader.data)
                
-        self.losses_test['mse'].append(test_mse_loss)
-        self.losses_test['mse_logit'].append(test_mse_loss_logit)
+        self.losses_test['bce'].append(test_bce_loss)
+        self.losses_test['mae_logit'].append(test_logit_loss)
         self.losses_test['total'].append(test_loss)
         self.losses_test['kl'].append(test_kl_loss)
         self.losses_test['sparsity'].append(test_sparsity_loss)
-        self.losses_test['log_c'].append(test_log_c_loss)
 
-        return test_loss, test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss
+        return test_loss, test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss
 
     def get_reco(self, data, cond, batch_size=10000):
         
@@ -396,11 +387,10 @@ class VAETrainer:
     def plot_losses(self):
         # Plot the losses
         plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
-        plotting.plot_loss(self.doc.get_file('loss_mse_data.pdf'), self.losses_train['mse'], self.losses_test['mse'])
-        plotting.plot_loss(self.doc.get_file('loss_mse_logit.pdf'), self.losses_train['mse_logit'], self.losses_test['mse_logit'])
+        plotting.plot_loss(self.doc.get_file('loss_bce.pdf'), self.losses_train['bce'], self.losses_test['bce'])
+        plotting.plot_loss(self.doc.get_file('loss_logit.pdf'), self.losses_train['mae_logit'], self.losses_test['mae_logit'])
         plotting.plot_loss(self.doc.get_file('loss_kl.pdf'), self.losses_train['kl'], self.losses_test['kl'])
         plotting.plot_loss(self.doc.get_file('loss_sparsity.pdf'), self.losses_train['sparsity'], self.losses_test['sparsity'])
-        plotting.plot_loss(self.doc.get_file('loss_log_c.pdf'), self.losses_train['log_c'], self.losses_test['log_c'])
         
         # Plot the learning rate (if we use a scheduler)
         if self.scheduler is not None:
@@ -409,23 +399,21 @@ class VAETrainer:
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
 
-    def print_losses(self, epoch, train_mse_loss, train_mse_loss_logit, train_kl_loss, train_sparsity_loss, train_log_c_loss, train_loss, 
-                     test_mse_loss, test_mse_loss_logit, test_kl_loss, test_sparsity_loss, test_log_c_loss, test_loss, max_grad):
+    def print_losses(self, epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss, 
+                     test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss, test_loss, max_grad):
         print('')
         print(f'=== epoch {epoch} ===')
         
-        print(f'mse data-loss (train): {train_mse_loss}')
-        print(f'mse logit-loss (train): {train_mse_loss_logit}')
+        print(f'bce loss (train): {train_bce_loss}')
+        print(f'logit-loss (train): {train_logit_loss}')
         print(f'kl loss (train): {train_kl_loss}')
         print(f'sparsity loss (train): {train_sparsity_loss}')
-        print(f'log c loss (train): {train_log_c_loss}')
         print(f'total loss (train): {train_loss}')
         
-        print(f'mse data-loss (test): {test_mse_loss}')
-        print(f'mse logit-loss (test): {test_mse_loss_logit}')
+        print(f'bce loss (test): {test_bce_loss}')
+        print(f'logit-loss (test): {test_logit_loss}')
         print(f'kl loss (test): {test_kl_loss}')
         print(f'sparsity loss (test): {test_sparsity_loss}')
-        print(f'log c loss (test): {test_log_c_loss}')
         print(f'total loss (test): {test_loss}')
         
         if self.scheduler is not None:
