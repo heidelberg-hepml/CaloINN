@@ -329,17 +329,6 @@ class VAETrainer:
         mu, logvar = self.model.encode(data, cond)
         mu_logvar = torch.cat((mu, logvar), axis=1)
         return mu_logvar
-    
-    def get_mu(self, data, cond):
-                    
-        mu, logvar = self.model.encode(data, cond)
-        return mu
-        
-    def get_latent(self, data, cond):
-        
-        mu, logvar = self.model.encode(x=data, c=cond)
-        latent = self.model.reparameterize(mu, logvar)
-        return latent
             
     def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
@@ -541,106 +530,47 @@ class ECAETrainer:
         
         batch_size = self.params.get('batch_size')
         
-        if not self.params.get("Resample_by_VAE", False):
                         
-            with torch.no_grad():
-                latent_type = self.params.get("latent_type", "pre_sampling")
-                # Create training and test data:
-                if latent_type == "post_sampling":
-                    data_train = self.vae_trainer.get_latent(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-                    data_test = self.vae_trainer.get_latent(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-                elif latent_type == "pre_sampling":
-                    data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-                    data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-                # MAP approach
-                elif latent_type == "only_means":
-                    data_train = self.vae_trainer.get_mu(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-                    data_test = self.vae_trainer.get_mu(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-                else:
-                    raise KeyError("Don't know this latent type")
-            
-            # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-            
-            extra_dims_train = self.vae_trainer.train_loader.cond[:, 1:-n]
-            extra_dims_test = self.vae_trainer.test_loader.cond[:, 1:-n]
-            
-            self.logit_trafo_in = self.vae_trainer.model.logit_trafo_in
-            self.logit_trafo_out = self.vae_trainer.model.logit_trafo_out
-
-            extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
-            extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
-            
-            
-            
-            data_train = np.append(data_train, extra_dims_logit_train , axis=1)
-            data_test = np.append(data_test, extra_dims_logit_test, axis=1)
-            
-            # Create the conditioning data (Only the incident energy)
-            cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
-            cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
-            
-            device = self.device
-            
-            
-            
-            # Put into the dataloader
-            data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-            cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
-
-            data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-            cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-            
-            # Create the dataloaders
-            loader_train = MyDataLoader(data_train, cond_train, batch_size)
-            loader_test = MyDataLoader(data_test, cond_test, batch_size)
-            
-            # Put VAE model back on the right device
-            self.vae_trainer.model.to(self.device)
-            
-            return loader_train, loader_test
+        with torch.no_grad():
+            data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
+            data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
         
-        else:
-            
-            assert self.params.get("latent_type", "pre_sampling") == "post_sampling", "If Resample_by_VAE is used, we need to sample => post_sampling must be true!"
-            
-            with torch.no_grad():
-                # Create training and test data:
-                data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-                data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
+        # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
+        extra_dims_train = self.vae_trainer.train_loader.cond[:, 1:-n]
+        extra_dims_test = self.vae_trainer.test_loader.cond[:, 1:-n]
+        
+        self.logit_trafo_in = self.vae_trainer.model.logit_trafo_in
+        self.logit_trafo_out = self.vae_trainer.model.logit_trafo_out
 
-            # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-            data_train = np.append(data_train, self.vae_trainer.train_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
-            data_test = np.append(data_test, self.vae_trainer.test_loader.cond[:, 1:-n].cpu().numpy(), axis=1)
-            
-            # Create the conditioning data (Only the incident energy)
-            cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
-            cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
-            
-            # if self.dataset == 3:
-            #     device="cpu"
-            # else:
-            device = self.device
-            
-            # Put into the dataloader
-            data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-            cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
+        extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
+        extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
+        
+        
+        
+        data_train = np.append(data_train, extra_dims_logit_train , axis=1)
+        data_test = np.append(data_test, extra_dims_logit_test, axis=1)
+        
+        # Create the conditioning data (Only the incident energy)
+        cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
+        cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
+        
+        device = self.device        
+        
+        # Put into the dataloader
+        data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
+        cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
 
-            data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-            cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-            
-            # Create the dataloaders
-            loader_train = MyDataLoader(data_train, cond_train, batch_size)
-            loader_test = MyDataLoader(data_test, cond_test, batch_size)
-            
-            
-            loader_train.activate_vae_resampling()
-            loader_test.activate_vae_resampling()
-            
-            # Put VAE model back on the right device
-            self.vae_trainer.model.to(self.device)
-            
-            
-            return loader_train, loader_test       
+        data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
+        cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
+        
+        # Create the dataloaders
+        loader_train = MyDataLoader(data_train, cond_train, batch_size)
+        loader_test = MyDataLoader(data_test, cond_test, batch_size)
+        
+        # Put VAE model back on the right device
+        self.vae_trainer.model.to(self.device)
+        
+        return loader_train, loader_test  
                
     def train(self):
         """ Trains the model. """
@@ -1098,9 +1028,6 @@ class ECAETrainer:
                 energy_values = energy_values[[einc_index]]
                 probabilities = probabilities[[einc_index]]
                 
-                
-            
-            
 
         with torch.no_grad():
             
@@ -1172,16 +1099,10 @@ class ECAETrainer:
             # For the INN the energy dimensions are part of the training set.
             # For the VAE they are part of the conditioning. So we have to slice them off and
             # append them to the existing E_inc condition.
-            
-            # Furthermore, we might have to split into mu and sigma parts if we are in this space
-            latent_type = self.params.get("latent_type", "pre_sampling")
-            
-            if (latent_type == "post_sampling") or (latent_type == "only_means"):
-                samples_latent = samples_latent[:, :-self.num_detector_layers]
-            elif latent_type == "pre_sampling":
-                latent_dim = self.vae_trainer.model.latent_dim
-                mu = samples_latent[:, :latent_dim]
-                logvar = samples_latent[:, latent_dim:-self.num_detector_layers]
+
+            latent_dim = self.vae_trainer.model.latent_dim
+            mu = samples_latent[:, :latent_dim]
+            logvar = samples_latent[:, latent_dim:-self.num_detector_layers]
             
             extra_dims = self.logit_trafo_out(samples_latent[:, -self.num_detector_layers:])/0.9
             
@@ -1196,15 +1117,12 @@ class ECAETrainer:
                 
                 condition_l = condition[start:stop].to(self.device)
                 
-                # Do the reparametrization if needed
-                if (latent_type == "post_sampling") or (latent_type == "only_means"):
-                    reparametrized_samples_latent_l = samples_latent[start:stop].to(self.device)
-                elif latent_type == "pre_sampling":
-                    mu_l = mu[start:stop].to(self.device)
-                    logvar_l = logvar[start:stop].to(self.device)
-                    reparametrized_samples_latent_l = self.vae_trainer.model.reparameterize(mu_l, logvar_l)
+                # Do the reparameterization
+                mu_l = mu[start:stop].to(self.device)
+                logvar_l = logvar[start:stop].to(self.device)
+                reparametrized_samples_latent_l = self.vae_trainer.model.reparameterize(mu_l, logvar_l)
                     
-                # Samples using the VAE
+                # Fill samples using the VAE
                 samples[start:stop] = self.vae_trainer.model.decode(latent=reparametrized_samples_latent_l, c=condition_l).cpu()
 
             return  samples, condition
