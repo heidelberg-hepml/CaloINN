@@ -8,7 +8,6 @@ import torch
 import data_util
 from model import CINN, CVAE, KernelVAE
 import plotting
-from plotter import Plotter
 
 from documenter import Documenter
 
@@ -71,7 +70,6 @@ class VAETrainer:
                             eps = params.get("eps", 1.e-10),
                             smearing_self=params.get("VAE_smearing_self", 1.0),
                             smearing_share=params.get("VAE_smearing_share", 0),
-                            einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
                             threshold=params.get("VAE_internal_threshold", False), 
                             sparsity_loss=params.get("sparsity_loss", None), 
                             learnable_norm=params.get("VAE_learnable_norm", False),
@@ -94,7 +92,6 @@ class VAETrainer:
                           eps = params.get("eps", 1.e-10),
                           smearing_self=params.get("VAE_smearing_self", 1.0),
                           smearing_share=params.get("VAE_smearing_share", 0),
-                          einc_preprocessing=params.get("VAE_einc_preprocessing", "logit"),
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
                           learnable_norm=params.get("VAE_learnable_norm", False),

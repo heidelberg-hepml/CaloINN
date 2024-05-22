@@ -495,16 +495,12 @@ class NormTrafo(nn.Module):
             z = (x[0] - self.b) / self.M
             
         return [(z, )]
-    
-
-    # def __call__(self, x, rev=False):
-    #     return self.forward(x, rev)
  
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector,
                  particle_type="photon",dataset=1, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
-                 eps=1.e-10, smearing_self=1.0, smearing_share=0.0, einc_preprocessing="logit",
+                 eps=1.e-10, smearing_self=1.0, smearing_share=0.0,
                  threshold=None, sparsity_loss=None, learnable_norm=False):
         
         super(CVAE, self).__init__()
@@ -513,7 +509,6 @@ class CVAE(nn.Module):
         assert len(input.shape) == 2
         assert len(cond.shape) == 2
         assert cond.shape[0] == input.shape[0]
-        assert einc_preprocessing in ["logit", "hot_one"]
         
         input_dim = input.shape[1]
         cond_dim = cond.shape[1]
@@ -548,11 +543,6 @@ class CVAE(nn.Module):
         # Save the latent dimension
         self.latent_dim = latent_dim
         
-        # Save the einc preprocessing type
-        self.einc_preprocessing = einc_preprocessing
-        if einc_preprocessing == "hot_one":
-            self.incident_energies = torch.unique(cond[..., 0])
-        
         # Create a logit preprocessing
         self.logit_trafo_in = LogitTransformationVAE(alpha=alpha)
         
@@ -581,10 +571,6 @@ class CVAE(nn.Module):
         
         # Add the layers to the encoder
         in_size = input_dim + (cond_dim-self.num_detector_layers) # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set! (Also: Redundant)
-        
-        # Increase input dim if we use a hot one encoding
-        if self.einc_preprocessing == "hot_one":
-            in_size = in_size + len(self.incident_energies) - 1
             
         for i, hidden_size in enumerate(hidden_sizes):
             self.encoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
@@ -594,11 +580,6 @@ class CVAE(nn.Module):
     
         # add the layers to the decoder
         in_size = latent_dim + (cond_dim-self.num_detector_layers) # We do not pass the actual layer energies. They cannot be normalized consistently using only the training set! (Also: Redundant)
-
-        
-        # Increase input dim if we use a hot one encoding
-        if self.einc_preprocessing == "hot_one":
-            in_size = in_size + len(self.incident_energies) - 1
             
         for i, hidden_size in enumerate(reversed(hidden_sizes)):
             self.decoder.add_module(f"fc{i}", nn.Linear(in_size, hidden_size))
@@ -641,17 +622,14 @@ class CVAE(nn.Module):
         
         number_of_layers = self.num_detector_layers
         n_extra_dims = cond[..., 1:number_of_layers+1].shape[1]
-        n_furhter_conds = cond[..., number_of_layers+2: -number_of_layers].shape[1]       
-        print(f"Found {n_furhter_conds} unusual additional conditions during the VAE initialization")
+        n_further_conds = cond[..., number_of_layers+2: -number_of_layers].shape[1]       
+        print(f"Found {n_further_conds} unusual additional conditions during the VAE initialization")
         
         
-        # The decoder does not predict the extra dimensions and possible further conditions
-        cut = n_furhter_conds+n_extra_dims
+        # The decoder does not predict the incident energy, the extra dimensions and possible further conditions
+        cut = n_further_conds+n_extra_dims+1
             
-        if cut != 0:
-            self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut])
-        else:
-            self.norm_x_out = NormTrafo([(data.shape[1], )], M=self.norm_m_x, b=self.norm_b_x)
+        self.norm_x_out = NormTrafo([(data.shape[1]-cut, )], M=self.norm_m_x[:-cut], b=self.norm_b_x[:-cut])
     
     def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
         """Computes the smearing matrix that is used in the loss to make neighboring voxels get similar gradients
@@ -770,50 +748,30 @@ class CVAE(nn.Module):
         initialization of the normalization to zero mean and unit variance"""
         
 
-        # Add no noise -> Reuse layer energies
-        x_noise = x
-        x_noise = data_util.normalize_layers(x_noise, self.layer_boundaries, c=c, eps=self.eps)
+        # Normalize each calo layer to an energy of 1
+        x_0_1 = data_util.normalize_layers(x, self.layer_boundaries, c=c, eps=self.eps)
         
         # Needed to ensure numerical stability
-        x_noise = x_noise*0.9
+        x_0_1 = x_0_1*0.9
             
         # append all extra energy dimensions (the u variables) & Possible other needed conditions
         # We add einc after the normalization since it would results in nans for a single slice, otherwise
         
         # max_cond is not moved with .to() since it is not a parameter
-        if self.max_cond.device != x_noise.device:
-            self.max_cond = self.max_cond.to(x_noise.device)
-            if self.einc_preprocessing == "hot_one":
-                self.incident_energies = self.incident_energies.to(x_noise.device)
+        if self.max_cond.device != x_0_1.device:
+            self.max_cond = self.max_cond.to(x.device)
                     
-        x_noise = torch.cat((x_noise, (c/self.max_cond)[:, 1:-self.num_detector_layers]), axis=1)
+        y_0_1 = torch.cat((x_0_1, (c/self.max_cond)[:, 0:-self.num_detector_layers]), axis=1)
             
         # Go to logit space
-        x_logit_noise = self.logit_trafo_in(x_noise)
+        y_logit = self.logit_trafo_in(y_0_1)
         
         # Needed to initialize the norm transformation
         if without_norm:
-            return x_logit_noise
+            return y_logit
         
         else:
-            x_normed = self.norm_x_in( (x_logit_noise, ), rev=False)[0][0]
-            
-            # Here we append einc just as a logit number
-            if self.einc_preprocessing == "logit":
-                e_inc_logit = self.logit_trafo_in( c[:, [0]] / self.max_cond[:, [0]] )
-                return torch.cat((x_normed, e_inc_logit ), axis=1)
-            
-            # Here we compute a hot one embedding for e inc
-            elif self.einc_preprocessing == "hot_one":
-                
-                # Compute the one hot encoding
-                # append all incident energies to make sure that every index is always the same
-                index_tensor = torch.unique(torch.cat((c[:, 0], self.incident_energies)), sorted=True, return_inverse=True)[1]
-                
-                # Remove the appended list of incident energies
-                hot_one_encoding = torch.nn.functional.one_hot(index_tensor)[:-len(self.incident_energies)]
-                
-                return torch.cat((x_normed, hot_one_encoding), axis=1)
+            return(self.norm_x_in( (y_logit, ), rev=False)[0][0])
             
     def encode(self, x, c):
         """Takes a point in the dataspace and returns a point in the latent space before sampling.
@@ -851,75 +809,50 @@ class CVAE(nn.Module):
         # max_cond is not moved with .to() since it is not a parameter
         if self.max_cond.device != c.device:
             self.max_cond = self.max_cond.to(c.device)
-            if self.einc_preprocessing == "hot_one":
-                self.incident_energies = self.incident_energies.to(c.device)
         
-        # Append the extra dims and possible further conditions
-        c_clipped = torch.clamp((c / self.max_cond)[:, 1:-self.num_detector_layers], min=0, max=1)
-            
-            
-        
-        # Transform cond into logit space and append to latent results
+        # Append the incident energy, the extra dims and possible further conditions
+        c_clipped = torch.clamp((c / self.max_cond)[:, 0:-self.num_detector_layers], min=0, max=1)
+
+        # Transform cond into logit space, apply the norm and append in to latent results
         c_logit = self.logit_trafo_in(c_clipped)
-        latent = torch.cat((latent, c_logit), axis=1)
         
+        # TODO: A norm for the decoder conditions would be a reasonable addition
+        # c_prep = self.norm_c( (c_logit, ), rev=False)[0][0]
+        c_prep = c_logit	
         
-        # Compute the one hot encoding if needed
-        if self.einc_preprocessing == "hot_one":
-            # append all possible incident energies to make sure that every index is always the same
-            index_tensor = torch.unique(torch.cat((c[:, 0], self.incident_energies)), sorted=True, return_inverse=True)[1]
+        latent = torch.cat((latent, c_prep), axis=1)
             
-            # Remove the appended list of incident energies(completely artificial and unneeded)
-            hot_one_encoding = torch.nn.functional.one_hot(index_tensor)[:-len(self.incident_energies)]
-            
-            # Append the correct hot one encoding to the latent space
-            latent = torch.cat((latent, hot_one_encoding), axis=1)
-            
-        # Otherwise append e_inc
-        elif self.einc_preprocessing == "logit":
-            e_inc = torch.clamp( c[:, [0]] / self.max_cond[:, [0]], min=0, max=1 )
-            e_inc_logit = self.logit_trafo_in( e_inc )
-            latent = torch.cat((latent, e_inc_logit ), axis=1)
-            
-                  
         # decode
-        x_recon_logit_noise = self.decoder(latent)
+        x_reco_prep = self.decoder(latent)
         
         if return_directly_after_decoder:
-            return x_recon_logit_noise
-        
-        
+            return x_reco_prep
         
         # Undo normalization step (zero mean, unit variance)
-        x_recon_logit_noise = self.norm_x_out( (x_recon_logit_noise, ), rev=True)[0][0]
+        x_reco_logit = self.norm_x_out( (x_reco_prep, ), rev=True)[0][0]
             
         # Leave the logit space
-        x_recon_noise = self.logit_trafo_out(x_recon_logit_noise)
+        x_reco_0_1 = self.logit_trafo_out(x_reco_logit)
         
-        x_recon_noise[x_recon_noise<0] = 0
-            
-        x_recon_noise = data_util.unnormalize_layers(x_recon_noise, c, self.layer_boundaries, eps=self.eps, noise_width=None)
+        # Remove negative energies
+        x_reco_0_1[x_reco_0_1<0] = 0
         
+        # Revert layer normalization
+        x_reco = data_util.unnormalize_layers(x_reco_0_1, c, self.layer_boundaries, eps=self.eps, noise_width=None)
         
-        # Remove noise by thresholding, if needed
-        x_recon = x_recon_noise
-            
+        # Threshold the data if a threshold was specified
         if self.threshold is not None:
-            x_recon[x_recon < self.threshold] = 0
+            x_reco[x_reco < self.threshold] = 0
             
         else:
-            # Otherwise the norm before the logit in the reco loss might produce wrong results!
-            x_recon[x_recon < 0] = 0
+            # Otherwise the norm before the logit in the reco loss might produce wrong results...
+            x_reco[x_reco < 0] = 0
             
-            
-
-        x_recon_shifted = x_recon
-                    
         if not train:
-            return x_recon_shifted
+            return x_reco
         
         else:
-            return x_recon_shifted, c
+            return x_reco, c
        
     def forward(self, x, c, return_mu_logvar=False):
         """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
@@ -1184,13 +1117,10 @@ class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector,
                  particle_type="photon", dataset=1, alpha=0.000001, beta=0.00001, gamma=1000,
-                 eps=1e-10, smearing_self=1, smearing_share=0, einc_preprocessing="logit", threshold=None,
+                 eps=1e-10, smearing_self=1, smearing_share=0, threshold=None,
                  sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50, learnable_norm=False):
         
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, alpha, beta, gamma, eps, smearing_self, smearing_share, einc_preprocessing, threshold, sparsity_loss, learnable_norm)
-    
-
-        assert einc_preprocessing == "logit", "Only logit preprocessing is supported for the kernel VAE"
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, alpha, beta, gamma, eps, smearing_self, smearing_share, threshold, sparsity_loss, learnable_norm)
 
         self.kernel_size = kernel_size
         self.kernel_stride = kernel_stride
