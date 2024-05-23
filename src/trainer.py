@@ -47,6 +47,8 @@ class VAETrainer:
             shuffle=True,
             dataset=params.get("dataset", 1),)
         
+        self.num_detector_layers = len(self.layer_boundaries) - 1
+        
         data = self.train_loader.data
         cond = self.train_loader.cond
         
@@ -102,6 +104,9 @@ class VAETrainer:
             
         
         self.model = self.model.to(self.device)
+        
+        self.logit_trafo_in = self.model.logit_trafo_in
+        self.logit_trafo_out = self.model.logit_trafo_out
         
         def count_parameters(model):
             return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -324,13 +329,13 @@ class VAETrainer:
         
         return reconstructed
         
-    def get_mu_logvar(self, data, cond):
+    def _get_mu_logvar(self, data, cond):
                     
         mu, logvar = self.model.encode(data, cond)
         mu_logvar = torch.cat((mu, logvar), axis=1)
         return mu_logvar
             
-    def get_latent_loaders(self):
+    def encode_loaders(self):
         
         # Remove VAE model and dataset from the GPU
         self.model.to("cpu")
@@ -347,15 +352,12 @@ class VAETrainer:
         
                         
         with torch.no_grad():
-            data_train = self.get_mu_logvar(self.train_loader.data, self.train_loader.cond).cpu().numpy()
-            data_test = self.get_mu_logvar(self.test_loader.data, self.test_loader.cond).cpu().numpy()
+            data_train = self._get_mu_logvar(self.train_loader.data, self.train_loader.cond).cpu().numpy()
+            data_test = self._get_mu_logvar(self.test_loader.data, self.test_loader.cond).cpu().numpy()
         
         # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
         extra_dims_train = self.train_loader.cond[:, 1:-n]
         extra_dims_test = self.test_loader.cond[:, 1:-n]
-        
-        self.logit_trafo_in = self.model.logit_trafo_in
-        self.logit_trafo_out = self.model.logit_trafo_out
 
         extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
         extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
@@ -386,7 +388,76 @@ class VAETrainer:
         self.model.to(self.device)
         
         return loader_train, loader_test
+
+    def _get_full_cond(self, e_inc, extra_dims):
+        """Recreate the full VAE cond data from the extra dims and the incident energy. Therefore the 
+        layer energies will be calculated from the extra dims and the incident energy."""
+        layer_energies = []
+        
+        e_tot = extra_dims[..., [0]] * e_inc
+        
+        extra_dims_list = []
+        
+        for layer in range(self.num_detector_layers-1):
             
+            if layer == 0:
+                layer_energy = (e_tot) * extra_dims[..., [layer+1]]
+                cumsum_previous_layers = torch.clone(layer_energy)
+            else:
+                layer_energy = (e_tot - cumsum_previous_layers) * extra_dims[..., [layer+1]] 
+                cumsum_previous_layers += layer_energy
+                
+            layer_energies.append(layer_energy)
+            extra_dims_list.append(extra_dims[..., [layer]])
+            
+        layer_energies.append(e_tot - cumsum_previous_layers)
+        extra_dims_list.append(extra_dims[..., [layer+1]])
+        
+        layer_energies = torch.cat([e_inc] + extra_dims_list + layer_energies, axis=1)
+        
+        return layer_energies
+
+    def decode(self, latent, e_inc, batch_size=10000):
+        
+        self.model.eval()
+        
+        with torch.no_grad():
+            
+            # 2) VAE Part
+            
+            # For the INN the energy dimensions are part of the training set.
+            # For the VAE they are part of the conditioning. So we have to slice them off and
+            # append them to the existing E_inc condition.
+
+            latent_dim = self.model.latent_dim
+            num_samples = latent.shape[0]
+            
+            mu = latent[:, :latent_dim]
+            logvar = latent[:, latent_dim:-self.num_detector_layers]
+            
+            # Invert the action from encode_loaders()
+            extra_dims = self.logit_trafo_out(latent[:, -self.num_detector_layers:])/0.9
+                        
+            condition = self._get_full_cond(e_inc=e_inc, extra_dims=extra_dims)
+            
+            # Prepares an "empty" container for the samples
+            samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
+            for batch in range((num_samples+batch_size-1)//batch_size):
+                start = batch_size*batch
+                stop = min(batch_size*(batch+1), num_samples)
+                
+                condition_l = condition[start:stop].to(self.device)
+                
+                # Do the reparameterization
+                mu_l = mu[start:stop].to(self.device)
+                logvar_l = logvar[start:stop].to(self.device)
+                reparametrized_samples_latent_l = self.model.reparameterize(mu_l, logvar_l)
+                    
+                # Fill samples using the VAE
+                samples[start:stop] = self.model.decode(latent=reparametrized_samples_latent_l, c=condition_l).cpu()
+                
+            return samples, condition
+           
     def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
@@ -530,7 +601,7 @@ class ECAETrainer:
         self.epoch_offset = 0
         
         # Save the dataloaders ("test" should rather be called validation...)
-        self.train_loader, self.test_loader = self.vae_trainer.get_latent_loaders()
+        self.train_loader, self.test_loader = self.vae_trainer.encode_loaders()
         
         # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
@@ -958,33 +1029,70 @@ class ECAETrainer:
         self.optim.load_state_dict(state_dicts["opt"])
         self.model.to(self.device)
 
-    def generate_expanded_cond(self, e_inc, extra_dims):
-        
-        layer_energies = []
-        
-        e_tot = extra_dims[..., [0]] * e_inc
-        
-        extra_dims_list = []
-        
-        for layer in range(self.num_detector_layers-1):
-            
-            if layer == 0:
-                layer_energy = (e_tot) * extra_dims[..., [layer+1]]
-                cumsum_previous_layers = torch.clone(layer_energy)
-            else:
-                layer_energy = (e_tot - cumsum_previous_layers) * extra_dims[..., [layer+1]] 
-                cumsum_previous_layers += layer_energy
-                
-            layer_energies.append(layer_energy)
-            extra_dims_list.append(extra_dims[..., [layer]])
-            
-        layer_energies.append(e_tot - cumsum_previous_layers)
-        extra_dims_list.append(extra_dims[..., [layer+1]])
-        
-        layer_energies = torch.cat([e_inc] + extra_dims_list + layer_energies, axis=1)
-        
-        return layer_energies
+    def _get_incident_energies(self, num_samples):             
 
+        particle_type = self.params["particle_type"]
+        
+        # Pions and photons have discrete energies         
+        if particle_type == "photon" or particle_type == "pion":
+
+            if particle_type == "pion": # 120800 samples
+                energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  9800,  5000,  3000,  2000,  1000]
+            elif particle_type == "photon": # 121000 samples
+                energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  5000,  3000,  2000,  1000]
+                
+            
+            energy_values = torch.tensor([
+                2.560000e-03, 5.120000e-03, 1.024000e-02, 2.048000e-02,
+                4.096000e-02, 8.192000e-02, 1.638400e-01, 3.276800e-01,
+                6.553600e-01, 1.310720e+00, 2.621440e+00, 5.242880e+00,
+                1.048576e+01, 2.097152e+01, 4.194304e+01])
+            
+            # Use exact energy distribution if possible
+            if num_samples == np.sum(energy_numbers):                    
+                energies = np.array([])
+                for energy_value, energy_number in zip(energy_values, energy_numbers):
+                    energies = np.append(energies, np.ones(energy_number)*energy_value.item())
+                energies = torch.tensor(energies, dtype=torch.get_default_dtype()).unsqueeze(-1)
+            
+            # Use multinomial sampling if exact dist cannot be taken
+            else:
+                probabilities = torch.tensor(energy_numbers) / np.sum(energy_numbers)
+                dist = torch.distributions.Categorical(probabilities)
+                energies = energy_values[dist.sample((num_samples,1))]
+        
+        # Else scale the energies uniformly in the logspace
+        elif particle_type == "electron":
+            energies = torch.tensor(10**(np.random.rand(num_samples, 1)*3 - 2), dtype=torch.get_default_dtype())
+            print("Sampling uniformly in the logspace between 1.e-2 and 1.e1")
+            
+        else:
+            raise ValueError("Unknown particle type!")
+        
+        assert energies.shape[0] == num_samples
+        return energies
+    
+    def _sample_INN(self, energies, batch_size = 10000):     
+        self.model.eval() 
+        
+        with torch.no_grad():
+            
+            num_samples = len(energies)
+            
+            # Prepares an "empty" container for the samples
+            samples_INN = torch.zeros((num_samples,1,self.num_dim))
+            
+            # Generate the data in batches according to batch_size
+            for batch in range((num_samples+batch_size-1)//batch_size):
+                    start = batch_size*batch
+                    stop = min(batch_size*(batch+1), num_samples)
+                    energies_l = energies[start:stop].to(self.device)
+                    samples_INN[start:stop] = self.model.sample(1, energies_l).cpu()
+                    
+            samples_INN = samples_INN[:,0,...]
+            
+            return samples_INN
+     
     def generate(self, num_samples, batch_size = 10000, return_in_training_space=False):
         """
             generate new data using the modle and storing them to a file in the run folder.
@@ -993,141 +1101,17 @@ class ECAETrainer:
             num_samples (int): Number of samples to generate
             batch_size (int): Batch size for samlpling
         """     
-        # TODO: Won't work if we use high level features as conditions in the VAE!
-                
-        self.model.eval()
-        self.vae_trainer.model.eval()
         
-        # Old version that was only working for the photons dataset
-        # energy_values = torch.tensor([
-        #     2.560000e-03, 5.120000e-03, 1.024000e-02, 2.048000e-02,
-        #     4.096000e-02, 8.192000e-02, 1.638400e-01, 3.276800e-01,
-        #     6.553600e-01, 1.310720e+00, 2.621440e+00, 5.242880e+00,
-        #     1.048576e+01, 2.097152e+01, 4.194304e+01])
+        energies = self._get_incident_energies(num_samples)           
+            
+        # 1) INN Part
+        samples_INN = self._sample_INN(energies, batch_size)
         
-        # probabilities = torch.tensor([
-        #     0.08264463, 0.08264463, 0.08264463, 0.08264463, 0.08264463,
-        #     0.08264463, 0.08264463, 0.08264463, 0.08264463, 0.08264463,
-        #     0.08264463, 0.04132231, 0.02479339, 0.01652893, 0.00826446])
+        if return_in_training_space:
+            return samples_INN
         
-        # e_inc_index = self.params.get("e_inc_index", None)
-        # if e_inc_index is not None:
-        #     energy_values = energy_values[[e_inc_index]]
-        #     probabilities = torch.tensor([1])
-        
-        eincs = self.train_loader.cond.cpu()
-        
-        energy_values = torch.unique(eincs, return_counts=True)[0]
-        
-        probabilities = torch.unique(eincs, return_counts=True)[1] /\
-            torch.sum(torch.unique(eincs, return_counts=True)[1])
-            
-        einc_index = self.params.get("e_inc_index", None) 
-        if einc_index is not None:
-            if len(energy_values) > 1:
-                energy_values = energy_values[[einc_index]]
-                probabilities = probabilities[[einc_index]]
-                
-
-        with torch.no_grad():
-            
-            # Check if the input data seems to be discrete           
-            if len(energy_values) < 100:
-
-                
-                if self.params["particle_type"] == "pion": # 120800 samples
-                    energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  9800,  5000,  3000,  2000,  1000]
-                elif self.params["particle_type"] == "photon": # 121000 samples
-                    energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  5000,  3000,  2000,  1000]
-                else:
-                    raise ValueError("Unknown particle type!")
-                    
-                
-                energy_values = torch.tensor([
-                    2.560000e-03, 5.120000e-03, 1.024000e-02, 2.048000e-02,
-                    4.096000e-02, 8.192000e-02, 1.638400e-01, 3.276800e-01,
-                    6.553600e-01, 1.310720e+00, 2.621440e+00, 5.242880e+00,
-                    1.048576e+01, 2.097152e+01, 4.194304e+01])
-                
-
-                einc_index = self.params.get("e_inc_index", None) 
-
-                # Use exact energy list if possible
-                if num_samples == np.sum(energy_numbers) and einc_index is None:                    
-                    energies = np.array([])
-                    for energy_value, energy_number in zip(energy_values, energy_numbers):
-                        energies = np.append(energies, np.ones(energy_number)*energy_value.item())
-                        
-                    energies = torch.tensor(energies, dtype=torch.get_default_dtype()).unsqueeze(-1)
-                
-                # Use multinomial sampling -> any sample size possible
-                else:
-                    probabilities = torch.tensor(energy_numbers) / np.sum(energy_numbers)
-                    
-                    if einc_index is not None:
-                        if len(energy_values) > 1:
-                            energy_values = energy_values[[einc_index]]
-                            probabilities = probabilities[[einc_index]]
-                    
-                    dist = torch.distributions.Categorical(probabilities)
-                    energies = energy_values[dist.sample((num_samples,1))]
-            
-            # Else scale the energies uniformly in the logspace
-            else:
-                energies = torch.tensor(10**(np.random.rand(num_samples, 1)*3 - 2), dtype=torch.get_default_dtype())
-                print("Sampling uniformly in the logspace between 1.e-2 and 1.e1")
-            
-            # 1) INN Part
-            # Prepares an "empty" container for the latent samples
-            samples_latent = torch.zeros((num_samples,1,self.num_dim))
-            
-            # Generate the data in batches according to batch_size
-            for batch in range((num_samples+batch_size-1)//batch_size):
-                    start = batch_size*batch
-                    stop = min(batch_size*(batch+1), num_samples)
-                    energies_l = energies[start:stop].to(self.device)
-                    samples_latent[start:stop] = self.model.sample(1, energies_l).cpu()
-                    
-            samples_latent = samples_latent[:,0,...]
-            
-            if return_in_training_space:
-                return samples_latent
-            
-
-            # 2) VAE Part
-            
-            # For the INN the energy dimensions are part of the training set.
-            # For the VAE they are part of the conditioning. So we have to slice them off and
-            # append them to the existing E_inc condition.
-
-            latent_dim = self.vae_trainer.model.latent_dim
-            mu = samples_latent[:, :latent_dim]
-            logvar = samples_latent[:, latent_dim:-self.num_detector_layers]
-            
-            
-            # TODO: Logit_trafo out removed
-            extra_dims = self.logit_trafo_out(samples_latent[:, -self.num_detector_layers:])/0.9
-            
-            
-            condition = self.generate_expanded_cond(e_inc=energies, extra_dims=extra_dims)
-            
-            # Prepares an "empty" container for the samples
-            samples = torch.zeros((num_samples,self.vae_trainer.train_loader.data.shape[1]))
-            for batch in range((num_samples+batch_size-1)//batch_size):
-                start = batch_size*batch
-                stop = min(batch_size*(batch+1), num_samples)
-                
-                condition_l = condition[start:stop].to(self.device)
-                
-                # Do the reparameterization
-                mu_l = mu[start:stop].to(self.device)
-                logvar_l = logvar[start:stop].to(self.device)
-                reparametrized_samples_latent_l = self.vae_trainer.model.reparameterize(mu_l, logvar_l)
-                    
-                # Fill samples using the VAE
-                samples[start:stop] = self.vae_trainer.model.decode(latent=reparametrized_samples_latent_l, c=condition_l).cpu()
-
-            return  samples, condition
+        # 2) VAE Part
+        return self.vae_trainer.decode(samples_INN, energies, batch_size)
 
     def latent_samples(self, epoch=None):
         """
