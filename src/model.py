@@ -1,4 +1,6 @@
 import math
+from operator import le
+import re
 import numpy as np
 import data_util
 
@@ -20,8 +22,8 @@ from copy import deepcopy
 class Subnet(nn.Module):
     """ This class constructs a subnet for the coupling blocks """
 
-    def __init__(self, num_layers, size_in, size_out, internal_size=None, dropout=0.0,
-                 layer_class=nn.Linear, layer_args={}):
+    def __init__(self, layer_classes, size_in, size_out, internal_sizes=None, dropout=0.0, layer_args=None,
+                 layer_act="nn.ReLU", layer_norm=None):
         """
             Initializes subnet class.
 
@@ -32,24 +34,39 @@ class Subnet(nn.Module):
             dropout: dropout chance of the subnet
         """
         super().__init__()
-        if internal_size is None:
-            internal_size = size_out * 2
+        num_layers = len(layer_classes)
+        
+        if internal_sizes is None:
+            internal_sizes = size_out * 2
+            
+        if layer_args is None:
+            layer_args = [{}] * num_layers
+            
         if num_layers < 1:
             raise(ValueError("Subnet size has to be 1 or greater"))
+        
         self.layer_list = []
+        
+        if isinstance(internal_sizes, list):
+            assert len(internal_sizes) == num_layers-1
+            [size_in] + internal_sizes + [size_out]
+        else:
+            internal_sizes = [internal_sizes] * (num_layers-1)
+            internal_sizes = [size_in] + internal_sizes + [size_out]
+            
+        
         for n in range(num_layers):
-            input_dim, output_dim = internal_size, internal_size
-            if n == 0:
-                input_dim = size_in
-            if n == num_layers -1:
-                output_dim = size_out
+             
+            input_dim, output_dim = internal_sizes[n], internal_sizes[n+1]
 
-            self.layer_list.append(layer_class(input_dim, output_dim, **layer_args))
+            self.layer_list.append(layer_classes[n](input_dim, output_dim, **layer_args[n]))
 
             if n < num_layers - 1:
                 if dropout > 0:
                     self.layer_list.append(nn.Dropout(p=dropout))
-                self.layer_list.append(nn.ReLU())
+                if layer_norm is not None:
+                    self.layer_list.append(eval(layer_norm)(output_dim))
+                self.layer_list.append(eval(layer_act)())
 
         self.layers = nn.Sequential(*self.layer_list)
 
@@ -60,6 +77,28 @@ class Subnet(nn.Module):
 
     def forward(self, x):
         return self.layers(x)
+
+
+class FixedAffineTransform(fm.InvertibleModule):
+    '''Fixed transformation according to y = M*x + b.'''
+
+    def __init__(self, dims_in, dims_c=None, M=None, b=None):
+        super().__init__(dims_in, dims_c)
+
+        self.M = nn.Parameter(M, requires_grad=False)
+        self.M_inv = nn.Parameter(1/M, requires_grad=False)
+        self.b = nn.Parameter(b, requires_grad=False)
+
+        self.jac_det = nn.Parameter(self.M.log().sum(), requires_grad=False)
+
+    def forward(self, x, rev=False, jac=True):
+        if not rev:
+            return [x[0] * self.M + self.b], self.jac_det
+        else:
+            return [(x[0]-self.b) * self.M_inv], -self.jac_det
+
+    def output_dims(self, input_dims):
+        return input_dims
 
 
 class LogTransformation(fm.InvertibleModule):
@@ -92,8 +131,6 @@ class LogitTransformation(fm.InvertibleModule):
             x = x*(1-2*self.alpha) + self.alpha
             z = torch.logit(x)
         else:
-            # if not self.training:
-            #     x[:,:-1] = self.norm_logit(x[:,:-1])
             z = torch.sigmoid(x)
             z = (z - self.alpha)/(1-2*self.alpha)
         return (z, ), torch.tensor([0.], device=x.device) # jac
@@ -105,28 +142,6 @@ class LogitTransformation(fm.InvertibleModule):
          for i in range(8):
              c = c - (f(c)/f_(c))[...,None]
          return t+c
-
-    def output_dims(self, input_dims):
-        return input_dims
-
-
-class NormTransformation(fm.InvertibleModule):
-    def __init__(self, dims_in, dims_c=None, log_cond=False):
-        super().__init__(dims_in, dims_c)
-        self.log_cond = log_cond
-
-    def forward(self, x, c=None, rev=False, jac=True):
-        x, = x
-        c, = c
-        if self.log_cond:
-            c = torch.exp(c)
-        if rev:
-            z = x/c
-            jac = -torch.log(c)
-        else:
-            z = x*c
-            jac = torch.log(c)
-        return (z, ), torch.tensor([0.], device=x.device) # jac
 
     def output_dims(self, input_dims):
         return input_dims
@@ -151,8 +166,6 @@ class CINN(nn.Module):
         self.bayesian = params.get("bayesian", False)
         self.alpha = params.get("alpha", 1e-8)
         self.log_cond = params.get("log_cond", False)
-        self.use_norm = self.params.get("use_norm", False) and not self.params.get("use_extra_dim", False)
-        self.pre_subnet = None
 
         if self.bayesian:
             self.bayesian_layers = []
@@ -165,28 +178,51 @@ class CINN(nn.Module):
             c_norm = torch.log(c)
         else:
             c_norm = c
-        if self.pre_subnet:
-            c_norm = self.pre_subnet(c_norm)
         return self.model.forward(x, c_norm, rev=rev, jac=jac)
 
     def get_constructor_func(self, params):
+        
         """ Returns a function that constructs a subnetwork with the given parameters """
-        layer_class = VBLinear if self.bayesian else nn.Linear
-        layer_args = {}
-        if "prior_prec" in params:
-            layer_args["prior_prec"] = params["prior_prec"]
-        if "std_init" in params:
-            layer_args["std_init"] = params["std_init"]
-        if "sigma_fixed" in params:
-            layer_args["sigma_fixed"] = params["sigma_fixed"]
+        
+        def get_layer_classes(lay_params):
+            lays = []
+            for n in range(len(lay_params)):
+                if lay_params[n] == 'vblinear':
+                    lays.append(VBLinear)
+                elif lay_params[n] == 'linear':
+                    lays.append(nn.Linear)
+                else:
+                    raise ValueError(f"Unknown layer type {lay_params[n]}")
+            return lays
+        
+        def get_layer_args(params):
+            layer_classes = params["layer_classes"]
+            layer_args = []
+            for n in range(len(layer_classes)):
+                n_args = {}
+                if layer_classes[n] == "vblinear":
+                    if "prior_prec" in params:
+                        layer_args["prior_prec"] = params["prior_prec"]
+                    if "std_init" in params:
+                        layer_args["std_init"] = params["std_init"]
+                    if "sigma_fixed" in params:
+                        layer_args["sigma_fixed"] = params["sigma_fixed"]
+                layer_args.append(n_args)
+            return layer_args
+        
+    
+        layer_classes = get_layer_classes(params["layer_classes"])
+        layer_args = get_layer_args(params)
+        
         def func(x_in, x_out):
             subnet = Subnet(
-                    params.get("layers_per_block", 3),
+                    layer_classes,
                     x_in, x_out,
-                    internal_size = params.get("internal_size"),
+                    internal_sizes = params.get("internal_size"),
                     dropout = params.get("dropout", 0.),
-                    layer_class = layer_class,
-                    layer_args = layer_args)
+                    layer_args = layer_args,                    
+                    layer_norm = params.get("layer_norm", None),
+                    layer_act = params.get("layer_act", "nn.ReLU"),)
             if self.bayesian:
                 self.bayesian_layers.extend(
                     layer for layer in subnet.layer_list if isinstance(layer, VBLinear))
@@ -248,8 +284,7 @@ class CINN(nn.Module):
     def initialize_normalization(self, data, cond):
         """ Calculates the normalization transformation from the training data and stores it. """
         data = torch.clone(data)
-        if self.use_norm:
-            data /= cond
+
         if self.params.get("logit_transformation", True):
             data = data*(1-2*self.alpha) + self.alpha
             data = torch.logit(data)
@@ -259,7 +294,7 @@ class CINN(nn.Module):
         
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
-        self.norm_m = torch.diag(1 / std)
+        self.norm_m = 1 / std
         self.norm_b = - mean/std
 
         data -= mean
@@ -280,14 +315,6 @@ class CINN(nn.Module):
         cond_node = ff.ConditionNode(1, name="cond")
 
         # Add some preprocessing nodes
-        if self.use_norm:
-                nodes.append(ff.Node(
-                [nodes[-1].out0],
-                NormTransformation,
-                {"log_cond": self.log_cond},
-                conditions = cond_node,
-                name = "norm"
-            ))
         if self.params.get("logit_transformation", True):
             nodes.append(ff.Node(
                 [nodes[-1].out0],
@@ -305,7 +332,7 @@ class CINN(nn.Module):
             ))
         nodes.append(ff.Node(
             [nodes[-1].out0],
-            fm.FixedLinearTransform,
+            FixedAffineTransform,
             { "M": self.norm_m, "b": self.norm_b },
             name = "inp_norm"
         ))
@@ -374,9 +401,9 @@ class CINN(nn.Module):
         for layer in self.bayesian_layers:
             layer.enable_map()
 
-    def disenable_map(self):
+    def disable_map(self):
         for layer in self.bayesian_layers:
-            layer.disenable_map()
+            layer.disable_map()
             
     def fix_sigma(self):
         for layer in self.bayesian_layers:
@@ -476,31 +503,6 @@ class LearnableNorm(nn.Module):
             return [((x[0] - self.bias[:x[0].shape[1]]) / self.scale[:x[0].shape[1]],)]
         else:
             return [(x[0] * self.scale[:x[0].shape[1]] + self.bias[:x[0].shape[1]],)]
-
-
-# class NormTrafo(nn.Module):
-#     def __init__(self, inp_dim, M, b) -> None:
-        
-#         super().__init__()
-#         print("Initializing norm trafo")
-#         self.M = M
-#         self.b = b
-        
-#         inp_dim = inp_dim[0][0]
-        
-#     def forward(self, x, rev=False):
-                    
-#         if x[0].device != self.M.device:
-#             self.M = self.M.to(x[0].device)
-#             self.b = self.b.to(x[0].device)
-        
-#         if not rev:
-#             z = x[0] * self.M + self.b
-            
-#         else:
-#             z = (x[0] - self.b) / self.M
-            
-#         return [(z, )]
  
 
 class CVAE(nn.Module):
@@ -621,6 +623,7 @@ class CVAE(nn.Module):
             initial_bias = - mean/std
             
             self.norm_x_in = LearnableNorm([(data.shape[1], )], trainable=False, initial_scale=initial_scale, initial_bias=initial_bias)
+            self.norm_x_out = self.norm_x_in
         
         return
     

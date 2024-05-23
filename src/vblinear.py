@@ -25,7 +25,7 @@ class VBLinear(nn.Module):
     def enable_map(self):
         self.map = True
 
-    def disenable_map(self):
+    def disable_map(self):
         self.map = False
         
     def fix_sigma(self):
