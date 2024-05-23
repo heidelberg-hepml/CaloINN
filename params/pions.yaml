@@ -19,7 +19,6 @@ VAE_learnable_norm: False
 # VAE Preprocessing
 alpha: 1.e-6
 VAE_internal_threshold: 1.e-8
-VAE_einc_preprocessing: "logit"
 # VAE Training
 VAE_lr_scheduler: null
 VAE_max_lr: 1.e-4
@@ -42,8 +41,6 @@ VAE_gamma: 1.e+4
 
 # INN
 
-# Data
-latent_type: pre_sampling # post_sampling or pre_sampling or only_means
 # INN Preprocessing
 logit_transformation: False
 log_cond: True
@@ -59,10 +56,14 @@ save_interval: 50
 keep_models: 1000
 # Bayesian Setup
 bayesian: False
+prior_prec: 5000
+std_init: -15.0
 # INN Architecture
 n_blocks: 18
 internal_size: 32
-layers_per_block: 3
+layer_act: nn.ReLU
+layer_norm: null
+layer_classes: [linear, linear, linear]
 coupling_type: rational_quadratic
 bounds_init: 20
 permute_soft: False
