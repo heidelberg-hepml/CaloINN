@@ -46,6 +46,7 @@ VAE_kernel_latent: 50
 
 # INN Preprocessing
 logit_transformation: False
+log_transformation: False
 log_cond: True
 # INN Training
 lr: 5.e-5
@@ -68,6 +69,7 @@ layer_act: nn.ReLU
 layer_norm: null
 layer_classes: [linear, linear, linear]
 coupling_type: rational_quadratic
+ActNorm: False
 bounds_init: 20
 permute_soft: False
 num_bins: 10

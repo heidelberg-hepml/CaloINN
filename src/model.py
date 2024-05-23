@@ -343,6 +343,15 @@ class CINN(nn.Module):
         if self.params.get("coupling_type", "affine") != "rational_quadratic_freia":
             
             for i in range(self.params.get("n_blocks", 10)):
+                if self.params.get("ActNorm", False) and i!=0:
+                    nodes.append(
+                            ff.Node(
+                                [nodes[-1].out0],
+                                fm.ActNorm,
+                                module_args = {},
+                                name = f"act_{i}"
+                                )
+                            )
                 nodes.append(
                     ff.Node(
                         [nodes[-1].out0],
@@ -357,6 +366,15 @@ class CINN(nn.Module):
         # Furthermore, we have to add a random permutation block manually.
         else:
             for i in range(self.params.get("n_blocks", 10) // 2):
+                if self.params.get("ActNorm", False) and i!=0:
+                    nodes.append(
+                            ff.Node(
+                                [nodes[-1].out0],
+                                fm.ActNorm,
+                                module_args = {},
+                                name = f"act_{i}"
+                                )
+                            )
                 nodes.append(
                     ff.Node(
                         [nodes[-1].out0],

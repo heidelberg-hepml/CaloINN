@@ -330,6 +330,63 @@ class VAETrainer:
         mu_logvar = torch.cat((mu, logvar), axis=1)
         return mu_logvar
             
+    def get_latent_loaders(self):
+        
+        # Remove VAE model and dataset from the GPU
+        self.model.to("cpu")
+        self.train_loader.data = self.train_loader.data.cpu()
+        self.train_loader.cond = self.train_loader.cond.cpu()
+        self.test_loader.data = self.test_loader.data.cpu()
+        self.test_loader.cond = self.test_loader.cond.cpu()
+        
+        # Makes the lines below much shorter. Used to get the slicing of the extra dims right
+        # Cf docstring of "data_util.get_energy_dims"
+        n = self.num_detector_layers
+        
+        batch_size = self.params.get('batch_size')
+        
+                        
+        with torch.no_grad():
+            data_train = self.get_mu_logvar(self.train_loader.data, self.train_loader.cond).cpu().numpy()
+            data_test = self.get_mu_logvar(self.test_loader.data, self.test_loader.cond).cpu().numpy()
+        
+        # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
+        extra_dims_train = self.train_loader.cond[:, 1:-n]
+        extra_dims_test = self.test_loader.cond[:, 1:-n]
+        
+        self.logit_trafo_in = self.model.logit_trafo_in
+        self.logit_trafo_out = self.model.logit_trafo_out
+
+        extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
+        extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
+        
+        
+        
+        data_train = np.append(data_train, extra_dims_logit_train , axis=1)
+        data_test = np.append(data_test, extra_dims_logit_test, axis=1)
+        
+        # Create the conditioning data (Only the incident energy)
+        cond_train = self.train_loader.cond[:, [0]].cpu().numpy()
+        cond_test = self.test_loader.cond[:, [0]].cpu().numpy()
+        
+        device = self.device        
+        
+        # Put into the dataloader
+        data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
+        cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
+
+        data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
+        cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
+        
+        # Create the dataloaders
+        loader_train = MyDataLoader(data_train, cond_train, batch_size)
+        loader_test = MyDataLoader(data_test, cond_test, batch_size)
+        
+        # Put VAE model back on the right device
+        self.model.to(self.device)
+        
+        return loader_train, loader_test
+            
     def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
@@ -473,7 +530,7 @@ class ECAETrainer:
         self.epoch_offset = 0
         
         # Save the dataloaders ("test" should rather be called validation...)
-        self.train_loader, self.test_loader = self.get_loaders()
+        self.train_loader, self.test_loader = self.vae_trainer.get_latent_loaders()
         
         # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
@@ -513,65 +570,8 @@ class ECAETrainer:
 
         if self.model.bayesian:
             # save the prior as logsig2 value for later usage
-            self.logsig2_prior = - np.log(params.get("prior_prec", 1))      
-              
-    def get_loaders(self):
-        
-        # Remove VAE model and dataset from the GPU
-        self.vae_trainer.model.to("cpu")
-        self.vae_trainer.train_loader.data = self.vae_trainer.train_loader.data.cpu()
-        self.vae_trainer.train_loader.cond = self.vae_trainer.train_loader.cond.cpu()
-        self.vae_trainer.test_loader.data = self.vae_trainer.test_loader.data.cpu()
-        self.vae_trainer.test_loader.cond = self.vae_trainer.test_loader.cond.cpu()
-        
-        # Makes the lines below much shorter. Used to get the slicing of the extra dims right
-        # Cf docstring of "data_util.get_energy_dims"
-        n = self.num_detector_layers
-        
-        batch_size = self.params.get('batch_size')
-        
-                        
-        with torch.no_grad():
-            data_train = self.vae_trainer.get_mu_logvar(self.vae_trainer.train_loader.data, self.vae_trainer.train_loader.cond).cpu().numpy()
-            data_test = self.vae_trainer.get_mu_logvar(self.vae_trainer.test_loader.data, self.vae_trainer.test_loader.cond).cpu().numpy()
-        
-        # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-        extra_dims_train = self.vae_trainer.train_loader.cond[:, 1:-n]
-        extra_dims_test = self.vae_trainer.test_loader.cond[:, 1:-n]
-        
-        self.logit_trafo_in = self.vae_trainer.model.logit_trafo_in
-        self.logit_trafo_out = self.vae_trainer.model.logit_trafo_out
-
-        extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
-        extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
-        
-        
-        
-        data_train = np.append(data_train, extra_dims_logit_train , axis=1)
-        data_test = np.append(data_test, extra_dims_logit_test, axis=1)
-        
-        # Create the conditioning data (Only the incident energy)
-        cond_train = self.vae_trainer.train_loader.cond[:, [0]].cpu().numpy()
-        cond_test = self.vae_trainer.test_loader.cond[:, [0]].cpu().numpy()
-        
-        device = self.device        
-        
-        # Put into the dataloader
-        data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-        cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
-
-        data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-        cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-        
-        # Create the dataloaders
-        loader_train = MyDataLoader(data_train, cond_train, batch_size)
-        loader_test = MyDataLoader(data_test, cond_test, batch_size)
-        
-        # Put VAE model back on the right device
-        self.vae_trainer.model.to(self.device)
-        
-        return loader_train, loader_test  
-               
+            self.logsig2_prior = - np.log(params.get("prior_prec", 1))
+                          
     def train(self):
         """ Trains the model. """
 
@@ -1104,6 +1104,8 @@ class ECAETrainer:
             mu = samples_latent[:, :latent_dim]
             logvar = samples_latent[:, latent_dim:-self.num_detector_layers]
             
+            
+            # TODO: Logit_trafo out removed
             extra_dims = self.logit_trafo_out(samples_latent[:, -self.num_detector_layers:])/0.9
             
             
