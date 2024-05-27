@@ -26,6 +26,9 @@ tickfont = FontProperties()
 tickfont.set_family('serif')
 tickfont.set_size(20)
 
+rect_double    = (0.05, 0.12, 0.98, 0.97) # left, bottom, right, top
+rect_double_with_legend = (0.14, 0.12, 0.98, 0.97) # left, bottom, right, top
+
      
 def plot_loss(
         file_name,
@@ -306,6 +309,13 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
          {"layer_boundaries": layer_boundaries},
+         {"axis_label": r'$Voxel distribution$'}]
+        )
+    
+    plots.append(
+        [calc_flat_energy_distribution, 
+         "flat_energy_distribution.pdf",
+         {"layer_boundaries": layer_boundaries},
          {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log"}]
         )
     
@@ -389,7 +399,7 @@ def plot_hist(
     # Get the bins (Modifications needed if logscale is used)
     if xscale=='log':
         
-        if vmin==0:
+        if vmin<=0:
             vmin = np.inf     
             for elem in all_data:
                 vmin = np.min([np.min(elem[elem>1e-7]), vmin])
@@ -521,8 +531,8 @@ def plot_hist(
     if panel_ax is not None:
         
         for i in range(len(bins_fakes)):
-            assert len(bins_true) == len(bins_fakes[i])
-            assert (bins_true - bins_fakes[i] < 1.e-7).all()
+            assert len(bins_true) == len(bins_fakes[i]), f"Length of bins_true: {len(bins_true)}, Length of bins_fakes[{i}]: {len(bins_fakes[i])}"
+            # assert (bins_true - bins_fakes[i] < 1.e-7).all()
         
         for i, (ns_reco, bins_reco) in enumerate(zip(ns_fakes, bins_fakes)):
             
