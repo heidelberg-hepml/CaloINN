@@ -263,7 +263,7 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
     
     plots = []
     large_scale = 300
-    small_scale = 30
+    small_scale = 10
     
     for layer in range(len(layer_boundaries)-1):
         
@@ -313,14 +313,14 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
          {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$'}]
+         {"axis_label": r'$Voxel distribution$', "n_bins": 30}]
         )
     
     plots.append(
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
          {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log", "vmin": 0.1}]
+         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log", "vmin": 0.1, "n_bins": 30}]
         )
     
     plots.append(
@@ -341,7 +341,7 @@ def plot_hist(
         yscale='log',
         vmin=None,
         vmax=None,
-        n_bins=50,
+        n_bins=100,
         ymin=None,
         ymax=None,
         ax=None,
