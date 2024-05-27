@@ -86,7 +86,4 @@ ipython_config.py
 
 results/*
 !results/dummy_file.txt
-
-src_bak
-
-notebooks
+notebooks/plots

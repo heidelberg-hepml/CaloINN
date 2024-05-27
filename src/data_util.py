@@ -266,8 +266,12 @@ def get_loaders(filename, val_frac, batch_size, used_layers=None, eps=1.e-10, de
     # Create an index array, used for splitting into train and val set
     number_of_samples = len(x)
     
-    # Dont want to mix train and test set, when loading -> No random permutation
-    full_index = np.arange(number_of_samples)
+    # Dont want to mix train and test set, when loading -> Fixed random permutation
+    # Alternative: full_index = torch.arange(number_of_samples)
+    state = np.random.get_state()
+    np.random.seed(42)
+    full_index = np.random.choice(number_of_samples, number_of_samples, replace=False)
+    np.random.set_state(state)
 
     # Split the data
     number_of_val_samples = int(number_of_samples * val_frac)
