@@ -14,9 +14,9 @@ used_calo_layers: [0,1,2,3,12]
 
 # VAE
 VAE_type: CVAE
-VAE_learnable_norm: False
+VAE_learnable_norm: True
 # VAE Preprocessing
-alpha: 1.e-6
+alpha: 1.e-8
 VAE_internal_threshold: 1.e-8
 # VAE Training
 VAE_lr_scheduler: null
@@ -30,13 +30,11 @@ VAE_save_interval: 50
 VAE_keep_models: 3001
 VAE_zero_logit: True # Set the logit loss to 0
 sparsity_loss: null
-VAE_smearing_self: 0.6
-VAE_smearing_share: 0.05
 # VAE Architecture
-VAE_hidden_sizes: [10000, 1000, 500]
-VAE_latent_dim: 50
+VAE_hidden_sizes: [5000, 3000, 2000]
+VAE_latent_dim: 1000
 VAE_beta: 1.e-5
-VAE_gamma: 1.e+4
+VAE_gamma: 1.e+2
 
 
 # INN
@@ -52,8 +50,8 @@ batch_size: 256
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
-# n_epochs: 200
-n_epochs: 1
+n_epochs: 200
+# n_epochs: 1
 save_interval: 50
 keep_models: 1000
 # Bayesian Setup

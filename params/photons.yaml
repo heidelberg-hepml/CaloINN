@@ -30,8 +30,6 @@ VAE_save_interval: 50
 VAE_keep_models: 3001
 VAE_zero_logit: True # Set the logit loss to 0
 sparsity_loss: null
-VAE_smearing_self: 0.6
-VAE_smearing_share: 0.05
 # VAE Architecture
 VAE_hidden_sizes: [5000, 1000, 500]
 VAE_latent_dim: 50

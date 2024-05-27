@@ -306,7 +306,7 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
          {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$'}]
+         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log"}]
         )
     
     plots.append(
