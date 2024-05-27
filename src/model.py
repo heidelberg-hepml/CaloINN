@@ -525,8 +525,7 @@ class LearnableNorm(nn.Module):
 
 class CVAE(nn.Module):
     def __init__(self, input, cond, latent_dim, hidden_sizes, layer_boundaries_detector,
-                 particle_type="photon",dataset=1, alpha=1.e-6, beta=1.e-5, gamma=1.e3, 
-                 eps=1.e-10, smearing_self=1.0, smearing_share=0.0,
+                 alpha=1.e-6, beta=1.e-5, gamma=1.e3, eps=1.e-10, 
                  threshold=None, sparsity_loss=None, learnable_norm=False):
         
         super(CVAE, self).__init__()
@@ -556,10 +555,6 @@ class CVAE(nn.Module):
         self.beta = beta
         self.gamma = torch.tensor(gamma)
         
-        # needed for the smearing matrix (geometry info)
-        self.particle_type = particle_type
-        self.dataset = dataset # The number of the dataset 1,2 or 3...
-        
         # parameters for layer normalization stability
         self.eps = eps
         
@@ -582,12 +577,6 @@ class CVAE(nn.Module):
         # get normalization for normalization layer and to ensure that the incident energy parameter is
         # between 0 and 1:
         self._set_normalizations(input, cond)
-
-        if dataset != 3 and dataset != 2:
-            # Create the smearing matrix. It is used in the reco-loss (For DS 2&3 it is to large for the ram)
-            self.smearing_matrix = self._get_smearing_matrix(input, cond, smearing_self, smearing_share)
-        else:
-            self.smearing_matrix = None
 
     def _set_submodels(self, input_dim, cond_dim, latent_dim, hidden_sizes):
         """Creates the encoder and decoder model as fully connected neural networks."""
@@ -621,7 +610,8 @@ class CVAE(nn.Module):
         # The other conditions are allready between 0 and 1 and will not be modified
         # TODO: Problems if test set is more than 15% off
         max_cond_0 = cond[:, [0]].max(axis=0, keepdim=True)[0]
-        self.max_cond = torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)*1.15
+        self.max_cond = nn.Parameter(torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(cond.device)), axis=1)*1.15, requires_grad=False)
+        # self.max_cond = nn.Parameter(torch.cat((max_cond_0, torch.ones(1, cond.shape[1]-1).to(max_cond_0.device)), axis=1)*1.15, requires_grad=False)
         
         # Set the normalization layer operating on the x space (before the actual encoder)
         with torch.no_grad():
@@ -629,6 +619,8 @@ class CVAE(nn.Module):
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
         
+        # If a value is constant it cannot be scaled properly!
+        std[std==0] = 1.0
         
         if self.learnable_norm:
             # Just learn the parameters of the affine transformation
@@ -645,118 +637,6 @@ class CVAE(nn.Module):
         
         return
     
-    def _get_smearing_matrix(self, x, c, self_weight=1.0, share_weight=0.0):
-        """Computes the smearing matrix that is used in the loss to make neighboring voxels get similar gradients
-
-        Args:
-            x (torch.tensor): input data (used to create a hlf file internally. Needed for detector geometry information)
-            c (torch.tensor): conditions (used to create a hlf file internally. Needed for detector geometry information)
-            self_weight (float, optional): Weight that is sent to the actual voxel (in the loss). Defaults to 1.0.
-            share_weight (float, optional):Weight that is sent to the neighboring voxels (in the loss). Defaults to 0.0.
-        """
-        
-        def get_neighboring_indices(index, num_alpha, num_radial):
-            
-            i, j = divmod(index, num_radial)
-
-            neighbors = []
-
-            left_neighbor = index - num_radial if i > 0 else index + num_radial * (num_alpha - 1)
-            if left_neighbor != index:
-                
-                # links (zyklisch)
-                neighbors.append(left_neighbor)
-                
-                i_l, j_l = divmod(left_neighbor, num_radial)
-                
-                # unten links
-                if j_l > 0:
-                    neighbors.append(left_neighbor-1)
-                else:
-                    neighbor = left_neighbor + num_alpha//2 * num_radial
-                    neighbors.append(neighbor % (num_alpha * num_radial))
-                    
-                # oben links
-                if j_l < num_radial - 1:
-                    neighbors.append(left_neighbor+1)
-
-
-            right_neighbor = index + num_radial if i < num_alpha - 1 else index - num_radial * (num_alpha - 1)
-            if right_neighbor != index:
-                
-                # rechts (zyklisch)
-                neighbors.append(right_neighbor)
-                
-                i_r, j_r = divmod(right_neighbor, num_radial)
-                
-                # unten rechts
-                if j_r > 0:
-                    neighbors.append(right_neighbor-1)
-                else:
-                    neighbor = right_neighbor + num_alpha//2 * num_radial
-                    neighbors.append(neighbor % (num_alpha * num_radial))
-            
-                # oben rechts
-                if j_r < num_radial - 1:
-                    neighbors.append(right_neighbor+1)
-                
-            # unten
-            if j > 0:
-                neighbors.append(index - 1)
-            else:
-                neighbor = index + num_alpha//2 * num_radial
-                neighbors.append(neighbor % (num_alpha * num_radial))
-            # oben
-            if j < num_radial - 1:
-                neighbors.append(index + 1)
-            
-            return neighbors
-
-        hlf_true = data_util.get_hlf(x, c, self.particle_type, self.layer_boundaries, threshold=1.e-10, dataset=self.dataset)
-
-        smearing_matrix = np.zeros((len(hlf_true.showers[0]), len(hlf_true.showers[0])))
-        smearing_matrix.shape
-
-        self.num_alphas = []
-        self.num_radials = []
-        for layer_nr in range(len(self.layer_boundaries)-1):
-            
-            # needed since we are working with sliced data arrays
-            offset = self.layer_boundaries[layer_nr]
-            
-            # Load the data for the current layer
-            reduced_data = hlf_true.showers[0, self.layer_boundaries[layer_nr]:self.layer_boundaries[layer_nr+1]]
-            
-            # reshape to get number of angles of number of circles
-            reduced_data = reduced_data.reshape(int(hlf_true.num_alpha[layer_nr]), -1)
-            num_alpha = int(hlf_true.num_alpha[layer_nr])
-            num_radial = reduced_data.shape[1]
-            
-            self.num_alphas.append(num_alpha)
-            self.num_radials.append(num_radial)
-            
-            # use old shape again
-            reduced_data = reduced_data.reshape(-1)
-            
-            # Calculate the actual smearing matrix
-            for index, elem in enumerate(reduced_data):
-                neighbors = get_neighboring_indices(index, num_alpha, num_radial)
-
-                for neighbor in neighbors:
-                    smearing_matrix[index+offset, neighbor+offset] = share_weight
-                
-                smearing_matrix[index+offset, index+offset] = self_weight
-
-        # hlf_true.DrawSingleShower(smearing_matrix @ hlf_true.showers[0])
-        # hlf_true.DrawSingleShower(hlf_true.showers[0])
-        
-        
-        return torch.tensor(smearing_matrix, dtype=torch.get_default_dtype(), device=x.device)
-    
-    def update_smearing_matrix(self, x, c, self_weight, share_weight):
-        
-        self.smearing_matrix = self._get_smearing_matrix(x, c, self_weight, share_weight)
-        
     def _preprocess_encoding(self, x, c, without_norm=False):
         """First part of the encoder function. Seperated such that it can be used by the
         initialization of the normalization to zero mean and unit variance"""
@@ -768,25 +648,28 @@ class CVAE(nn.Module):
         # Needed to ensure numerical stability
         x_0_1 = x_0_1*0.9
             
+            
         # append all extra energy dimensions (the u variables) & Possible other needed conditions
         # We add einc after the normalization since it would results in nans for a single slice, otherwise
-        
-        # max_cond is not moved with .to() since it is not a parameter
-        if self.max_cond.device != x_0_1.device:
-            self.max_cond = self.max_cond.to(x.device)
                     
         y_0_1 = torch.cat((x_0_1, (c/self.max_cond)[:, 0:-self.num_detector_layers]), axis=1)
+        assert y_0_1.max() < 1.0, f"y_0_1.max() = {y_0_1.max()}"
+        assert y_0_1.min() >= 0.0, f"y_0_1.min() = {y_0_1.min()}"
+        
+        assert torch.isnan(y_0_1).sum() == 0, f"y_0_1 contains NaNs"
             
         # Go to logit space
         y_logit = self.logit_trafo_in(y_0_1)
         
+        assert torch.isnan(y_logit).sum() == 0, f"y_logit contains NaNs"
+
         # Needed to initialize the norm transformation
         if without_norm:
             return y_logit
         
         else:
             return(self.norm_x_in( (y_logit, ), rev=False)[0][0])
-            
+        
     def encode(self, x, c):
         """Takes a point in the dataspace and returns a point in the latent space before sampling.
         Does apply the logit preprocessing and the layer normalization
@@ -816,16 +699,14 @@ class CVAE(nn.Module):
         eps = torch.randn_like(std)
         return eps * std + mu
             
-    def decode(self, latent, c, return_directly_after_decoder=False, train=False):
+    def decode(self, latent, c, return_directly_after_decoder=False):
         """Takes a point in the latent space after sampling and returns a point in the dataspace.
         Output: Reconstructed image in data-space """
         
-        # max_cond is not moved with .to() since it is not a parameter
-        if self.max_cond.device != c.device:
-            self.max_cond = self.max_cond.to(c.device)
-        
         # Append the incident energy, the extra dims and possible further conditions
         c_clipped = torch.clamp((c / self.max_cond)[:, 0:-self.num_detector_layers], min=0, max=1)
+        assert c_clipped.max() < 1.0, f"c_clipped.max() = {c_clipped.max()}"
+        assert c_clipped.min() >= 0.0, f"c_clipped.min() = {c_clipped.min()}"
 
         # Transform cond into logit space, apply the norm and append in to latent results
         c_logit = self.logit_trafo_in(c_clipped)
@@ -861,12 +742,8 @@ class CVAE(nn.Module):
         else:
             # Otherwise the norm before the logit in the reco loss might produce wrong results...
             x_reco[x_reco < 0] = 0
-            
-        if not train:
-            return x_reco
-        
-        else:
-            return x_reco, c
+
+        return x_reco
        
     def forward(self, x, c, return_mu_logvar=False):
         """Does the forward pass of the network. Needs the data and the condition. If a noise was specified,
@@ -881,37 +758,42 @@ class CVAE(nn.Module):
             torch.tensor: reconstruction
         """
 
+        assert torch.isnan(x).sum() == 0, f"Input x contains NaNs"
+
         # Encode
         mu, logvar = self.encode(x=x, c=c)
+        assert torch.isnan(mu).sum() == 0, f"mu contains NaNs"
+        assert torch.isnan(logvar).sum() == 0, f"logvar contains NaNs"
         
         # Sample
         latent = self.reparameterize(mu, logvar)
+        assert torch.isnan(latent).sum() == 0, f"latent contains NaNs"
         
+        # Decode
+        x_reco_shifted = self.decode(latent=latent, c=c)
+        assert torch.isnan(x_reco_shifted).sum() == 0, f"x_reco_shifted contains NaNs"
         
         if not return_mu_logvar:
-            
-            # Decode
-            x_reco_shifted = self.decode(latent=latent, c=c, train=False)
-            
             return x_reco_shifted
         
-        else:
-            
-            # Decode
-            x_reco_shifted, c = self.decode(latent=latent, c=c, train=True)
-            
-            return x_reco_shifted, c, mu, logvar
+        else:           
+            return x_reco_shifted, mu, logvar
     
     def reco_loss(self, x, c, zero_logit=True):
         """Computes the reconstruction loss in the logit space and in the data space"""
         
         # Model forward pass
-        x_reco_shifted, c_reco, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
+        x_reco_shifted, mu, logvar = self.forward(x=x, c=c, return_mu_logvar=True)
                 
         
         # For BCE loss part
         x_0_1      = data_util.normalize_layers(x, self.layer_boundaries, eps=self.eps) * 0.9
         x_reco_0_1 = data_util.normalize_layers(x_reco_shifted, self.layer_boundaries, eps=self.eps) * 0.9
+        
+        assert x_0_1.max() < 1.0, f"x_0_1.max() = {x_0_1.max()}"
+        assert x_0_1.min() >= 0.0, f"x_0_1.min() = {x_0_1.min()}"
+        assert x_reco_0_1.max() < 1.0, f"x_reco_0_1.max() = {x_reco_0_1.max()}"
+        assert x_reco_0_1.min() >= 0.0, f"x_reco_0_1.min() = {x_reco_0_1.min()}"
         
         
         # Could also add a possibility to sample here?
@@ -937,10 +819,7 @@ class CVAE(nn.Module):
             reco_loss_logit = torch.tensor(0.).to(x.device)
             
         else:
-            if self.smearing_matrix is not None:
-                reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit @ self.smearing_matrix, x_logit @ self.smearing_matrix, reduction="mean")
-            else:
-                reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit, x_logit, reduction="mean")
+            reco_loss_logit = 0.5*nn.functional.l1_loss(x_reco_logit, x_logit, reduction="mean")
         
 
         # Data BCE loss
@@ -1127,11 +1006,10 @@ class KernelDecoder(nn.Module):
 class KernelVAE(CVAE):
 
     def __init__(self, input, cond, latent_dim, hidden_sizes, hidden_sizes_kernel, layer_boundaries_detector,
-                 particle_type="photon", dataset=1, alpha=0.000001, beta=0.00001, gamma=1000,
-                 eps=1e-10, smearing_self=1, smearing_share=0, threshold=None,
+                 alpha=0.000001, beta=0.00001, gamma=1000, eps=1e-10, threshold=None,
                  sparsity_loss=None, kernel_size=7, kernel_stride=3, kernel_latent=50, learnable_norm=False):
         
-        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, particle_type, dataset, alpha, beta, gamma, eps, smearing_self, smearing_share, threshold, sparsity_loss, learnable_norm)
+        super().__init__(input, cond, latent_dim, hidden_sizes, layer_boundaries_detector, alpha, beta, gamma, eps, threshold, sparsity_loss, learnable_norm)
 
         self.kernel_size = kernel_size
         self.kernel_stride = kernel_stride

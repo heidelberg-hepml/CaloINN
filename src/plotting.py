@@ -10,314 +10,23 @@ from matplotlib import cm
 # from matplotlib.transforms import Bbox
 
 import data_util
-from calc_obs import *
 import math
 import torch
 
-from evaluate_plotting_helper import *
-
-plt.rcParams['font.family'] = 'Times New Roman'
-plt.rcParams['mathtext.default'] = 'rm'
-plt.rcParams['text.usetex'] = True
 
 labelfont = FontProperties()
 labelfont.set_family('serif')
-labelfont.set_name('Times New Roman')
 labelfont.set_size(20)
 
 axislabelfont = FontProperties()
 axislabelfont.set_family('serif')
-axislabelfont.set_name('Times New Roman')
 axislabelfont.set_size(20)
 
 tickfont = FontProperties()
 tickfont.set_family('serif')
-tickfont.set_name('Times New Roman')
 tickfont.set_size(20)
 
-
-
-def plot_average_table(data, save_file):
-    
-    number_of_runs = len(data)
-    row_indices = [f"Run {i+1}" for i in range(number_of_runs)]
-
-    row_indices.append("mean")
-    row_indices.append("std")
-
-    averaged = np.array([np.mean(data, axis=0), np.std(data, axis=0)])
-    data = np.concatenate([data, averaged])
-
-    df = pd.DataFrame(data, columns=["Accuracy", "AUC", "JSD", "best epoch"], index=row_indices)
-
-    number_of_cols = len(df.columns)
-    number_of_rows = len(list(df.iterrows()))
-    row_labels = np.array(list(df.iterrows()), dtype=object)[:,0]
-    fig, ax = plt.subplots(figsize=((number_of_rows+1), (number_of_cols)))
-
-    # hide axes
-    fig.patch.set_visible(False)
-    ax.axis('off')
-    ax.axis('tight')
-
-    ax.table(cellText=df.values.round(4), colLabels=df.columns, rowLabels=row_labels,
-            loc='center', cellLoc="left",colWidths = [0.1]*len(df.columns),
-            colLoc="center", rowLoc="center")
-    fig.tight_layout()
-
-    plt.savefig(save_file)
-    plt.close()
- 
-def plot_hist(
-        file_name,
-        data,
-        reference,
-        p_ref='photon',
-        axis_label=None,
-        xscale='linear',
-        yscale='log',
-        vmin=None,
-        vmax=None,
-        n_bins=100,
-        ymin=None,
-        ymax=None,
-        ax=None,
-        panel_ax=None,
-        panel_scale="linear",
-        density=True,
-        labels=None,
-        errorbars_true=False,
-        errorbars_fake=False):
-
-    if type(errorbars_fake) == bool:
-        errorbars_fake = [errorbars_fake]
-    
-    if type(data)==list and type(data[0])==np.ndarray:
-        data_list = data
-    else:
-        data_list = [data]
-        
-    if len(errorbars_fake) != len(data_list):
-        assert len(errorbars_fake) == 1, "Wrong size for the errorbars index"
-        
-        errorbars_fake = [errorbars_fake[0] for _ in range(len(data_list))]
-    
-    for i in range(len(data_list)):
-        data_list[i] = data_list[i][np.isfinite(data_list[i])]
-    
-    reference = reference[np.isfinite(reference)]
-
-    all_data = data_list + [reference]
-
-    # Set the plotting boundaries
-    if vmin is None:
-        vmin = np.inf
-        for elem in all_data:
-            if len(elem) == 0:
-                return
-            vmin = np.min([np.min(elem), vmin])
-    if vmax is None:
-        vmax = -np.inf
-        for elem in all_data:
-            if len(elem) == 0:
-                return
-            vmax = np.max([np.max(elem), vmax])
-            
-    # Get the bins (Modifications needed if logscale is used)
-    if xscale=='log':
-        
-        if vmin==0:
-            vmin = np.inf     
-            for elem in all_data:
-                cutted = elem[elem>1e-7]
-                if len(cutted) == 0:
-                    return
-                vmin = np.min([np.min(cutted), vmin])
-                
-        if isinstance(n_bins, int):
-            bins = np.logspace(np.log10(vmin), np.log10(vmax), n_bins)
-        else:
-            bins = n_bins
-    else:
-        if isinstance(n_bins, int):
-            bins = np.linspace(vmin, vmax, n_bins)
-        else:
-            bins = n_bins
-    
-    colors = cm.gnuplot2(np.linspace(0.2, 0.8, 3))
-    if p_ref == 'electron':
-        color = colors[0]
-    elif p_ref == 'photon':
-        color = colors[1]
-    elif p_ref == 'pion':
-        color = colors[2]
-    else:
-        color = 'blue'
-        
-    create_fig = False
-    if ax is None:
-        create_fig = True
-        fig, ax = plt.subplots(1,1,figsize=(6,6))    
-        
-        
-    # Plot the reference data
-    if not errorbars_true:
-        ns_1, bins_1, patches_1 = ax.hist(reference, bins=bins, histtype='stepfilled',
-                alpha=0.5, color=color, density=density, label='GEANT')
-    else:
-        dup_last = lambda a: np.append(a, a[-1])
-
-        bins_1 = bins
-        
-        counts, _ = np.histogram(reference, bins_1, density=False)
-        ns_1, _ = np.histogram(reference, bins_1, density=True)
-        
-        mask = (counts == 0)
-        counts[mask] = 1
-        
-        ref_err = ns_1 / np.sqrt(counts)
-            
-        ref_err[mask] = 0
-        
-        ax.step(bins_1, dup_last(ns_1), color="blue", alpha=1,
-                        linewidth=1, where='post', label='GEANT')
-        
-        ax.step(bins_1, dup_last(ns_1 - ref_err), color="blue", alpha=0.5,
-                        linewidth=0.5, where='post')
-        ax.step(bins_1, dup_last(ns_1 + ref_err), color="blue", alpha=0.5,
-                        linewidth=0.5, where='post')
-
-        ax.fill_between(bins_1, dup_last(ns_1 - ref_err), dup_last(ns_1 + ref_err), 
-                        facecolor="blue", alpha=0.3, step='post')
-    
-    # Plot the generated data
-    alt_colors = ["green", "red", "pink"]
-    
-    for i, data in enumerate(data_list):
-        if not errorbars_fake[i]:
-            
-            # Modify the labels
-            if labels is None:
-                label = "VAE"
-            else:
-                label = labels[i]
-            
-            # Add the first trainer to the panel and use the default color code
-            if i == 0:
-                ns_0, bins_0, patches_0 = ax.hist(data, bins=bins, histtype='step', linewidth=2,
-                    alpha=1, density=density, label=label, color=color)
-            else:
-                ax.hist(data, bins=bins, histtype='step', linewidth=2,
-                    alpha=1, density=density, label=label, color=alt_colors[i])
-    
-        else:
-            # labels
-            if labels is None:
-                label = "VAE"
-            else:
-                label = labels[i]
-                
-            data = data_list[i]
-            
-            dup_last = lambda a: np.append(a, a[-1])
-            
-            if i == 0:
-                bins_0 = bins
-                
-                counts, _ = np.histogram(data, bins_0, density=False)
-                ns_0, _ = np.histogram(data, bins_0, density=True)
-                
-                mask = (counts == 0)
-                counts[mask] = 1
-                
-                data_err = ns_0 / np.sqrt(counts)
-                    
-                data_err[mask] = 0
-                
-                ax.step(bins_0, dup_last(ns_0), color=alt_colors[i], alpha=1,
-                                linewidth=1, where='post', label=label)
-                
-                ax.step(bins_0, dup_last(ns_0 - data_err), color=alt_colors[i], alpha=0.5,
-                                linewidth=0.5, where='post')
-                ax.step(bins_0, dup_last(ns_0 + data_err), color=alt_colors[i], alpha=0.5,
-                                linewidth=0.5, where='post')
-
-                ax.fill_between(bins_0, dup_last(ns_0 - data_err), dup_last(ns_0 + data_err), 
-                                facecolor=alt_colors[i], alpha=0.3, step='post')
-            
-            else:                
-                counts, _ = np.histogram(data, bins, density=False)
-                ns, _ = np.histogram(data, bins, density=True)
-                
-                mask = (counts == 0)
-                counts[mask] = 1
-                
-                data_err = ns / np.sqrt(counts)
-                    
-                data_err[mask] = 0
-                
-                ax.step(bins, dup_last(ns), color=alt_colors[i], alpha=1,
-                                linewidth=1, where='post', label=label)
-                
-                ax.step(bins, dup_last(ns - data_err), color=alt_colors[i], alpha=0.5,
-                                linewidth=0.5, where='post')
-                ax.step(bins, dup_last(ns + data_err), color=alt_colors[i], alpha=0.5,
-                                linewidth=0.5, where='post')
-
-                ax.fill_between(bins_0, dup_last(ns - data_err), dup_last(ns + data_err), 
-                                facecolor=alt_colors[i], alpha=0.3, step='post')
-
-    if panel_ax is not None:
-        assert len(bins_0) == len(bins_1)
-        assert (bins_0 - bins_1 < 1.e-7).all()
-        
-        # prevent divisions by 0! Set these bars to 0
-        mask = ns_1 == 0
-        ns_1[mask] = 1
-        panel_data = ns_0/ns_1
-        
-        panel_data[mask] = 0
-        
-        widths = 1.2*(bins_1[1:] - bins_1[:-1])
-        panel_ax.axhline(1, color="red", ls="--")
-        panel_ax.hist(bins_0[:-1], bins[1:]-widths, weights=panel_data, histtype="step", lw=2, label='VAE/GEANT')
-        
-    ax.set_yscale(yscale)
-    ax.set_xscale(xscale)
-    if panel_ax is not None:
-        panel_ax.set_yscale(panel_scale)
-        panel_ax.set_xscale(xscale)
-
-    ax.set_xlim([vmin,vmax])
-    if panel_ax is not None:
-        panel_ax.set_xlim([vmin,vmax])
-        panel_ax.set_ylim([0.5, 1.5])
-        
-    if ymin is not None or ymax is not None:
-        ax.set_ylim((ymin, ymax))
-
-    if panel_ax is not None:
-        panel_ax.legend()
-
-    if axis_label:
-        if panel_ax is None:
-            ax.set_xlabel(axis_label, fontproperties=axislabelfont)
-        else:
-            panel_ax.set_xlabel(axis_label, fontproperties=axislabelfont)
-            
-    plt.xticks(fontproperties=tickfont)
-    plt.yticks(fontproperties=tickfont)
-    
-    ax.legend()
-
-    if create_fig:
-        fig.tight_layout()
-        fig.savefig(file_name, bbox_inches='tight')
-        
-    # Why this line?
-    if panel_ax is None:
-        plt.close()
-        
+     
 def plot_loss(
         file_name,
         loss_train,
@@ -413,28 +122,7 @@ def plot_grad(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
-        
-def plot_gamma(
-        file_name,
-        gammas,
-        batches_per_epoch=1):
-    fig, ax = plt.subplots(1,1,figsize=(12,8), dpi=300)
-
-    ax.plot(np.arange(1,len(gammas)+1)/batches_per_epoch, gammas, color='red', label='gradient')
-
-    ax.set_xlim([0,len(gammas)/batches_per_epoch])
-    ax.set_xlabel('epoch', fontproperties=axislabelfont)
-    ax.set_ylabel('gamma', fontproperties=axislabelfont)
-    ax.set_yscale("log")
-
-    plt.xticks(fontproperties=tickfont)
-    plt.yticks(fontproperties=tickfont)
-
-    fig.tight_layout()
-    fig.savefig(file_name, bbox_inches='tight')
-
-    plt.close()
-    
+            
 def plot_logsig(
         file_name,
         logsigs):
@@ -459,329 +147,9 @@ def plot_logsig(
     fig.savefig(file_name, bbox_inches='tight')
 
     plt.close()
- 
-def get_all_plot_parameters(hlf, params):
-    plots = []
 
-    particle_type = params.get("particle_type", "pion")
-
-    # Etot vs Einc
-    plots.append((Etot_Einc, 'Etot_Einc.pdf', {},
-                {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}}$', "p_ref": particle_type,
-                "vmin": 0.5, "vmax": 1.5, "yscale": "linear"}))
-    
-    plots.append((Etot_Einc, 'Etot_Einc_log.pdf', {},
-                {"axis_label": r'$E_{\text{tot}} / E_{\text{inc}} (Logscale)$', "p_ref": particle_type, "xscale": "log"}))
-
-    # layer energy plots
-    for layer in hlf.GetElayers().keys():
-        plots.append((E_layers, f'E_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Energy deposited in layer {layer} [MeV]", "p_ref": particle_type,
-                     'xscale': 'log', "n_bins": 40}))
-        
-    # eta centroid plots mean
-    for layer in hlf.GetECEtas().keys():
-        # TODO: different for dataset 2,3
-        if params.get("dataset", 1) in [2, 3]:
-            vmin, vmax = (-30., 30.)
-        elif layer in [12, 13]:
-            vmin, vmax = (-500., 500.)
-        elif layer == 2:
-            vmin, vmax = (-250., 250.)
-        else:
-            vmin, vmax = (-100., 100.)
-            
-        plots.append((ECEtas, f'ECEta_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": r"Center of Energy in $\Delta\eta$ in layer" + f" {layer} [mm]", 
-                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
-                    "p_ref": particle_type}))
-        
-    # phi centroid plots mean
-    for layer in hlf.GetECPhis().keys():
-        # TODO: different for dataset 2,3
-        if params.get("dataset", 1) in [2, 3]:
-            vmin, vmax = (-30., 30.)
-        elif layer in [12, 13]:
-            vmin, vmax = (-500., 500.)
-        elif layer == 2:
-            vmin, vmax = (-250., 250.)
-        else:
-            vmin, vmax = (-100., 100.)
-            
-        plots.append((ECPhis, f'ECPhi_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": r"Center of Energy in $\Delta\phi$ in layer" + f" {layer} [mm]", 
-                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
-                    "p_ref": particle_type}))
-        
-    # eta centroid plots width
-    for layer in hlf.GetWidthEtas().keys():
-        # TODO: different for dataset 2,3
-        if params.get("dataset", 1) in [2, 3]:
-            vmin, vmax = (0., 30.)
-        elif layer in [12, 13]:
-            vmin, vmax = (0., 400.)
-        elif layer == 2:
-            vmin, vmax = (0., 250.)
-        else:
-            vmin, vmax = (0., 100.)
-            
-        plots.append((ECWidthEtas, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Width of Center of Energy in \n$\\Delta\\eta$ in layer {layer} [mm]", 
-                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))
-                    "p_ref": particle_type}))
-
-    # phi centroid plots width
-    for layer in hlf.GetWidthPhis().keys():
-        # TODO: different for dataset 2,3
-        if params.get("dataset", 1) in [2, 3]:
-            vmin, vmax = (0., 30.)
-        elif layer in [12, 13]:
-            vmin, vmax = (0., 400.)
-        elif layer == 2:
-            vmin, vmax = (0., 250.)
-        else:
-            vmin, vmax = (0., 100.)
-            
-        plots.append((ECWidthPhis, f'WidthECEta_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Width of Center of Energy in \n$\\Delta\\phi$ in layer {layer} [mm]", 
-                    # "p_ref": particle_type, "vmin": vmin, "vmax": vmax}))    
-                    "p_ref": particle_type}))    
-    
-    for layer in hlf.GetECRads().keys():
-        plots.append((ECRads, f'ECRad_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Radial center of Energy in layer {layer} [mm]", 
-                    "p_ref": particle_type}))
-        
-    for layer in hlf.GetWidthRads().keys():
-        plots.append((ECWidthRads, f'WidthECRad_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Width of radial center of Energy in layer {layer} [mm]", 
-                    "p_ref": particle_type}))
-
-    # Voxel distribution
-    plots.append((cell_dist, 'total_energy_dist.pdf', {},
-                {"axis_label": r'Voxel energy distribution', "p_ref": particle_type, "xscale": "log"}))
-    
-    # Voxel distribution by layer
-    for layer in cell_dist_by_layer(hlf).keys():
-        plots.append((cell_dist_by_layer, f'total_energy_dist_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f'Voxel energy distribution of layer {layer}', "p_ref": particle_type, "xscale": "log"}))
-        
-    # for layer in calc_brightest_voxel(hlf).keys():
-    #     for N in range(3):
-    #         plots.append((calc_brightest_voxel, f'{N+1}_brightest_voxel_{layer}.pdf', {"layer": layer, "N": N+1},
-    #             {"axis_label": f'{N+1} brightest voxel of layer {layer}', "p_ref": particle_type, "xscale": "log", "yscale": "linear",}))
-        
-     
-    # Sparsity
-    for layer in hlf.GetSparsity().keys():
-        plots.append((sparsity, f'Sparsity_layer_{layer}.pdf', {"layer": layer},
-                    {"axis_label": f"Sparsity of layer {layer}", "p_ref": particle_type, "yscale": "linear", 
-                     'n_bins': 20, 'vmin': -0.05, 'vmax': 1.05}))
-    
-    return plots
-
-def plot_all_hist_hlf(hlf_true, hlf_fake, params, plot_dir, single_plots=False, summary_plot=True):
-    
-    os.makedirs(plot_dir, exist_ok=True)
-    
-    plots = get_all_plot_parameters(hlf_true, params)
- 
-    # Plot every histrogramn in its own file
-    if single_plots:
-        for function, name, args1, args2 in plots:
-            plot_hist(
-                file_name=os.path.join(plot_dir, name),
-                data=function(hlf_fake, **args1),
-                reference=function(hlf_true, **args1),
-                **args2
-            )
-
-    # Plot all the histogramms in one file
-    if summary_plot:
-        number_of_plots = len(plots)
-        rows = number_of_plots // 6
-        if number_of_plots%6 != 0:
-            rows += 1
-        heights = [1, 0.3, 0.3]*rows
-
-        fig, axs = plt.subplots(rows*3,6, dpi=500, figsize=(6*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
-
-        iteration = 0
-        for i in range(rows*3):
-            
-            if i%3 == 1:
-                iteration -= 6
-                
-            for j in range(6):
-                
-                if i % 3 == 2:
-                    # Add one (small) invisible plot as whitespace
-                    axs[i,j].set_visible(False)
-                    continue
-                
-                elif iteration >= number_of_plots:
-                        # Plots are empty remove them
-                        axs[i,j].set_visible(False)
-                        iteration += 1
-                        continue
-                
-                
-                # Select the correct plot input for this axis
-                function, name, args1, args2 = plots[iteration]
-                
-                
-                if i % 3 == 0:
-                    # plot the main data
-                    plot_hist(
-                            file_name=None,
-                            data=function(hlf_fake, **args1),
-                            reference=function(hlf_true, **args1),
-                            ax=axs[i,j],
-                            panel_ax=axs[i+1,j],
-                            **args2)
-                    
-                    # Hide the (shared) x-axis
-                    axs[i,j].xaxis.set_visible(False)
-                    
-                    # Hide the first tick label
-                    plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
-                    iteration += 1
-
-                if i % 3 == 1:
-                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
-                    iteration += 1             
-
-        fig.subplots_adjust(hspace=0)
-        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
-        fig.savefig(plot_dir+"/summary.pdf", bbox_inches='tight', dpi=500)
-        # Dont use tight_layout!
-        plt.close()   
-
-def plot_all_hist(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir,
-                  single_plots=False, summary_plot=True):
-    
-    
-    threshold = params.get("threshold", 1.e-4)
-    
-    # Load the hlf classes
-    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold, dataset=params.get("dataset", 1))
-    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold, dataset=params.get("dataset", 1))
-    
-    os.makedirs(plot_dir, exist_ok=True)
-    
-    plots = get_all_plot_parameters(hlf_true, params)
- 
-    # Plot every histrogramn in its own file
-    if single_plots:
-        for function, name, args1, args2 in plots:
-            plot_hist(
-                file_name=os.path.join(plot_dir, name),
-                data=function(hlf_fake, **args1),
-                reference=function(hlf_true, **args1),
-                **args2
-            )
-
-    # Plot all the histogramms in one file
-    if summary_plot:
-        number_of_plots = len(plots)
-        rows = number_of_plots // 6
-        if number_of_plots%6 != 0:
-            rows += 1
-        heights = [1, 0.3, 0.3]*rows
-
-        fig, axs = plt.subplots(rows*3,6, dpi=500, figsize=(6*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
-
-        iteration = 0
-        for i in range(rows*3):
-            
-            if i%3 == 1:
-                iteration -= 6
-                
-            for j in range(6):
-                
-                if i % 3 == 2:
-                    # Add one (small) invisible plot as whitespace
-                    axs[i,j].set_visible(False)
-                    continue
-                
-                elif iteration >= number_of_plots:
-                        # Plots are empty remove them
-                        axs[i,j].set_visible(False)
-                        iteration += 1
-                        continue
-                
-                
-                # Select the correct plot input for this axis
-                function, name, args1, args2 = plots[iteration]
-                
-                
-                if i % 3 == 0:
-                    # plot the main data
-                    plot_hist(
-                            file_name=None,
-                            data=function(hlf_fake, **args1),
-                            reference=function(hlf_true, **args1),
-                            ax=axs[i,j],
-                            panel_ax=axs[i+1,j],
-                            **args2)
-                    
-                    # Hide the (shared) x-axis
-                    axs[i,j].xaxis.set_visible(False)
-                    
-                    # Hide the first tick label
-                    plt.setp(axs[i,j].get_yticklabels()[0], visible=False)  
-                    iteration += 1
-
-                if i % 3 == 1:
-                    plt.setp(axs[i,j].get_yticklabels()[-1], visible=False)
-                    iteration += 1             
-
-        fig.subplots_adjust(hspace=0)
-        # fig.savefig(os.path.join(os.path.join(plot_dir,"../"), "final.pdf"), bbox_inches='tight', dpi=500)
-        fig.savefig(plot_dir+"/summary.pdf", bbox_inches='tight', dpi=500)
-        # Dont use tight_layout!
-        plt.close() 
-
-def plot_all_hist_old(x_true, c_true, x_fake, c_fake, params, layer_boundaries, plot_dir, threshold=1.e-4):
-    
-    os.makedirs(plot_dir, exist_ok=False)
-    
-    def get_args_for_plotting(params, plot_dir):
-        """Returns a args element for the plotting"""
-        
-        parser_replacement = {"dataset" : params["particle_type"] + "s",
-                            "output_dir" : plot_dir,
-                            "mode" : "all",
-                            "x_scale": "log",
-                            "min_energy": 10}
-        
-        
-        args = argparse.Namespace(**parser_replacement)
-        
-        args.min_energy = {'photons': 10, 'pions': 10,
-                        '2': 0.5e-3/0.033, '3': 0.5e-3/0.033}[args.dataset]
-        
-        
-        return args
-
-    def plot(hlf_true, hlf_fake, args):
-        plot_Etot_Einc(hlf_fake, hlf_true, args)
-        plot_E_layers(hlf_fake, hlf_true, args)
-        plot_ECEtas(hlf_fake, hlf_true, args)
-        plot_ECPhis(hlf_fake, hlf_true, args)
-        plot_ECWidthEtas(hlf_fake, hlf_true, args)
-        plot_ECWidthPhis(hlf_fake, hlf_true, args)
-        # plot_cell_dist(hlf_fake, hlf_true, args)
-        if args.dataset[0] == '1':
-            plot_Etot_Einc_discrete(hlf_fake, hlf_true, args)
-            
-    args = get_args_for_plotting(params, plot_dir=plot_dir)
-    hlf_true = data_util.get_hlf(x_true, c_true, params["particle_type"], layer_boundaries, threshold=threshold)
-    hlf_fake = data_util.get_hlf(x_fake, c_fake, params["particle_type"], layer_boundaries, threshold=threshold)
-    
-    plot(hlf_true, hlf_fake, args)
-          
 def plot_latent(samples, results_dir, epoch=None):
+    # TODO: Update
     if epoch is not None:
         plot_dir = os.path.join(results_dir, 'latent', f'epoch_{epoch:03d}')
     else:
@@ -789,10 +157,6 @@ def plot_latent(samples, results_dir, epoch=None):
     os.makedirs(plot_dir, exist_ok=True)
     
     max_dims = samples.shape[1]
-    
-    # previously:
-    # latent_dims = [1, 150, 300, 400, 500, 504, 505, 506]
-    np.linspace(0, max_dims-4, 5)
     
     # Cover the space equally and look at the extra dims dimensions
     latent_dims = list(np.linspace(0, max_dims-4, 5).astype(int)) + [max_dims-3, max_dims-2, max_dims-1]
@@ -823,6 +187,601 @@ def plot_latent(samples, results_dir, epoch=None):
         fig.savefig(os.path.join(plot_dir, f'latent_{idx:03d}.pdf'), bbox_inches='tight')
         plt.close()
 
+
+def calc_shower_mean(x, c, layer_boundaries, layer, coordinates, direction):
+    """Computes the mean of the shower in eta or phi direction for a given layer."""
+    
+    eta = coordinates[0][layer_boundaries[layer]:layer_boundaries[layer+1]]
+    phi = coordinates[1][layer_boundaries[layer]:layer_boundaries[layer+1]]
+    
+    # Get the layer energy
+    layer_energy = x[:, layer_boundaries[layer]:layer_boundaries[layer+1]]
+    
+    # Compute the mean eta    
+    if direction == "eta":
+        return np.sum(layer_energy * eta, axis=-1) / (layer_energy.sum(axis=-1)+1.e-16)
+    
+    elif direction == "phi":
+        return np.sum(layer_energy * phi, axis=-1) / (layer_energy.sum(axis=-1)+1.e-16)
+    
+    else:
+        raise ValueError("Invalid direction")
+    
+def calc_shower_std(x, c, layer_boundaries, layer, coordinates, direction):
+    """Computes the std of the shower in eta or phi direction for a given layer."""
+    
+    mean = calc_shower_mean(x, c, layer_boundaries, layer, coordinates, direction)
+    
+    eta = coordinates[0][layer_boundaries[layer]:layer_boundaries[layer+1]]
+    phi = coordinates[1][layer_boundaries[layer]:layer_boundaries[layer+1]]
+    
+    # Get the layer energy
+    layer_energy = x[:, layer_boundaries[layer]:layer_boundaries[layer+1]]
+    
+    if direction == "eta":
+        discriminant = np.sum(layer_energy * eta * eta, axis=-1) / (layer_energy.sum(axis=-1)+1.e-16) - mean**2
+        discriminant[discriminant < 0] = 0
+        return np.sqrt(discriminant)
+    
+    elif direction == "phi":
+        discriminant = np.sum(layer_energy * phi * phi, axis=-1) / (layer_energy.sum(axis=-1)+1.e-16) - mean**2
+        discriminant[discriminant < 0] = 0
+        return np.sqrt(discriminant)
+    
+    else:
+        raise ValueError("Invalid direction")
+
+def calc_flat_energy_distribution(x, c, layer_boundaries, layer=None):
+    """Computes the energy distribution of the shower"""
+    
+    # Factor of two to counter the normalization in the preprocess function
+    if layer is None:
+        return x.flatten()*2
+    
+    return x[:, layer_boundaries[layer]:layer_boundaries[layer+1]].flatten()*2
+ 
+def calc_energy(x, c, layer_boundaries, layer=None):
+    """Computes the energy of a given layer or of the whole shower"""
+    
+    # Factor of two to counter the normalization in the preprocess function
+    if layer is None:
+        return np.sum(x, axis=-1)*2
+    
+    return np.sum(x[:, layer_boundaries[layer]:layer_boundaries[layer+1]], axis=-1)*2
+
+def calc_etot_over_einc(x, c, layer_boundaries):
+    """Computes the total energy of the shower over the incident energy"""
+    
+    return calc_energy(x, c, layer_boundaries, layer=None) / c
+    
+    
+def get_plot_params(layer_boundaries, coordinates, used_layers=None):
+    """Returns the plot parameters for the given layer and direction"""
+    
+    plots = []
+    
+    for layer in range(len(layer_boundaries)-1):
+        
+        if used_layers is not None:
+            layer_name = used_layers[layer]
+        else:
+            layer_name = layer
+        
+        plots.append(
+            [calc_energy, 
+             f"energy_{layer_name}.pdf",
+             {"layer_boundaries": layer_boundaries, "layer": layer},
+             {"axis_label": f'$E_{{\\text{{{layer_name}}}}}$'}]
+            )
+        
+        plots.append(
+            [calc_shower_mean, 
+             f"mean_{layer_name}_eta.pdf",
+             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
+             {"axis_label": f'$\\langle \\eta \\rangle_{{\\text{{{layer_name}}}}}$'}]
+            )
+        
+        plots.append(
+            [calc_shower_std, 
+             f"std_{layer_name}_eta.pdf",
+             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
+             {"axis_label": f'$\\sigma_{{\\eta, \\text{{{layer_name}}}}}$'}]
+            )
+        
+        plots.append(
+            [calc_shower_mean, 
+             f"mean_{layer_name}_phi.pdf",
+             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
+             {"axis_label": f'$\\langle \\phi \\rangle_{{\\text{{{layer_name}}}}}$'}]
+            )
+        
+        plots.append(
+            [calc_shower_std, 
+             f"std_{layer_name}_phi.pdf",
+             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
+             {"axis_label": f'$\\sigma_{{\\phi, \\text{{{layer_name}}}}}$'}]
+            )
+        
+    plots.append(
+        [calc_flat_energy_distribution, 
+         "flat_energy_distribution.pdf",
+         {"layer_boundaries": layer_boundaries},
+         {"axis_label": r'$Voxel distribution$'}]
+        )
+    
+    plots.append(
+        [calc_etot_over_einc, 
+         "etot_over_einc.pdf",
+         {"layer_boundaries": layer_boundaries},
+         {"axis_label": r'$E_{tot} / E_{inc}$'}]
+        )        
+
+    return plots
+
+def plot_hist(
+        file_name,
+        data,
+        reference,
+        axis_label=None,
+        xscale='linear',
+        yscale='log',
+        vmin=None,
+        vmax=None,
+        n_bins=50,
+        ymin=None,
+        ymax=None,
+        ax=None,
+        panel_ax=None,
+        panel_scale="linear",
+        panel_range=[0.8, 1.2],
+        density=True,
+        labels=None,
+        errorbars_true=False,
+        errorbars_fake=False,
+        y_label=True, 
+        fig = None,
+        print_means=False,):
+    
+    
+
+    if type(errorbars_fake) == bool:
+        errorbars_fake = [errorbars_fake]
+    
+    if type(data)==list and type(data[0])==np.ndarray:
+        data_list = data
+    else:
+        data_list = [data]
+             
+    if len(errorbars_fake) != len(data_list):
+        assert len(errorbars_fake) == 1, "Wrong size for the errorbars index"
+        errorbars_fake = [errorbars_fake[0] for _ in range(len(data_list))]
+    
+    for i in range(len(data_list)):
+        finite = np.isfinite(data_list[i])
+        data_list[i] = data_list[i][finite]
+        
+    
+    finite = np.isfinite(reference)
+    reference = reference[finite]
+
+    all_data = [reference] + data_list
+
+    try:
+        # Set the plotting boundaries
+        if vmin is None:
+            vmin = np.inf
+            for elem in all_data:
+                vmin = np.min([np.min(elem), vmin])
+        if vmax is None:
+            vmax = -np.inf
+            for elem in all_data:
+                vmax = np.max([np.max(elem), vmax])
+                
+        if vmax == vmin:
+            vmax += 0.0001
+            vmin -= 0.0001
+    except:
+        print("Error in setting the boundaries")
+        print(axis_label)
+        print(all_data)
+        return
+            
+    # Get the bins (Modifications needed if logscale is used)
+    if xscale=='log':
+        
+        if vmin==0:
+            vmin = np.inf     
+            for elem in all_data:
+                vmin = np.min([np.min(elem[elem>1e-7]), vmin])
+                
+        if isinstance(n_bins, int):
+            bins = np.logspace(np.log10(vmin), np.log10(vmax), n_bins)
+        else:
+            bins = n_bins
+    else:
+        if isinstance(n_bins, int):
+            bins = np.linspace(vmin, vmax, n_bins)
+        else:
+            bins = n_bins
+    
+
+    color = 'blue'
+        
+    create_fig = False
+    if ax is None:
+        create_fig = True
+        fig, ax = plt.subplots(1,1,figsize=(6,6))    
+        
+        
+    # Plot the reference data
+    if not errorbars_true:
+        ns_true, bins_true, _ = ax.hist(reference, bins=bins, histtype='stepfilled',
+                alpha=0.5, color=color, density=density, label='GEANT', linewidth=1.5)
+    else:
+        dup_last = lambda a: np.append(a, a[-1])
+
+        bins_true = bins
+        
+        counts, _ = np.histogram(reference, bins_true, density=False)
+        
+        ns_true, _ = np.histogram(reference, bins_true, density=density)
+        
+        mask = (counts == 0)
+        counts[mask] = 1
+        
+        if density: # relative error stays the same
+            ref_err = ns_true / np.sqrt(counts)
+            
+        else:
+            ref_err = np.sqrt(ns_true)
+        
+        
+        ref_err[mask] = 0
+        
+        ax.step(bins_true, dup_last(ns_true), color="blue", alpha=1,
+                        linewidth=1.5, where='post', label='GEANT')
+        
+        ax.step(bins_true, dup_last(ns_true - ref_err), color="blue", alpha=0.5,
+                        linewidth=0.5, where='post')
+        ax.step(bins_true, dup_last(ns_true + ref_err), color="blue", alpha=0.5,
+                        linewidth=0.5, where='post')
+
+        ax.fill_between(bins_true, dup_last(ns_true - ref_err), dup_last(ns_true + ref_err), 
+                        facecolor="blue", alpha=0.3, step='post')
+    
+    # Plot the generated data
+    alt_colors = ["green", "red", "orange", "pink", "black"]
+    
+    ns_fakes = []
+    bins_fakes = []
+    
+    for i, data in enumerate(data_list):
+        if not errorbars_fake[i]:
+            
+            # Modify the labels
+            if labels is None:
+                label = "VAE"
+            else:
+                label = labels[i]
+            
+            ns_i, bins_i, _ = ax.hist(data, bins=bins, histtype='step', linewidth=1.5,
+                alpha=1, density=density, label=label, color=alt_colors[i])
+    
+    
+            ns_fakes.append(ns_i)
+            bins_fakes.append(bins_i)
+            
+        else:
+            # labels
+            if labels is None:
+                label = "VAE"
+            else:
+                label = labels[i]
+                
+            data = data_list[i]
+            
+            dup_last = lambda a: np.append(a, a[-1])
+            
+            bins_i = bins
+            
+            counts, _ = np.histogram(data, bins_i, density=False)
+            
+            ns_i, _ = np.histogram(data, bins_i, density=density)
+            
+            
+            mask = (counts == 0)
+            counts[mask] = 1
+            if density: # relative error stays the same
+                data_err = ns_i / np.sqrt(counts)
+                
+            else:
+                data_err = np.sqrt(ns_i)
+                
+                
+            data_err[mask] = 0
+            
+            ax.step(bins_i, dup_last(ns_i), color=alt_colors[i], alpha=1,
+                            linewidth=1.5, where='post', label=label)
+            
+            ax.step(bins_i, dup_last(ns_i - data_err), color=alt_colors[i], alpha=0.5,
+                            linewidth=0.5, where='post')
+            ax.step(bins_i, dup_last(ns_i + data_err), color=alt_colors[i], alpha=0.5,
+                            linewidth=0.5, where='post')
+
+            ax.fill_between(bins_i, dup_last(ns_i - data_err), dup_last(ns_i + data_err), 
+                            facecolor=alt_colors[i], alpha=0.3, step='post')
+            
+            
+            ns_fakes.append(ns_i)
+            bins_fakes.append(bins_i)
+    
+    if y_label:              
+        ax.set_ylabel(r"$Normalized counts$")
+        
+    if panel_ax is not None:
+        
+        for i in range(len(bins_fakes)):
+            assert len(bins_true) == len(bins_fakes[i])
+            assert (bins_true - bins_fakes[i] < 1.e-7).all()
+        
+        for i, (ns_reco, bins_reco) in enumerate(zip(ns_fakes, bins_fakes)):
+            
+            if labels is not None:
+                label = labels[i]
+            else:
+                label = "VAE"
+            
+            if i==0:
+                mask = ns_true == 0
+                ns_true[mask] = 1
+                
+            panel_data = ns_reco/ns_true
+            
+            panel_data[mask] = 0
+            
+            widths = 1.2*(bins_true[1:] - bins_true[:-1])
+            panel_ax.axhline(1, color="black", ls="--", alpha=0.5, lw=1
+                             )
+            panel_ax.hist(bins_reco[:-1], bins_reco[1:]-widths, weights=panel_data, histtype="step", lw=1, ls="--",
+                          label=f'{label}/GEANT', color=alt_colors[i])
+            
+            if y_label:
+                panel_ax.set_ylabel(r"$\frac{{Model}}{{GEANT}}$")
+        
+    ax.set_yscale(yscale)
+    ax.set_xscale(xscale)
+    if panel_ax is not None:
+        panel_ax.set_yscale(panel_scale)
+        panel_ax.set_xscale(xscale)
+
+    ax.set_xlim([vmin,vmax])
+    if panel_ax is not None:
+        panel_ax.set_xlim([vmin,vmax])
+        panel_ax.set_ylim(panel_range)
+        
+    if ymin is not None or ymax is not None:
+        ax.set_ylim((ymin, ymax))
+        
+    if panel_ax is not None:
+        lower_bound, upper_bound = ax.get_ylim()
+        
+        ticks = ax.get_yticks()
+        ticks = ticks[ticks >= lower_bound]
+        ticks = ticks[ticks <= upper_bound]
+        
+        if yscale != "log":
+            ticks = ticks[1:]
+
+        ax.set_yticks(ticks)
+        
+        
+    if print_means and fig is not None:
+        legend = ax.legend(["Data", "Data", "Data"], loc="best")
+        plt.draw()
+        bbox = legend.get_window_extent().transformed(fig.transFigure.inverted())
+        legend.remove()
+        
+        # print(bbox.x0, bbox.y0)
+        
+        text = ""
+        for i, data in enumerate(all_data):
+            mu = np.mean(data)
+            std = np.std(data)
+            
+            if i == 0:
+                mu_0 = mu
+            
+            # text += f'$\mu$={mu:.3e}$\pm${std:.1e}\n'
+            # text += f'$\mu$={mu:.3e}\n'
+            
+            if mu_0 == 0:
+                break
+            
+            text += f'{mu / mu_0:0.3f} \\pm {std / mu_0 / np.sqrt(len(data)):0.3f}\n'
+        
+        ax.text(bbox.x0, bbox.y0, text, transform=fig.transFigure, fontsize=15)
+    
+
+    if axis_label is not None:
+        if panel_ax is None:
+            ax.set_xlabel(axis_label)
+        else:
+            panel_ax.set_xlabel(axis_label)
+    
+
+    if create_fig:
+        fig.tight_layout()
+        fig.savefig(file_name, bbox_inches='tight')
+        plt.close()
+ 
+def plot_all_hist(xs, cs, plot_params, plot_dir=None, single_plots=False, summary_plot=False, summary_plot_name=None, labels=None, 
+                  errorbars_true=False, errorbars_fake=False, plots_per_row=5, plot_seperate_legend=True, ncol=None,
+                  print_means=False):
+
+    if plot_dir is not None:
+        os.makedirs(plot_dir, exist_ok=True)
+
+    plots = plot_params
+
+    if single_plots and plot_dir is not None:
+        
+        for i, (func, name, args1, args2) in enumerate(plots):
+            
+            fig, axs = plt.subplots(2,1, dpi=300, figsize=(7,6*1.3), gridspec_kw={'height_ratios': [1, 0.3]})
+            
+                            
+            # Add ylabels to the leftmost plots
+            if i % plots_per_row == 0:
+                fig.tight_layout(pad=0.0, w_pad=0.0, h_pad=0.0, rect=rect_double_with_legend)
+                ylabel = True
+            else:
+                fig.tight_layout(pad=0.0, w_pad=0.0, h_pad=0.0, rect=rect_double)
+                ylabel = False
+                
+            plot_hist(
+                file_name=None,
+                data=[func(x, c, **args1) for x, c in zip(xs[1:], cs[1:])],
+                reference=func(xs[0], cs[0], **args1),
+                ax=axs[0],
+                panel_ax=axs[1],
+                labels=labels,
+                errorbars_fake=errorbars_fake,
+                errorbars_true=errorbars_true,
+                y_label=ylabel,
+                fig=fig,
+                print_means=print_means,
+                **args2)
+
+            
+            if not plot_seperate_legend:
+                # Add figure legend on every rightmost plot
+                if i % plots_per_row == plots_per_row-1 or i == len(plots)-1:
+                    # Get legend handles and labels from first axis
+                    lines1, labels1 = axs[0].get_legend_handles_labels()
+
+                    all_lines = lines1
+                    all_labels = labels1
+
+                    # Create a figure-wide legend
+                    fig.legend(all_lines, all_labels, loc='upper left', bbox_to_anchor=(0.95, 0.98))
+                
+            # Hide the (shared) x-axis
+            axs[0].xaxis.set_visible(False)
+
+            
+            fig.subplots_adjust(hspace=0)
+            # fig.tight_layout(pad=0.0, w_pad=0.0, h_pad=0.0, rect=rect_double)
+            fig.savefig(os.path.join(plot_dir, f"{i+1:02}_"+name), dpi=300)
+            # fig.tight_layout(pad=0.0, w_pad=0.0, h_pad=0.0)
+            # fig.savefig(plot_dir+f"{i+1:02}_"+name, bbox_inches='tight', dpi=300)
+            plt.close()
+
+        if plot_seperate_legend:
+            fig_leg = plt.figure(figsize=(8., 2./3.)) # if 1 particle, use (8,2) for 3 particles
+            ax_leg = fig_leg.add_subplot(111)
+            
+            # add the legend from the previous axes
+            lines1, labels1 = axs[0].get_legend_handles_labels()
+
+            all_lines = lines1
+            all_labels = labels1
+            entries = len(labels)+1
+            
+            if ncol is not None:
+                ax_leg.legend(all_lines, all_labels, ncol=ncol, loc='center')
+            elif entries >= 4:
+                ax_leg.legend(all_lines, all_labels, ncol=(entries+1)//2, loc='center')
+            else:
+                ax_leg.legend(all_lines, all_labels, ncol=entries, loc='center')
+            # hide the axes frame and the x/y labels
+            ax_leg.axis('off')
+            fig_leg.savefig(os.path.join(plot_dir,f"{0:02}_"+"legend.pdf"), bbox_inches='tight', dpi=300, pad_inches=0.1)
+
+            plt.close()
+
+    if not summary_plot:
+        return
+
+    # Plot all the histogramms in one file
+    number_of_plots = len(plots)
+    rows = number_of_plots // plots_per_row
+    if number_of_plots%plots_per_row != 0:
+        rows += 1
+    heights = [1, 0.3, 0.3]*rows
+
+    fig, axs = plt.subplots(rows*3,plots_per_row, dpi=500, figsize=(plots_per_row*7,6*np.sum(heights)), gridspec_kw={'height_ratios': heights})
+
+    iteration = 0
+    for i in range(rows*3):
+        
+        if i%3 == 1:
+            iteration -= plots_per_row
+            
+        for j in range(plots_per_row):
+            
+            if i % 3 == 2:
+                # Add one (small) invisible plot as whitespace
+                axs[i,j].set_visible(False)
+                continue
+            
+            elif iteration >= number_of_plots:
+                    # Plots are empty remove them
+                    axs[i,j].set_visible(False)
+                    iteration += 1
+                    continue
+            
+            
+            # Select the correct plot input for this axis
+            func, name, args1, args2 = plots[iteration]
+            
+            
+            if i % 3 == 0:
+                # plot the main data
+                plot_hist(
+                        file_name=None,
+                        data=[func(x, c, **args1) for x, c in zip(xs[1:], cs[1:])],
+                        reference=func(xs[0], cs[0], **args1),
+                        ax=axs[i,j],
+                        panel_ax=axs[i+1,j],
+                        labels=labels,
+                        errorbars_fake=errorbars_fake,
+                        errorbars_true=errorbars_true,
+                        y_label=iteration % plots_per_row == 0,
+                        fig=fig,
+                        print_means=print_means,
+                        **args2)
+                
+                # Hide the (shared) x-axis
+                axs[i,j].xaxis.set_visible(False)
+                
+                
+                if i == 0 and j==0:
+                    # Get legend handles and labels from first axis
+                    lines1, labels1 = axs[0,0].get_legend_handles_labels()
+
+                    # Get legend handles and labels from second axis
+                    lines2, labels2 = axs[1,0].get_legend_handles_labels()
+
+                    # Combine handles and labels from both axes
+                    all_lines = lines1 + lines2
+                    all_labels = labels1 + labels2
+
+                    # Create a figure-wide legend
+                    fig.legend(all_lines, all_labels, loc='upper left', bbox_to_anchor=(1,0.5))
+                     
+                iteration += 1
+
+            if i % 3 == 1:
+                iteration += 1             
+
+    fig.subplots_adjust(hspace=0)
+    if plot_dir is not None and summary_plot_name is not None:
+        fig.savefig(os.path.join(plot_dir,summary_plot_name), bbox_inches='tight', dpi=500)
+        plt.close()
+    else:
+        plt.show()
+      
+        
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--results_dir', help='Where to find the results and save the plots')

@@ -83,3 +83,10 @@ ipython_config.py
 
 # pyenv
 .python-version
+
+results/*
+!results/dummy_file.txt
+
+src_bak
+
+notebooks

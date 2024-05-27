@@ -1,0 +1,3 @@
+conda install pandas matplotlib h5py scipy scikit-learn tqdm jupyter
+pip install FrEIA
+pip install natsort

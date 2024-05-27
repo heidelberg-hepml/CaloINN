@@ -4,227 +4,13 @@ import torch
 from copy import deepcopy
 from myDataLoader import MyDataLoader
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
-from XMLHandler import XMLHandler
-import HighLevelFeatures as HLF
 import pickle
 
 import os
 import warnings
 
 
-def load_data(filename, particle_type, dataset=1):
-    """Loads the data for a dataset 1 from the calo challenge"""
-    
-    # Create a XML_handler to extract the layer boundaries. (Geometric setup is stored in the XML file)
-    if dataset==1:
-        xml_handler = XMLHandler(particle_name=particle_type, 
-        filename=f'binning_dataset_1_{particle_type}s.xml')
-    else:
-        xml_handler = XMLHandler(particle_name=particle_type, 
-        filename=f'binning_dataset_{dataset}.xml')
-    
-    layer_boundaries = np.unique(xml_handler.GetBinEdges())
 
-    # Prepare a container for the loaded data
-    data = {}
-
-    # Load and store the data. Make sure to slice according to the layers.
-    # Also normalize to 100 GeV (The scale of the original data is MeV)
-    data_file = h5py.File(filename, 'r')
-    data["energy"] = data_file["incident_energies"][:] / 1.e5
-    
-    if type(dataset) != int and "layers_[" in dataset:
-        
-        print(layer_boundaries)
-                
-        # NOTE: This is a hacky solution to get the layers from the dataset.Works only for dataset 2!!!
-        layer_boundaries = np.arange(0, 46*144, 144)
-        layers = []
-        for layer in dataset.split("layers_")[1].split("[")[1].split("]")[0].split(","):
-            layers.append(int(layer))
-    
-        # layer_boundaries = layer_boundaries[layers]
-        new_layer_boundaries = [0]
-        
-        i = 0
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            if layer_index not in layers:
-                continue
-
-            new_layer_boundaries.append(new_layer_boundaries[-1] + layer_end - layer_start)
-            data[f"layer_{i}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
-            
-            i += 1
-            
-        print(new_layer_boundaries)
-        layer_boundaries = new_layer_boundaries
-    
-    elif dataset == "2_small":
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
-            
-            if layer_index == 4:
-                break
-            
-    elif dataset == "2_small_2":
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
-            
-            if layer_index == 7:
-                break
-            
-    elif dataset == "2_medium":
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
-            
-            if layer_index == 16:
-                break
-    else:
-        for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-            data[f"layer_{layer_index}"] = data_file["showers"][..., layer_start:layer_end] / 1.e5
-            
-    data_file.close()
-    
-    return data, layer_boundaries
-
-def get_energy_and_sorted_layers(data):
-    """returns the energy and the sorted layers from the data dict"""
-    
-    # Get the incident energies
-    energy = data["energy"]
-
-    # Get the number of layers layers from the keys of the data array
-    number_of_layers = len(data)-1
-    
-    # Create a container for the layers
-    layers = []
-
-    # Append the layers such that they are sorted.
-    for layer_index in range(number_of_layers):
-        layer = f"layer_{layer_index}"
-        
-        layers.append(data[layer])
-        
-            
-    return energy, layers
-
-def save_data(data, filename, mask=None):
-    """Saves the data with the same format as dataset 1 from the calo challenge"""
-    
-    # extract the needed data
-    incident_energies, layers = get_energy_and_sorted_layers(data)
-    
-    # renormalize the energies
-    incident_energies *= 1.e5
-    
-    # concatenate the layers and renormalize them, too           
-    showers = np.concatenate(layers, axis=1) * 1.e5
-    
-    if mask is not None:
-        showers[..., mask] = 0
-    
-    save_file = h5py.File(filename, 'w')
-    save_file.create_dataset('incident_energies', data=incident_energies, compression="gzip")
-    save_file.create_dataset('showers', data=showers, compression="gzip")
-    save_file.close()
-    
-    return showers, incident_energies           
-  
-def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
-    """Appends the extra dimensions and the layer energies to the conditions
-    The layer energies will always be the last #layers entries, the extra dims will
-    be the #layers entries directly after the first entry - the incident energy.
-    Inbetween additional features might be appended as further conditions"""
-    
-    x = np.copy(x)
-    c = np.copy(c)
-
-    layer_energies = []
-    # brightest_voxels = []
-
-    for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
-        
-        # Compute total energy of current layer
-        layer_energy = np.sum(x[..., layer_start:layer_end], axis=1, keepdims=True)
-        
-        # Normalize current layer
-        x[..., layer_start:layer_end] = x[..., layer_start:layer_end] / (layer_energy + eps)
-        
-        # Store its energy for later
-        layer_energies.append(layer_energy)
-        
-        # brightest_voxels.append(np.max( x[..., layer_start:layer_end], axis=1, keepdims=True ))
-    layer_energies_np = np.array(layer_energies).T[0]
-        
-    # Compute the generalized extra dimensions
-    extra_dims = [np.sum(layer_energies_np, axis=1, keepdims=True) / c]
-
-    for layer_index in range(len(layer_boundaries)-2):
-        extra_dim = layer_energies_np[..., [layer_index]] / (np.sum(layer_energies_np[..., layer_index:], axis=1, keepdims=True) + eps)
-        extra_dims.append(extra_dim)
-        
-    # Collect all the conditions
-    # all_conditions = [c] + extra_dims + brightest_voxels + layer_energies
-    all_conditions = [c] + extra_dims + layer_energies
-    c = np.concatenate(all_conditions, axis=1)
-    
-    return c
-
-def preprocess(data, layer_boundaries, eps=1.e-10):
-    """Transforms the dict 'data' into the ndarray 'x'. Furthermore, the events
-    are masked and the extra dims are appended to the incident energies"""
-    energy, layers = get_energy_and_sorted_layers(data)
-
-    # Concatenate the layers
-    x = np.concatenate(layers, axis=1)
-
-    binary_mask = np.full(len(energy), True)
-
-    # TODO: We loose about 20% of our events this way. Might reconsider the masking here...
-    # EDIT: Rescale the energies by an arbitrary factor of 2 -> Only loose 10 showers instead of ~20 000
-    # Has to be reversed in the postprocess loop
-    x = x/2
-    
-    
-    # Ensure energy conservation
-    binary_mask &= np.sum(x, axis=1) < energy[:,0]
-    # Remove all no-interaction events (only 0.7%)
-    binary_mask &= np.sum(x, axis=1) > 0
-
-    x = x[binary_mask]
-    c = energy[binary_mask]
-
-    c = get_energy_dims(x, c, layer_boundaries, eps)
-    
-    return x, c
-
-def postprocess(x, c, layer_boundaries, threshold=1e-4, inplace=False):
-    """Reverses the effect of the preprocess funtion"""
-    
-    # Input sanity checks
-    assert len(x) == len(c)
-    assert len(x.shape) == 2
-    assert len(x.shape) == 2
-    
-    if not inplace:
-        # Makes sure, that the original set is not modified inplace
-        x = torch.clone(x)
-        c = torch.clone(c)
-           
-    # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
-    # the logit preprocessing
-    x[x < threshold] = 0.
-    
-    # Reverse the rescaling that was used before
-    x = x*2
-    
-    # Create a new dict 'data' for the output
-    data = {}
-    data["energy"] = c[..., [0]].cpu().numpy()
-    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        data[f"layer_{layer_index}"] = x[..., layer_start:layer_end].cpu().numpy()
-
-    return data
 
 def normalize_layers(x, layer_boundaries, c=None, eps=1.e-10):
     """Normalizes each layer by its energy"""
@@ -285,66 +71,203 @@ def unnormalize_layers(x, c, layer_boundaries, eps=1.e-10, noise_width=None):
 
     return output
 
-def get_hlf(x, c, particle_type, layer_boundaries, threshold=1.e-4, dataset=1):
-    "returns a hlf class needed for plotting"
-    
-    x = x.detach().cpu()
-    c = c.detach().cpu()
-    
-    if dataset == 1:
-        hlf = HLF.HighLevelFeatures(particle_type,
-                                    f"binning_dataset_1_{particle_type}s.xml")
-    else:
-        hlf = HLF.HighLevelFeatures(particle_type,
-                                    f"binning_dataset_{dataset}.xml")
-    
-    # Maybe we will do more than just thresholding in postprocess someday. So, we should call it here as well.
-    data = postprocess(x, c, layer_boundaries, threshold)
-    
-    # like in save function:
-    # extract the needed data
-    incident_energies, layers = get_energy_and_sorted_layers(data)
-    
-    # renormalize the energies
-    incident_energies *= 1.e5
 
-    sparsity_threshold = 1.e-3
+def load_data(filename, used_layers=None, ):
+    """Loads the data for the ML training from an hdf5 file"""
     
-    # concatenate the layers and renormalize them, too           
-    showers = np.concatenate(layers, axis=1) * 1.e5
+    # layer_boundaries = [0, size_layer_0, size_layer_0+size_layer_1, ...]
+    # data = {"incident_energy": energy, "energy_layer_0": layer_0, ...}
+    # filename = "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_binned/dataset_eta_020.hdf5"
     
+    file = h5py.File(filename, 'r')
     
-    hlf.CalculateFeatures(showers, sparsity_threshold)
-    hlf.Einc = incident_energies
-    hlf.showers = showers
+    if used_layers is None:
+        used_layers = [int(key.split("_")[-1]) for key in file.keys() if "bin" not in key and "layer" in key]
+        
+    used_layers = torch.tensor(used_layers, dtype=torch.int32)    
+    used_layers = torch.sort(used_layers)[0]
+        
+    print(f"Using layers {used_layers}")
+        
+    # Store the layer energies
+    layers = []
+    for layer_index in used_layers:
+        layers.append(torch.tensor(file[f"energy_layer_{layer_index}"][:], dtype=torch.get_default_dtype()))
     
-    return hlf
+    # Store the incident energy
+    energy = torch.tensor(file["incident_energy"][:], dtype=torch.get_default_dtype())[:, None]
+    
+    # Create the layer boundaries list
+    layer_boundaries = [0]
+    for layer in layers:
+        layer_boundaries.append(layer.shape[1] + layer_boundaries[-1])
+        
+    coordinates = [[],[]]
+    
+    for layer_index in used_layers:
+        alpha = torch.tensor(file[f"binsize_alpha_layer_{layer_index}"][:], dtype=torch.get_default_dtype())/2 \
+            +   torch.tensor(file[f"binstart_alpha_layer_{layer_index}"][:], dtype=torch.get_default_dtype())
+            
+        radius = torch.tensor(file[f"binsize_radius_layer_{layer_index}"][:], dtype=torch.get_default_dtype())/2 \
+            +    torch.tensor(file[f"binstart_radius_layer_{layer_index}"][:], dtype=torch.get_default_dtype())
+        
+        eta = radius * torch.cos(alpha)
+        phi = radius * torch.sin(alpha)
+        
+        coordinates[0].append(eta)
+        coordinates[1].append(phi)
+        
+    coordinates[0] = torch.cat(coordinates[0])
+    coordinates[1] = torch.cat(coordinates[1])
+    
+    coordinates = torch.stack(coordinates)
+    
+    # Concatenate the layers
+    x = torch.cat(layers, axis=1)
+    
+    # Turn x into MeV scale
+    x *= energy    
 
-def save_hlf(hlf, filename):
-    """ Saves high-level features class to file """
-    print("Saving file with high-level features.")
-    #filename = os.path.splitext(os.path.basename(ref_name))[0] + '.pkl'
-    with open(filename, 'wb') as file:
-        pickle.dump(hlf, file)
-    print("Saving file with high-level features DONE.")
+    file.close()
+    
+    return x, energy, layer_boundaries, coordinates
 
-def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, device='cpu', drop_last=False, shuffle=False, dataset=1):
+def separate_negative_energies(x, layer_boundaries):
+    negative_layers = []
+        
+    new_layers = [x]
+    for i, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        layer = x[..., layer_start:layer_end]
+        if torch.any(layer < 0):
+            
+            negative_layers.append(i)
+            
+            new_layers.append(-torch.clip(layer, None, 0))
+            
+            x[..., layer_start:layer_end] = torch.clip(layer, 0, None)
+            
+            layer_boundaries.append(layer_boundaries[-1] + layer.shape[1])
+            
+    print(f"Fixed {len(negative_layers)} negative layers")
+    
+    x = torch.cat(new_layers, axis=1)
+    
+    return x, layer_boundaries, negative_layers
+    
+def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
+    """Appends the extra dimensions and the layer energies to the conditions
+    The layer energies will always be the last #layers entries, the extra dims will
+    be the #layers entries directly after the first entry - the incident energy.
+    Inbetween additional features might be appended as further conditions"""
+    
+    x = torch.clone(x)
+    c = torch.clone(c)
+
+    layer_energies = []
+
+    for layer_start, layer_end in zip(layer_boundaries[:-1], layer_boundaries[1:]):
+        
+        # Compute total energy of current layer
+        layer_energy = torch.sum(x[..., layer_start:layer_end], axis=1, keepdims=True)
+        
+        # Store its energy for later
+        layer_energies.append(layer_energy)
+        
+        
+    layer_energies_torch = torch.cat(layer_energies, axis=1)
+        
+    # Compute the generalized extra dimensions
+    extra_dims = [torch.sum(layer_energies_torch, axis=1, keepdims=True) / c]
+
+    for layer_index in range(len(layer_boundaries)-2):
+        extra_dim = layer_energies_torch[..., [layer_index]] / (torch.sum(layer_energies_torch[..., layer_index:], axis=1, keepdims=True) + eps)
+        extra_dims.append(extra_dim)
+        
+    # Collect all the conditions
+    all_conditions = [c] + extra_dims + layer_energies
+    c = torch.cat(all_conditions, axis=1)
+    
+    return c
+            
+def preprocess(x, energy, layer_boundaries, eps=1.e-10):
+    """Transforms the list 'layers' into the ndarray 'x'. Furthermore, the events
+    are masked and the extra dims are appended to the incident energies"""
+        
+    x, layer_boundaries, negative_layers = separate_negative_energies(x, layer_boundaries)
+
+    binary_mask = torch.full((len(energy),), True)
+
+    # Rescale the energies by an arbitrary factor of 2 -> Only loose O(10) showers instead of ~50%
+    # Has to be reversed in the postprocess loop
+    x = x/2
+    
+    # Ensure energy conservation
+    binary_mask &= torch.sum(x, axis=1) < energy[:, 0]
+    
+    # Remove all no-interaction events (= 4 Events in the dataset)
+    binary_mask &= torch.sum(x, axis=1) > 0
+    
+    print(f"Removed {len(energy) - torch.sum(binary_mask)} of {len(energy)} events ({100*(1-torch.sum(binary_mask)/len(energy)):.2f}%)")
+
+    x = x[binary_mask]
+    c = energy[binary_mask]
+
+    c = get_energy_dims(x, c, layer_boundaries, eps)
+    
+    return x, c, negative_layers
+
+def recombine_negative_energies(x, layer_boundaries, negative_layers):
+    """Subtracts the negative layers from the positive layers to receive the original data."""
+    
+    n_layers = len(negative_layers)
+    
+    for i, layer_index in enumerate(negative_layers):
+        positive_layer = x[..., layer_boundaries[layer_index]:layer_boundaries[layer_index+1]]
+        negative_layer = x[..., layer_boundaries[-n_layers+i-1]:layer_boundaries[-n_layers+i]]
+        
+        x[..., layer_boundaries[layer_index]:layer_boundaries[layer_index+1]] = positive_layer - negative_layer
+    
+    return x[..., :layer_boundaries[-n_layers-1]], layer_boundaries[:-n_layers]
+
+def postprocess(x, c, layer_boundaries, negative_layers, threshold=1e-10, inplace=False):
+    """Reverses the effect of the preprocess funtion"""
+    
+    # Input sanity checks
+    assert len(x) == len(c)
+    assert len(c.shape) == 2
+    assert len(x.shape) == 2
+    
+    if not inplace:
+        # Makes sure, that the original set is not modified inplace
+        x = torch.clone(x)
+        c = torch.clone(c)
+           
+    # Set all energies smaller than a threshold to 0. Also prevents negative energies that might occur due to the alpha parameter in
+    # the logit preprocessing
+    x[x < threshold] = 0.
+    
+    # Reverse the rescaling that was used before
+    x = x*2
+    
+    x, layer_boundaries = recombine_negative_energies(x, layer_boundaries, negative_layers)
+    
+
+    return x, c[..., [0]], layer_boundaries
+
+def get_loaders(filename, val_frac, batch_size, used_layers=None, eps=1.e-10, device='cpu', drop_last=False, shuffle=True, save_memory=False, width_noise=0):
     """Creates the dataloaders used to train the VAE model."""
     
     # load the data from the hdf5 file
-    data, layer_boundaries = load_data(filename, particle_type, dataset=dataset)
+    x, energy, layer_boundaries, coordinates = load_data(filename, used_layers=used_layers)
 
     # preprocess the data and append the extra dims
-    x, c = preprocess(data, layer_boundaries, eps)
+    x, c, negative_layers = preprocess(x, energy, layer_boundaries, eps)
     
     # Create an index array, used for splitting into train and val set
     number_of_samples = len(x)
     
-    # Dont want to mix train and test set, when loading!
-    if False:
-        full_index = np.random.choice(number_of_samples, number_of_samples, replace=False)
-    else:
-        full_index = np.arange(number_of_samples)
+    # Dont want to mix train and test set, when loading -> No random permutation
+    full_index = np.arange(number_of_samples)
 
     # Split the data
     number_of_val_samples = int(number_of_samples * val_frac)
@@ -353,26 +276,21 @@ def get_loaders(filename, particle_type, val_frac, batch_size, eps=1.e-10, devic
     trn_index = full_index[:number_of_trn_samples]
     val_index = full_index[number_of_trn_samples:]
     
-    x_trn = x[trn_index]
-    c_trn = c[trn_index]
+    if save_memory:
+        device = 'cpu'
     
-    x_val = x[val_index]
-    c_val = c[val_index]  
+    x_trn = x[trn_index].to(device)
+    c_trn = c[trn_index].to(device)
     
-    if dataset==3:
-        device="cpu"
-    
-    # Cast into torch tensors
-    x_trn = torch.tensor(x_trn, device=device, dtype=torch.get_default_dtype())
-    c_trn = torch.tensor(c_trn, device=device, dtype=torch.get_default_dtype())
-    x_val = torch.tensor(x_val, device=device, dtype=torch.get_default_dtype())
-    c_val = torch.tensor(c_val, device=device, dtype=torch.get_default_dtype())
+    x_val = x[val_index].to(device)
+    c_val = c[val_index].to(device)
 
-    # Call the postprocess func to make sure that it runs through
-    _ = postprocess(x_trn, c_trn, layer_boundaries)
-    _ = postprocess(x_val, c_val, layer_boundaries)
+    # # Call the postprocess func to make sure that it runs through
+    # postprocess(x_trn, c_trn, layer_boundaries)
+    # postprocess(x_val, c_val, layer_boundaries)
     
     # Create the dataloaders
-    trn_loader = MyDataLoader(x_trn, c_trn, batch_size, drop_last, shuffle)
-    val_loader = MyDataLoader(x_val, c_val, batch_size, drop_last, shuffle)
-    return trn_loader, val_loader, layer_boundaries
+    trn_loader = MyDataLoader(x_trn, c_trn, batch_size, drop_last, shuffle, width_noise=width_noise)
+    val_loader = MyDataLoader(x_val, c_val, batch_size, drop_last, shuffle, width_noise=width_noise)
+    return trn_loader, val_loader, layer_boundaries, negative_layers, coordinates
+            

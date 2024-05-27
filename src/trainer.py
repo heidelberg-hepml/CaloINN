@@ -31,21 +31,23 @@ class VAETrainer:
         
         self.params = params
         self.device = device
-        print(self.device)
-        print(params.get("dataset", 1))
+        print("Device: ", self.device)
         self.doc = doc
+        self.save_memory = params.get("save_memory", False)
+        self.VAE_type = VAE_type
 
         # Load the data  
-        self.train_loader, self.test_loader, self.layer_boundaries = data_util.get_loaders(
+        self.train_loader, self.test_loader, self.layer_boundaries, self.negative_layers, self.coordinates = data_util.get_loaders(
             filename=params['data_path'],
-            particle_type=params['particle_type'],
             val_frac=params["val_frac"],
             batch_size=params['VAE_batch_size'],
+            used_layers=params.get("used_calo_layers", None),
             eps=params.get("eps", 1.e-10),
             device=device,
             drop_last=True,
             shuffle=True,
-            dataset=params.get("dataset", 1),)
+            save_memory=self.save_memory,
+            width_noise=0)
         
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
@@ -53,56 +55,56 @@ class VAETrainer:
         cond = self.train_loader.cond
         
         # Create the VAE
-        self.latent_dim = params["VAE_latent_dim"]
-        hidden_sizes = params["VAE_hidden_sizes"]
-            
-        self.dataset = params.get('dataset', 1)
+        if VAE_type is not None:
+            self.latent_dim = params["VAE_latent_dim"]
+        else:
+            # TODO: Check again!
+            self.latent_dim = data.shape[1] + self.num_detector_layers
             
         if VAE_type == "CVAE":
             self.model = CVAE(input = data,
                             cond = cond,
                             latent_dim = self.latent_dim,
-                            hidden_sizes = hidden_sizes,
+                            hidden_sizes = params["VAE_hidden_sizes"],
                             layer_boundaries_detector = self.layer_boundaries,
-                            particle_type = params['particle_type'],
-                            dataset = params.get('dataset', 1),
                             alpha = params.get("alpha", 1.e-6),
                             beta = params.get("VAE_beta", 1.e-5),
                             gamma = params.get("VAE_gamma", 1.e+3),
                             eps = params.get("eps", 1.e-10),
-                            smearing_self=params.get("VAE_smearing_self", 1.0),
-                            smearing_share=params.get("VAE_smearing_share", 0),
                             threshold=params.get("VAE_internal_threshold", False), 
                             sparsity_loss=params.get("sparsity_loss", None), 
                             learnable_norm=params.get("VAE_learnable_norm", False),
                             )
+            
         elif VAE_type == "KVAE":
             self.model = KernelVAE(input = data,
                           cond = cond,
                           latent_dim = self.latent_dim,
-                          hidden_sizes = hidden_sizes,
+                          hidden_sizes = params["VAE_hidden_sizes"],
                           hidden_sizes_kernel = params["VAE_hidden_sizes_kernel"],
                           kernel_size=params.get("VAE_kernel_size", 7),
                           kernel_stride=params.get("VAE_kernel_stride", 3),
                           kernel_latent=params.get("VAE_kernel_latent", 50),
                           layer_boundaries_detector = self.layer_boundaries,
-                          particle_type = params['particle_type'],
-                          dataset = params.get('dataset', 1),
                           alpha = params.get("alpha", 1.e-6),
                           beta = params.get("VAE_beta", 1.e-5),
                           gamma = params.get("VAE_gamma", 1.e+3),
                           eps = params.get("eps", 1.e-10),
-                          smearing_self=params.get("VAE_smearing_self", 1.0),
-                          smearing_share=params.get("VAE_smearing_share", 0),
                           threshold=params.get("VAE_internal_threshold", False), 
                           sparsity_loss=params.get("sparsity_loss", None), 
                           learnable_norm=params.get("VAE_learnable_norm", False),
                           )
+        
+        elif VAE_type is None:
+            # TODO: Implement dummy
+            raise NotImplementedError("VAE dummy not yet implemented!")
+        
+            # We dont need the rest if no VAE is used
+            return
+                      
         else:
             raise NotImplementedError("Only CVAE and KVAE are implemented")
 
-            
-        
         self.model = self.model.to(self.device)
         
         self.logit_trafo_in = self.model.logit_trafo_in
@@ -165,6 +167,10 @@ class VAETrainer:
 
     def train(self):
         
+        if self.VAE_type is None:
+            print("No VAE is used. Only the INN will be trained.")
+            return
+        
         for epoch in  tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
             
             # Save the latest epoch of the training (just the number)
@@ -176,12 +182,12 @@ class VAETrainer:
             
                 
             # Print the data saved for documentation
-            self.print_losses(epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss,
+            self._print_losses(epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss,
                               test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss, test_loss, max_grad)
             
             # Plot the losses as well
             if epoch >= 1:
-                self.plot_losses()
+                self._plot_losses()
                 
             # If we reach the save interval, create all histograms for the observables,
             # plot the latent distribution and save the model
@@ -211,7 +217,7 @@ class VAETrainer:
         # x=data, c=condition
         for x, c in self.train_loader:
             
-            if self.dataset == 3:
+            if self.save_memory:
                 x = x.to(self.device)
                 c = c.to(self.device)
             
@@ -281,7 +287,7 @@ class VAETrainer:
         with torch.no_grad():
             for x, c in self.test_loader:
                 
-                if self.dataset == 3:
+                if self.save_memory:
                     x = x.to(self.device)
                     c = c.to(self.device)
                 
@@ -311,6 +317,9 @@ class VAETrainer:
         return test_loss, test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss
 
     def get_reco(self, data, cond, batch_size=10000):
+        
+        if self.VAE_type is None:
+            raise RuntimeError("Cannor reconstruct without a VAE model!")
         
         
         self.model.eval()
@@ -387,7 +396,7 @@ class VAETrainer:
         # Put VAE model back on the right device
         self.model.to(self.device)
         
-        return loader_train, loader_test
+        return loader_train, loader_test, self.layer_boundaries
 
     def _get_full_cond(self, e_inc, extra_dims):
         """Recreate the full VAE cond data from the extra dims and the incident energy. Therefore the 
@@ -462,46 +471,42 @@ class VAETrainer:
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
         
+        if self.VAE_type is None:
+            print("Nothing to plot")
+            return
+        
         self.model.eval()
-        # try:
+
         # Generate the reconstructions
         data = self.test_loader.data
         cond = self.test_loader.cond
         generated = self.get_reco(data, cond)
+        
+        # Postprocess the data
+        data_post, cond_post, layer_boundaries_post = data_util.postprocess(data, cond, self.layer_boundaries, self.negative_layers)
+        generated_post, _, _ = data_util.postprocess(generated, cond, self.layer_boundaries, self.negative_layers)
+        
+        # Get the plot paramters
+        params = plotting.get_plot_params(layer_boundaries_post, self.coordinates.cpu().numpy(), used_layers=self.params.get("used_calo_layers", None))
+             
                     
-        # Now create the no-errorbar histograms
+        # Now create the histograms
         if plot_path is None:
             subdir = os.path.join("plots", f'epoch_{epoch:03d}')
             plot_dir = self.doc.get_file(subdir)
         else:
             plot_dir = plot_path
             
-        plotting.plot_all_hist(
-            data, cond, generated, cond, self.params,
-            self.layer_boundaries, plot_dir)
-
+        # plot_all_hist([x_post.cpu().numpy(), x_post.cpu().numpy()], [c_post.cpu().numpy(), c_post.cpu().numpy()], params, plot_dir=plot_dir, summary_plot=True,
+        #       summary_plot_name="summary.pdf", errorbars_true=True, errorbars_fake=True, ncol=5)
         
-        with torch.no_grad():
-            
-            if self.params.get("dataset", 1) == 1:
-                mu, logvar = self.model.encode(x=data, c=cond)
-                mu0 = mu[:, 0].cpu().numpy()
-                mu1 = mu[:, 1].cpu().numpy()
-                
-                plt.figure(dpi=300)
-                plt.plot(mu0, mu1, lw=0, marker=",")
-                plt.title(r"$\mu_0$ and $\mu_1$ correlations")
-                # plt.xscale("log")
-                plt.xlabel(r"$\mu_0$")
-                plt.ylabel(r"$\mu_1$")
-                # plt.xlim(1.e-9, 5.e1)
-                if plot_path is None:
-                    plt.savefig(self.doc.get_file(os.path.join("plots", f"epoch_{epoch:03d}", "correlation_plots", "0_1_latent.png")))
-                else:
-                    plt.savefig(os.path.join(plot_path, "0_1_latent.png"))
-                plt.close()
+        plotting.plot_all_hist([data_post.cpu().numpy(), generated_post.cpu().numpy()], 
+                               [cond_post.cpu().numpy(), cond_post.cpu().numpy()], 
+                               params, plot_dir=plot_dir, summary_plot=True,
+                               summary_plot_name="summary.pdf", errorbars_true=True,
+                               errorbars_fake=True, ncol=5)
         
-    def plot_losses(self):
+    def _plot_losses(self):
         # Plot the losses
         plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
         plotting.plot_loss(self.doc.get_file('loss_bce.pdf'), self.losses_train['bce'], self.losses_test['bce'])
@@ -516,7 +521,7 @@ class VAETrainer:
         # Plot the gradients
         plotting.plot_grad(self.doc.get_file('maximum_gradient.pdf'), self.max_grad, len(self.train_loader))
 
-    def print_losses(self, epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss, 
+    def _print_losses(self, epoch, train_bce_loss, train_logit_loss, train_kl_loss, train_sparsity_loss, train_loss, 
                      test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss, test_loss, max_grad):
         print('')
         print(f'=== epoch {epoch} ===')
@@ -542,6 +547,10 @@ class VAETrainer:
          
     def save(self, epoch="", name=None):
         """ Save the model, its optimizer, losses and the epoch """
+        
+        if self.VAE_type is None:
+            return
+        
         torch.save({"opt": self.optim.state_dict(),
                     "net": self.model.state_dict(),
                     "losses_test": self.losses_test,
@@ -554,6 +563,10 @@ class VAETrainer:
                          
     def load(self, epoch="", update_offset=True):
         """ Load the model, its optimizer, losses and the epoch """
+        
+        if self.VAE_type is None:
+            return
+        
         name = self.doc.get_file(f"model{epoch}.pt")
         state_dicts = torch.load(name, map_location=self.device)
         self.model.load_state_dict(state_dicts["net"])
@@ -576,7 +589,6 @@ class ECAETrainer:
         self.params = params
         self.device = device
         self.doc = doc
-        self.dataset = params.get("dataset", 1)
         
         # Create a VAE trainer, train it and make sure, that the plots of the VAE are put in a different directory
         if vae_dir is None:
@@ -592,7 +604,7 @@ class ECAETrainer:
             self.vae_trainer = VAETrainer(params, device, vae_doc, VAE_type=self.params.get("VAE_type", "CVAE"))
 
                         
-        self.layer_boundaries = self.vae_trainer.layer_boundaries
+        self.train_loader, self.test_loader, self.layer_boundaries = self.vae_trainer.encode_loaders()
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
         self.vae_trainer.load()
@@ -601,7 +613,6 @@ class ECAETrainer:
         self.epoch_offset = 0
         
         # Save the dataloaders ("test" should rather be called validation...)
-        self.train_loader, self.test_loader = self.vae_trainer.encode_loaders()
         
         # Whether the last batch should be dropped if it is smaller
         if self.params.get("drop_last", False):
