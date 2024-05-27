@@ -262,49 +262,53 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
     """Returns the plot parameters for the given layer and direction"""
     
     plots = []
+    large_scale = 300
+    small_scale = 30
     
     for layer in range(len(layer_boundaries)-1):
         
-        if used_layers is not None:
-            layer_name = used_layers[layer]
-        else:
-            layer_name = layer
-        
-        plots.append(
-            [calc_energy, 
-             f"energy_{layer_name}.pdf",
-             {"layer_boundaries": layer_boundaries, "layer": layer},
-             {"axis_label": f'$E_{{\\text{{{layer_name}}}}}$'}]
-            )
-        
-        plots.append(
-            [calc_shower_mean, 
-             f"mean_{layer_name}_eta.pdf",
-             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
-             {"axis_label": f'$\\langle \\eta \\rangle_{{\\text{{{layer_name}}}}}$'}]
-            )
-        
-        plots.append(
-            [calc_shower_std, 
-             f"std_{layer_name}_eta.pdf",
-             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
-             {"axis_label": f'$\\sigma_{{\\eta, \\text{{{layer_name}}}}}$'}]
-            )
-        
-        plots.append(
-            [calc_shower_mean, 
-             f"mean_{layer_name}_phi.pdf",
-             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
-             {"axis_label": f'$\\langle \\phi \\rangle_{{\\text{{{layer_name}}}}}$'}]
-            )
-        
-        plots.append(
-            [calc_shower_std, 
-             f"std_{layer_name}_phi.pdf",
-             {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
-             {"axis_label": f'$\\sigma_{{\\phi, \\text{{{layer_name}}}}}$'}]
-            )
-        
+        for vmax, yscale in zip([large_scale, small_scale], ["linear", "log"]):
+            
+            if used_layers is not None:
+                layer_name = used_layers[layer]
+            else:
+                layer_name = layer
+            
+            plots.append(
+                [calc_energy, 
+                f"energy_{layer_name}.pdf",
+                {"layer_boundaries": layer_boundaries, "layer": layer},
+                {"axis_label": f'$E_{{\\text{{{layer_name}}}}}$', "yscale": yscale}]
+                )
+            
+            plots.append(
+                [calc_shower_mean, 
+                f"mean_{layer_name}_eta.pdf",
+                {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
+                {"axis_label": f'$\\langle \\eta \\rangle_{{\\text{{{layer_name}}}}}$', "vmin": -vmax, "vmax": vmax}]
+                )
+            
+            plots.append(
+                [calc_shower_std, 
+                f"std_{layer_name}_eta.pdf",
+                {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "eta"},
+                {"axis_label": f'$\\sigma_{{\\eta, \\text{{{layer_name}}}}}$', "vmin": 0, "vmax": vmax}]
+                )
+            
+            plots.append(
+                [calc_shower_mean, 
+                f"mean_{layer_name}_phi.pdf",
+                {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
+                {"axis_label": f'$\\langle \\phi \\rangle_{{\\text{{{layer_name}}}}}$', "vmin": -vmax, "vmax": vmax}]
+                )
+            
+            plots.append(
+                [calc_shower_std, 
+                f"std_{layer_name}_phi.pdf",
+                {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
+                {"axis_label": f'$\\sigma_{{\\phi, \\text{{{layer_name}}}}}$', "vmin": 0, "vmax": vmax}]
+                )
+            
     plots.append(
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
@@ -316,7 +320,7 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
         [calc_flat_energy_distribution, 
          "flat_energy_distribution.pdf",
          {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log"}]
+         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log", "vmin": 0.1}]
         )
     
     plots.append(
