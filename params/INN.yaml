@@ -1,0 +1,52 @@
+# General
+data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_binned/dataset_eta_020.hdf5"
+
+# Documenter information
+run_name: cubic_less_blocks
+vae_dir: null
+# Data
+dtype: float32
+val_frac: 0.2
+eps: 1.e-10
+threshold: 1.e-2
+used_calo_layers: [0,1,2,3,12]
+
+# VAE
+VAE_type: null
+
+# INN
+
+# INN Preprocessing
+logit_transformation: False
+log_transformation: True
+log_cond: True
+width_noise: 1.e-6
+alpha: 1.e-8
+# INN Training
+lr: 1.e-5
+max_lr: 1.e-4
+batch_size: 256
+lr_scheduler: one_cycle_lr
+weight_decay: 0.
+betas: [0.9, 0.999]
+n_epochs: 200
+save_interval: 20
+keep_models: 1000
+# Bayesian Setup
+bayesian: False
+prior_prec: 5000
+std_init: -15.0
+# INN Architecture
+n_blocks: 10
+internal_size: 256
+layer_act: nn.SiLU
+# layer_act: nn.LeakyReLU
+layer_norm: null
+ActNorm: True
+# layer_norm: nn.BatchNorm1d
+layer_classes: [linear, linear, linear]
+coupling_type: cubic
+bounds_init: 20
+permute_soft: False
+num_bins: 10
+dropout: 0.0

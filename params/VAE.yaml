@@ -1,45 +1,39 @@
 # General
-# data_path: ... # TODO: Path to the data
+data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_binned/dataset_eta_020.hdf5"
 
 # Documenter information
-run_name: set2_KVAE
+run_name: photons_eta_20
 vae_dir: null
 # Data
 dtype: float32
-particle_type: electron
-dataset: 2
 val_frac: 0.2
 eps: 1.e-10
 threshold: 1.e-10
-
+used_calo_layers: [0,1,2,3,12]
 
 # VAE
-VAE_type: KVAE
-VAE_learnable_norm: True
+VAE_type: CVAE
+VAE_learnable_norm: False
 # VAE Preprocessing
-alpha: 1.e-8
-VAE_internal_threshold: 0.7575e-7
+alpha: 1.e-6
+VAE_internal_threshold: 1.e-2
 # VAE Training
 VAE_lr_scheduler: null
 VAE_max_lr: 1.e-4
 VAE_lr: 1.e-4
 VAE_weight_decay: 1.e-7
 VAE_batch_size: 256
-VAE_n_epochs: 1000
-VAE_save_interval: 100
-VAE_keep_models: 5001
+# VAE_n_epochs: 1000
+VAE_n_epochs: 1
+VAE_save_interval: 50
+VAE_keep_models: 3001
 VAE_zero_logit: True # Set the logit loss to 0
 sparsity_loss: null
 # VAE Architecture
-VAE_hidden_sizes: [1500, 1000, 500]
-VAE_latent_dim: 50
+VAE_hidden_sizes: [1,1,1]
+VAE_latent_dim: 1
 VAE_beta: 1.e-5
-VAE_gamma: 1.e+4
-# Block Architecture
-VAE_hidden_sizes_kernel : [1500, 800, 300]
-VAE_kernel_size: 7
-VAE_kernel_stride: 3
-VAE_kernel_latent: 50
+VAE_gamma: 1.e+2
 
 
 # INN
@@ -48,6 +42,7 @@ VAE_kernel_latent: 50
 logit_transformation: False
 log_transformation: False
 log_cond: True
+width_noise: 0
 # INN Training
 lr: 5.e-5
 max_lr: 5.e-4
@@ -55,7 +50,8 @@ batch_size: 256
 lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
-n_epochs: 200
+# n_epochs: 200
+n_epochs: 1
 save_interval: 50
 keep_models: 1000
 # Bayesian Setup
@@ -63,8 +59,10 @@ bayesian: False
 prior_prec: 5000
 std_init: -15.0
 # INN Architecture
-n_blocks: 18
-internal_size: 32
+# n_blocks: 18
+# internal_size: 32
+n_blocks: 2
+internal_size: 2
 layer_act: nn.ReLU
 layer_norm: null
 layer_classes: [linear, linear, linear]
