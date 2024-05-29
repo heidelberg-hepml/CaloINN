@@ -254,7 +254,31 @@ def postprocess(x, c, layer_boundaries, negative_layers, threshold=1e-10, inplac
 
     return x, c[..., [0]], layer_boundaries
 
-def get_loaders(filename, val_frac, batch_size, used_layers=None, eps=1.e-10, device='cpu', drop_last=False, shuffle=True, save_memory=False, width_noise=0):
+def save_data(new_file, old_file, x, energy, layer_boundaries):
+    """Saves the data to an hdf5 file"""
+    
+    new_file = h5py.File(new_file, 'w')
+    
+    with h5py.File(old_file, 'r') as old_file:
+        for key in old_file.keys():
+            if "bin" in key:
+                new_file.create_dataset(key, data=old_file[key][:], compression="gzip", compression_opts=9)
+                
+    x /= energy
+    x = x.cpu().numpy()
+    energy = energy.cpu().numpy()
+    
+    for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        new_file.create_dataset(f"energy_layer_{layer_index}", data=x[:, layer_start:layer_end], compression="gzip", compression_opts=9)
+        
+    new_file.create_dataset("incident_energy", data=energy[:, 0], compression="gzip", compression_opts=9)
+    
+    new_file.close()
+    
+    return
+    
+
+def get_loaders(filename, val_frac, batch_size=None, used_layers=None, eps=1.e-10, device='cpu', drop_last=False, shuffle=True, save_memory=False, width_noise=0):
     """Creates the dataloaders used to train the VAE model."""
     
     # load the data from the hdf5 file
@@ -292,6 +316,9 @@ def get_loaders(filename, val_frac, batch_size, used_layers=None, eps=1.e-10, de
     # # Call the postprocess func to make sure that it runs through
     # postprocess(x_trn, c_trn, layer_boundaries)
     # postprocess(x_val, c_val, layer_boundaries)
+    
+    if batch_size is None:
+        batch_size = number_of_samples
     
     # Create the dataloaders
     trn_loader = MyDataLoader(x_trn, c_trn, batch_size, drop_last, shuffle, width_noise=width_noise)
