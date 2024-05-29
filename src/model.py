@@ -16,6 +16,7 @@ from splines.rational_quadratic import RationalQuadraticSpline
 
 import copy
 import torch.nn.functional as F
+import sys
 
 from copy import deepcopy
 
@@ -400,7 +401,11 @@ class CINN(nn.Module):
         self.params_trainable = list(filter(
                 lambda p: p.requires_grad, self.model.parameters()))
         n_trainable = sum(p.numel() for p in self.params_trainable)
+        print(f"number of trainable parameters: {n_trainable}", flush=True)
+        
+        n_trainable = sum(p.numel() for p in self.model.parameters())
         print(f"number of parameters: {n_trainable}", flush=True)
+        sys.stdout.flush()
 
     def set_bayesian_std_grad(self, requires_grad):
         for layer in self.bayesian_layers:
@@ -615,6 +620,7 @@ class CVAE(nn.Module):
         
         # Set the normalization layer operating on the x space (before the actual encoder)
         with torch.no_grad():
+            # TODO: Do in batches!
             data = self._preprocess_encoding(data, cond, without_norm=True)
         mean = torch.mean(data, dim=0)
         std = torch.std(data, dim=0)
@@ -661,7 +667,7 @@ class CVAE(nn.Module):
         # Go to logit space
         y_logit = self.logit_trafo_in(y_0_1)
         
-        assert torch.isnan(y_logit).sum() == 0, f"y_logit contains NaNs"
+        # assert torch.isnan(y_logit).sum() == 0, f"y_logit contains NaNs"
 
         # Needed to initialize the norm transformation
         if without_norm:

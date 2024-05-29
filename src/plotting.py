@@ -255,10 +255,10 @@ def calc_energy(x, c, layer_boundaries, layer=None):
 def calc_etot_over_einc(x, c, layer_boundaries):
     """Computes the total energy of the shower over the incident energy"""
     
-    return calc_energy(x, c, layer_boundaries, layer=None) / c
+    return calc_energy(x, c, layer_boundaries, layer=None) / c[:, 0]
     
     
-def get_plot_params(layer_boundaries, coordinates, used_layers=None):
+def get_plot_params(layer_boundaries, coordinates, used_layers=None, short=True):
     """Returns the plot parameters for the given layer and direction"""
     
     plots = []
@@ -308,20 +308,21 @@ def get_plot_params(layer_boundaries, coordinates, used_layers=None):
                 {"layer_boundaries": layer_boundaries, "layer": layer, "coordinates": coordinates, "direction": "phi"},
                 {"axis_label": f'$\\sigma_{{\\phi, \\text{{{layer_name}}}}}$', "vmin": 0, "vmax": vmax}]
                 )
-            
-    plots.append(
-        [calc_flat_energy_distribution, 
-         "flat_energy_distribution.pdf",
-         {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$', "n_bins": 30}]
-        )
     
-    plots.append(
-        [calc_flat_energy_distribution, 
-         "flat_energy_distribution.pdf",
-         {"layer_boundaries": layer_boundaries},
-         {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log", "vmin": 0.1, "n_bins": 30}]
-        )
+    if not short:
+        plots.append(
+            [calc_flat_energy_distribution, 
+            "flat_energy_distribution.pdf",
+            {"layer_boundaries": layer_boundaries},
+            {"axis_label": r'$Voxel distribution$', "n_bins": 30}]
+            )
+        
+        plots.append(
+            [calc_flat_energy_distribution, 
+            "flat_energy_distribution.pdf",
+            {"layer_boundaries": layer_boundaries},
+            {"axis_label": r'$Voxel distribution$', "yscale": "log", "xscale": "log", "vmin": 0.1, "n_bins": 30}]
+            )
     
     plots.append(
         [calc_etot_over_einc, 

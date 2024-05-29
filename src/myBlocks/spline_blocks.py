@@ -76,18 +76,33 @@ class CubicSplineBlock(fm.InvertibleModule):
         self.bounds =  self.bounds_activation(torch.ones(1, self.splits[1], *([1] * self.input_rank)) * float(bounds))
         self.tails = tails
 
-        if permute_soft:
-            w = special_ortho_group.rvs(channels)
-            w = torch.tensor(w, dtype=torch.get_default_dtype())
-        else:
-            w = torch.zeros((channels, channels))
-            for i, j in enumerate(np.random.permutation(channels)):
-                w[i, channels-i-1] = 1.
+        if self.input_rank > 0:
+            if permute_soft:
+                w = special_ortho_group.rvs(channels)
+                w = torch.tensor(w, dtype=torch.get_default_dtype())
+            else:
+                w = torch.zeros((channels, channels))
+                for i, j in enumerate(np.random.permutation(channels)):
+                    w[i, channels-i-1] = 1.
 
-        self.w_perm = nn.Parameter(w.view(channels, channels, *([1] * self.input_rank)),
-                                   requires_grad=False)
-        self.w_perm_inv = nn.Parameter(w.T.view(channels, channels, *([1] * self.input_rank)),
-                                       requires_grad=False)
+            self.w_perm = nn.Parameter(w.view(channels, channels, *([1] * self.input_rank)),
+                                    requires_grad=False)
+            self.w_perm_inv = nn.Parameter(w.T.view(channels, channels, *([1] * self.input_rank)),
+                                        requires_grad=False)
+            
+        else:
+            assert permute_soft == False, "Soft permutaion currently not implemented for 1D data"
+            
+            self.w_perm = np.random.permutation(self.in_channels)
+            
+            self.w_perm_inv = np.zeros_like(self.w_perm)
+            for i, p in enumerate(self.w_perm):
+                self.w_perm_inv[p] = i
+                
+            self.w_perm = nn.Parameter(torch.LongTensor(self.w_perm), requires_grad=False)
+            self.w_perm_inv = nn.Parameter(torch.LongTensor(self.w_perm_inv), requires_grad=False)
+
+            
 
         if subnet_constructor is None:
             raise ValueError("Please supply a callable subnet_constructor"
@@ -303,12 +318,19 @@ class CubicSplineBlock(fm.InvertibleModule):
         scale = torch.ones(x.shape[-1]).to(x.device)
         perm_log_jac = torch.sum(-torch.log(scale))
 
-        if rev:
-            return (self.permute_function(x * scale, self.w_perm_inv),
-                    perm_log_jac)
+        if self.input_rank > 0:
+            if rev:
+                return (self.permute_function(x * scale, self.w_perm_inv),
+                        perm_log_jac)
+            else:
+                return (self.permute_function(x, self.w_perm) / scale,
+                        perm_log_jac)
+                
         else:
-            return (self.permute_function(x, self.w_perm) / scale,
-                    perm_log_jac)
+            if rev:
+                return (scale*x[..., self.w_perm], perm_log_jac)
+            else:
+                return (x[..., self.w_perm_inv]/scale, perm_log_jac)
 
     def forward(self, x, c=[], rev=False, jac=True):
         '''See base class docstring'''
@@ -414,21 +436,32 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
         self.bounds = self.bounds_activation(torch.ones(1, self.splits[1], *([1] * self.input_rank)) * float(bounds))
         self.tails = tails
 
-        if permute_soft:
-            w = special_ortho_group.rvs(channels)
-        else:
-            w = np.zeros((channels, channels))
-            for i, j in enumerate(np.random.permutation(channels)):
-                w[i, j] = 1.
+        if self.input_rank > 0:
+            if permute_soft:
+                w = special_ortho_group.rvs(channels)
+                w = torch.tensor(w, dtype=torch.get_default_dtype())
+            else:
+                w = torch.zeros((channels, channels))
+                for i, j in enumerate(np.random.permutation(channels)):
+                    w[i, channels-i-1] = 1.
 
-        # self.w_perm = nn.Parameter(torch.FloatTensor(w).view(channels, channels, *([1] * self.input_rank)),
-        #                            requires_grad=False)
-        # self.w_perm_inv = nn.Parameter(torch.FloatTensor(w.T).view(channels, channels, *([1] * self.input_rank)),
-        #                                requires_grad=False)
-        self.w_perm = nn.Parameter(torch.Tensor(w).view(channels, channels, *([1] * self.input_rank)),
-                                   requires_grad=False)
-        self.w_perm_inv = nn.Parameter(torch.Tensor(w.T).view(channels, channels, *([1] * self.input_rank)),
-                                       requires_grad=False)
+            self.w_perm = nn.Parameter(w.view(channels, channels, *([1] * self.input_rank)),
+                                    requires_grad=False)
+            self.w_perm_inv = nn.Parameter(w.T.view(channels, channels, *([1] * self.input_rank)),
+                                        requires_grad=False)
+            
+        else:
+            assert permute_soft == False, "Soft permutaion currently not implemented for 1D data"
+            
+            self.w_perm = np.random.permutation(self.in_channels)
+            
+            self.w_perm_inv = np.zeros_like(self.w_perm)
+            for i, p in enumerate(self.w_perm):
+                self.w_perm_inv[p] = i
+                
+            self.w_perm = nn.Parameter(torch.LongTensor(self.w_perm), requires_grad=False)
+            self.w_perm_inv = nn.Parameter(torch.LongTensor(self.w_perm_inv), requires_grad=False)
+
 
         if subnet_constructor is None:
             raise ValueError("Please supply a callable subnet_constructor"
@@ -596,12 +629,20 @@ class RationalQuadraticSplineBlock(fm.InvertibleModule):
 
         scale = torch.ones(x.shape[-1]).to(x.device)
         perm_log_jac = torch.sum(-torch.log(scale))
-        if rev:
-            return (self.permute_function(x * scale, self.w_perm_inv),
-                    perm_log_jac)
+
+        if self.input_rank > 0:
+            if rev:
+                return (self.permute_function(x * scale, self.w_perm_inv),
+                        perm_log_jac)
+            else:
+                return (self.permute_function(x, self.w_perm) / scale,
+                        perm_log_jac)
+                
         else:
-            return (self.permute_function(x, self.w_perm) / scale,
-                    perm_log_jac)
+            if rev:
+                return (scale*x[..., self.w_perm], perm_log_jac)
+            else:
+                return (x[..., self.w_perm_inv]/scale, perm_log_jac)
 
     def forward(self, x, c=[], rev=False, jac=True):
         '''See base class docstring'''
