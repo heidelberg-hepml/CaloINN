@@ -35,12 +35,13 @@ class VAETrainer:
         self.doc = doc
         self.save_memory = params.get("save_memory", False)
         self.VAE_type = VAE_type
+        
 
         # Load the data  
         self.train_loader, self.test_loader, self.layer_boundaries, self.negative_layers, self.coordinates = data_util.get_loaders(
             filename=params['data_path'],
             val_frac=params["val_frac"],
-            batch_size=params['VAE_batch_size'],
+            batch_size=params.get('VAE_batch_size', None),
             used_layers=params.get("used_calo_layers", None),
             eps=params.get("eps", 1.e-10),
             device=device,
@@ -50,6 +51,8 @@ class VAETrainer:
             width_noise=0)
         
         self.num_detector_layers = len(self.layer_boundaries) - 1
+        self.data_dim = self.train_loader.data.shape[1]
+        self.cond_dim = self.train_loader.cond.shape[1]
         
         data = self.train_loader.data
         cond = self.train_loader.cond
@@ -58,8 +61,7 @@ class VAETrainer:
         if VAE_type is not None:
             self.latent_dim = params["VAE_latent_dim"]
         else:
-            # TODO: Check again!
-            self.latent_dim = data.shape[1] + self.num_detector_layers
+            self.latent_dim = data.shape[1] / 2
             
         if VAE_type == "CVAE":
             self.model = CVAE(input = data,
@@ -96,9 +98,6 @@ class VAETrainer:
                           )
         
         elif VAE_type is None:
-            # TODO: Implement dummy
-            raise NotImplementedError("VAE dummy not yet implemented!")
-        
             # We dont need the rest if no VAE is used
             return
                       
@@ -171,7 +170,7 @@ class VAETrainer:
             print("No VAE is used. Only the INN will be trained.")
             return
         
-        for epoch in  tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
+        for epoch in tqdm(range(self.epoch_offset+1, self.params['VAE_n_epochs']+1)):
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
@@ -316,7 +315,7 @@ class VAETrainer:
 
         return test_loss, test_bce_loss, test_logit_loss, test_kl_loss, test_sparsity_loss
 
-    def get_reco(self, data, cond, batch_size=10000):
+    def get_reco(self, data, cond, batch_size=1000):
         
         if self.VAE_type is None:
             raise RuntimeError("Cannor reconstruct without a VAE model!")
@@ -337,67 +336,67 @@ class VAETrainer:
         reconstructed = reconstructed[:,...]
         
         return reconstructed
+
+    def encode(self, data, cond, batch_size=1000):
         
-    def _get_mu_logvar(self, data, cond):
-                    
-        mu, logvar = self.model.encode(data, cond)
-        mu_logvar = torch.cat((mu, logvar), axis=1)
-        return mu_logvar
-            
-    def encode_loaders(self):
+        if self.VAE_type is not None:
+            self.model.eval()
         
-        # Remove VAE model and dataset from the GPU
-        self.model.to("cpu")
-        self.train_loader.data = self.train_loader.data.cpu()
-        self.train_loader.cond = self.train_loader.cond.cpu()
-        self.test_loader.data = self.test_loader.data.cpu()
-        self.test_loader.cond = self.test_loader.cond.cpu()
+        num_samples = len(data)
         
-        # Makes the lines below much shorter. Used to get the slicing of the extra dims right
-        # Cf docstring of "data_util.get_energy_dims"
-        n = self.num_detector_layers
-        
-        batch_size = self.params.get('batch_size')
-        
-                        
         with torch.no_grad():
-            data_train = self._get_mu_logvar(self.train_loader.data, self.train_loader.cond).cpu().numpy()
-            data_test = self._get_mu_logvar(self.test_loader.data, self.test_loader.cond).cpu().numpy()
+                       
+            # Prepares an "empty" container for the samples
+            samples = torch.zeros((num_samples,int(self.latent_dim*2)+self.num_detector_layers))
+            
+            for batch in range((num_samples+batch_size-1)//batch_size):
+                start = batch_size*batch
+                stop = min(batch_size*(batch+1), num_samples)
+                
+                data_l = data[start:stop].to(self.device)
+                cond_l = cond[start:stop].to(self.device)
+                
+                if self.VAE_type is not None:
+                    
+                    # VAE encoding
+                    mu_l, logvar_l = self.model.encode(data_l, cond_l)
+                    vae_latent = torch.cat((mu_l, logvar_l), axis=1)
+                    extra_dims = self.logit_trafo_in(cond_l[:, 1:-self.num_detector_layers])*0.9  # TODO: Might use clipping here, instead of the 0.9...
+                    
+                
+                else:
+                    vae_latent = data_util.normalize_layers(data_l, self.layer_boundaries, c=cond_l, eps=self.params.get("eps", 1.e-10))
+                    extra_dims = cond_l[:, 1:-self.num_detector_layers] 
+                
+                             
+                # Append the extra dims that are learned by the INN to the training data
+                samples_l = torch.cat((vae_latent, extra_dims), axis=1)
+                
+                # Fill the results array
+                samples[start:stop] = samples_l.cpu()
+                                
+            return samples, cond[..., [0]].cpu()
+   
+    def encode_loaders(self, delete_old_loaders=True):
         
-        # Append the energy dimensions (n is the number of detector layers) -> We do not use the true layer energies anymore.
-        extra_dims_train = self.train_loader.cond[:, 1:-n]
-        extra_dims_test = self.test_loader.cond[:, 1:-n]
-
-        extra_dims_logit_train = self.logit_trafo_in(extra_dims_train*0.9).cpu().numpy()
-        extra_dims_logit_test = self.logit_trafo_in(extra_dims_test*0.9).cpu().numpy()
+        # Encode the data
+        data_train, cond_train = self.encode(self.train_loader.data, self.train_loader.cond)
+        data_test, cond_test = self.encode(self.test_loader.data, self.test_loader.cond)
         
-        
-        
-        data_train = np.append(data_train, extra_dims_logit_train , axis=1)
-        data_test = np.append(data_test, extra_dims_logit_test, axis=1)
-        
-        # Create the conditioning data (Only the incident energy)
-        cond_train = self.train_loader.cond[:, [0]].cpu().numpy()
-        cond_test = self.test_loader.cond[:, [0]].cpu().numpy()
-        
-        device = self.device        
-        
-        # Put into the dataloader
-        data_train = torch.tensor(data_train, device=device, dtype=torch.get_default_dtype())
-        cond_train = torch.tensor(cond_train, device=device, dtype=torch.get_default_dtype())
-
-        data_test = torch.tensor(data_test, device=device, dtype=torch.get_default_dtype())
-        cond_test = torch.tensor(cond_test, device=device, dtype=torch.get_default_dtype())
-        
+        if delete_old_loaders:
+            # Delete the old loaders to make space for the new ones
+            del self.train_loader, self.test_loader
+    
         # Create the dataloaders
-        loader_train = MyDataLoader(data_train, cond_train, batch_size)
-        loader_test = MyDataLoader(data_test, cond_test, batch_size)
+        batch_size = self.params.get('batch_size')
+        loader_train = MyDataLoader(data_train.to(self.device), cond_train.to(self.device), batch_size, width_noise=self.params.get("width_noise", 0.0))
+        loader_test = MyDataLoader(data_test.to(self.device), cond_test.to(self.device), batch_size, width_noise=self.params.get("width_noise", 0.0))
+    
+        if self.params.get("width_noise", 0.0) > 0:
+            print("Adding noise to the INN loaders")
         
-        # Put VAE model back on the right device
-        self.model.to(self.device)
-        
-        return loader_train, loader_test, self.layer_boundaries
-
+        return loader_train, loader_test, self.layer_boundaries, self.negative_layers, self.coordinates
+     
     def _get_full_cond(self, e_inc, extra_dims):
         """Recreate the full VAE cond data from the extra dims and the incident energy. Therefore the 
         layer energies will be calculated from the extra dims and the incident energy."""
@@ -424,53 +423,66 @@ class VAETrainer:
         
         layer_energies = torch.cat([e_inc] + extra_dims_list + layer_energies, axis=1)
         
-        return layer_energies
+        return layer_energies  
 
-    def decode(self, latent, e_inc, batch_size=10000):
+    def decode(self, latent, e_inc, batch_size=1000):
         
-        self.model.eval()
+        if self.VAE_type is not None:
+            self.model.eval()
         
         with torch.no_grad():
-            
-            # 2) VAE Part
-            
+
             # For the INN the energy dimensions are part of the training set.
             # For the VAE they are part of the conditioning. So we have to slice them off and
             # append them to the existing E_inc condition.
 
-            latent_dim = self.model.latent_dim
+            latent_dim = self.latent_dim
             num_samples = latent.shape[0]
             
-            mu = latent[:, :latent_dim]
-            logvar = latent[:, latent_dim:-self.num_detector_layers]
-            
-            # Invert the action from encode_loaders()
-            extra_dims = self.logit_trafo_out(latent[:, -self.num_detector_layers:])/0.9
-                        
-            condition = self._get_full_cond(e_inc=e_inc, extra_dims=extra_dims)
-            
             # Prepares an "empty" container for the samples
-            samples = torch.zeros((num_samples,self.train_loader.data.shape[1]))
+            samples = torch.zeros((num_samples,self.data_dim))
+            condition = torch.zeros((num_samples, self.cond_dim))
+            
+            
+            
             for batch in range((num_samples+batch_size-1)//batch_size):
                 start = batch_size*batch
                 stop = min(batch_size*(batch+1), num_samples)
                 
-                condition_l = condition[start:stop].to(self.device)
-                
-                # Do the reparameterization
-                mu_l = mu[start:stop].to(self.device)
-                logvar_l = logvar[start:stop].to(self.device)
-                reparametrized_samples_latent_l = self.model.reparameterize(mu_l, logvar_l)
+                if self.VAE_type is not None:
+                    # VAE version used a logit for the cond preprocessing
+                    extra_dims_l = self.logit_trafo_out(latent[start:stop, -self.num_detector_layers:].to(self.device))/0.9  # TODO: Might use clipping here, instead of the 0.9...
+                else:
+                    extra_dims_l = latent[start:stop, -self.num_detector_layers:].to(self.device)
                     
-                # Fill samples using the VAE
-                samples[start:stop] = self.model.decode(latent=reparametrized_samples_latent_l, c=condition_l).cpu()
+                    
+                e_inc_l = e_inc[start:stop].to(self.device)
+                condition_l = self._get_full_cond(e_inc=e_inc_l, extra_dims=extra_dims_l)
+                
+                if self.VAE_type is not None:
+                    # VAE decoding                    
+                    mu_l = latent[start:stop, :latent_dim].to(self.device)
+                    logvar_l = latent[start:stop, latent_dim:-self.num_detector_layers].to(self.device)
+                    
+                    reparametrized_samples_latent_l = self.model.reparameterize(mu_l, logvar_l)
+                    samples_l = self.model.decode(latent=reparametrized_samples_latent_l, c=condition_l)
+                    
+                else:
+                    latent_l = latent[start:stop, :int(2*latent_dim)].to(self.device)
+                    latent_l[latent_l < self.params.get("width_noise", 0.0)] = 0
+                    samples_l = data_util.unnormalize_layers(latent_l, condition_l, self.layer_boundaries, eps=self.params.get("eps", 1.e-10), noise_width=None)
+                
+                
+                # Fill the results array
+                samples[start:stop] = samples_l.cpu()
+                condition[start:stop] = condition_l.cpu()
                 
             return samples, condition
            
     def plot_results(self, epoch, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
-        
+                
         if self.VAE_type is None:
             print("Nothing to plot")
             return
@@ -482,30 +494,40 @@ class VAETrainer:
         cond = self.test_loader.cond
         generated = self.get_reco(data, cond)
         
-        # Postprocess the data
-        data_post, cond_post, layer_boundaries_post = data_util.postprocess(data, cond, self.layer_boundaries, self.negative_layers)
-        generated_post, _, _ = data_util.postprocess(generated, cond, self.layer_boundaries, self.negative_layers)
-        
-        # Get the plot paramters
-        params = plotting.get_plot_params(layer_boundaries_post, self.coordinates.cpu().numpy(), used_layers=self.params.get("used_calo_layers", None))
-             
-                    
-        # Now create the histograms
-        if plot_path is None:
-            subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-            plot_dir = self.doc.get_file(subdir)
-        else:
-            plot_dir = plot_path
+        # make plots for the all energies and for the seperate incident energies, as well
+        energies = torch.unique(cond[:, 0]).to(cond.device)
+        masks = [torch.ones_like(cond[:, 0], dtype=torch.bool, device=cond.device)]
+        for energy in energies:
+            masks.append(cond[:, 0] == energy)
             
-        # plot_all_hist([x_post.cpu().numpy(), x_post.cpu().numpy()], [c_post.cpu().numpy(), c_post.cpu().numpy()], params, plot_dir=plot_dir, summary_plot=True,
-        #       summary_plot_name="summary.pdf", errorbars_true=True, errorbars_fake=True, ncol=5)
-        
-        plotting.plot_all_hist([data_post.cpu().numpy(), generated_post.cpu().numpy()], 
-                               [cond_post.cpu().numpy(), cond_post.cpu().numpy()], 
-                               params, plot_dir=plot_dir, summary_plot=True,
-                               summary_plot_name="summary.pdf", errorbars_true=True,
-                               errorbars_fake=True, ncol=5)
-        
+        for i, mask in enumerate(masks):
+            
+            # Postprocess the data
+            data_post, cond_post, layer_boundaries_post = data_util.postprocess(data[mask], cond[mask], self.layer_boundaries, self.negative_layers)
+            generated_post, _, _ = data_util.postprocess(generated[mask], cond[mask], self.layer_boundaries, self.negative_layers)
+            
+            # Get the plot paramters
+            params = plotting.get_plot_params(layer_boundaries_post, self.coordinates.cpu().numpy(), used_layers=self.params.get("used_calo_layers", None), short=(i!=0))
+                
+                        
+            # Now create the histograms
+            if plot_path is None:
+                subdir = os.path.join("plots", f'epoch_{epoch:03d}')
+                plot_dir = self.doc.get_file(subdir)
+            else:
+                plot_dir = plot_path
+            
+            if i == 0:
+                name = "summary_all_eincs.pdf"
+            else:
+                name = f"summary_{energies[i-1].item()}_MeV.pdf"
+                
+            plotting.plot_all_hist([data_post.cpu().numpy(), generated_post.cpu().numpy()], 
+                                [cond_post.cpu().numpy(), cond_post.cpu().numpy()], 
+                                params, plot_dir=plot_dir, summary_plot=True,
+                                summary_plot_name=name, errorbars_true=True,
+                                errorbars_fake=True, ncol=5)
+            
     def _plot_losses(self):
         # Plot the losses
         plotting.plot_loss(self.doc.get_file('loss.pdf'), self.losses_train['total'], self.losses_test['total'])
@@ -590,24 +612,31 @@ class ECAETrainer:
         self.device = device
         self.doc = doc
         
-        # Create a VAE trainer, train it and make sure, that the plots of the VAE are put in a different directory
-        if vae_dir is None:
+        self.VAE_type = params.get("VAE_type", "CVAE")
+        if self.VAE_type is None:
             vae_basedir = os.path.join(doc.basedir, "VAE")
             vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_basedir, log_name="log_jupyter.txt", read_only=True)
-            self.vae_trainer = VAETrainer(params, device, vae_doc, VAE_type=self.params.get("VAE_type", "CVAE"))
-            print("\n\nStart training of CVAE\n\n")
-            self.vae_trainer.train()
-            print("\n\nEnd training of CVAE\n\n")
-        
+            self.preprocessor = VAETrainer(params, device, vae_doc, VAE_type=self.VAE_type)
+            
         else:
-            vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_dir, log_name="log_jupyter.txt", read_only=True)
-            self.vae_trainer = VAETrainer(params, device, vae_doc, VAE_type=self.params.get("VAE_type", "CVAE"))
+            # Create a VAE trainer, train it and make sure, that the plots of the VAE are put in a different directory
+            if vae_dir is None:
+                vae_basedir = os.path.join(doc.basedir, "VAE")
+                vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_basedir, log_name="log_jupyter.txt", read_only=True)
+                self.preprocessor = VAETrainer(params, device, vae_doc, VAE_type=self.VAE_type)
+                print("\n\nStart training of CVAE\n\n")
+                self.preprocessor.train()
+                print("\n\nEnd training of CVAE\n\n")
+            
+            else:
+                vae_doc = Documenter(params['run_name'], existing_run=True, basedir=vae_dir, log_name="log_jupyter.txt", read_only=True)
+                self.preprocessor = VAETrainer(params, device, vae_doc, VAE_type=self.VAE_type)
 
+            self.preprocessor.load()
                         
-        self.train_loader, self.test_loader, self.layer_boundaries = self.vae_trainer.encode_loaders()
+        self.train_loader, self.test_loader, self.layer_boundaries, self.negative_layers, self.coordinates = self.preprocessor.encode_loaders()
         self.num_detector_layers = len(self.layer_boundaries) - 1
         
-        self.vae_trainer.load()
         
         # Nedded for printing if the model was loaded
         self.epoch_offset = 0
@@ -668,7 +697,7 @@ class ECAETrainer:
         print("\n\nstart the training of the INN\n\n")
         
         # Start the actual training
-        for epoch in range(self.epoch_offset+1,self.params['n_epochs']+1):
+        for epoch in tqdm(range(self.epoch_offset+1,self.params['n_epochs']+1)):
             
             # Save the latest epoch of the training (just the number)
             self.epoch = epoch
@@ -891,10 +920,11 @@ class ECAETrainer:
         
         return max_bias, max_mu_w, min_logsig2_w, max_logsig2_w
      
-    def plot_results(self, epoch, n_samples=None):
+    def plot_results(self, epoch, n_samples=None, plot_path=None):
         """Wrapper for the plotting, that calls the functions from plotting.py and plotter.py
         """
-        
+        self.model.eval()
+
         # If we are in the final epoch: use more samples!
         if n_samples is not None:
             num_samples = n_samples
@@ -905,48 +935,51 @@ class ECAETrainer:
                 num_rand = 30
         else:
             num_samples = 100000
-            num_rand = 30
+            num_rand = 30      
         
-        # Now compute the data for the plotting
-        generated, cond_fake = self.generate(num_samples=num_samples)
-        data = self.vae_trainer.test_loader.data
-        cond_true = self.vae_trainer.test_loader.cond
-            
-        # Now create the no-errorbar histograms
-        subdir = os.path.join("plots", f'epoch_{epoch:03d}')
-        plot_dir = self.doc.get_file(subdir)
-        plotting.plot_all_hist(
-            data, cond_true, generated, cond_fake, self.params,
-            self.layer_boundaries, plot_dir)
         
-        # Also in the VAE latent space in the last epoch
-        if epoch == self.params['n_epochs']:
-            generated = self.generate(num_samples=num_samples, return_in_training_space=True)
-            train_data = self.train_loader.data.cpu().numpy()
-            
-            bins_1 = plt.hist(generated[:, :-self.num_detector_layers].flatten(), bins=100)[1]
-            plt.close()
-            bins_2 = plt.hist(generated[:, -self.num_detector_layers:].flatten(), bins=100)[1]
-            plt.close()
-            n = int(np.ceil(generated.shape[1] / 6))
+        data, cond_true = self.preprocessor.decode(self.test_loader.data, self.test_loader.cond)
 
-            fig, axs = plt.subplots(n, 6, figsize=(6*6,6*n))
-            for i, ax in enumerate(axs.flatten()):
-                if i >= generated.shape[1]:
-                    break
+        
+        # make plots for the all energies and for the seperate incident energies, as well
+        energies = torch.unique(cond_true[:, 0]).to(cond_true.device)
+        masks = [torch.ones_like(cond_true[:, 0], dtype=torch.bool, device=cond_true.device)]
+        for energy in energies:
+            masks.append(cond_true[:, 0] == energy)
+            
+        for i, mask in enumerate(masks):
+            
+            # Sample the data using the INN
+            if i == 0:
+                generated, cond_fake = self.generate(num_samples=num_samples)
+            else:
+                generated, cond_fake = self.generate(num_samples=num_samples, einc=energies[i-1].item())
+            
+            # Postprocess the data
+            data_post, cond_true_post, layer_boundaries_post = data_util.postprocess(data[mask], cond_true[mask], self.layer_boundaries, self.negative_layers)
+            generated_post, cond_fake_post, _ = data_util.postprocess(generated, cond_fake, self.layer_boundaries, self.negative_layers)
+            
+            # Get the plot paramters
+            params = plotting.get_plot_params(layer_boundaries_post, self.coordinates.cpu().numpy(), used_layers=self.params.get("used_calo_layers", None), short=(i!=0))
                 
-                if i >= generated.shape[1]-self.num_detector_layers:
-                    ax.hist(train_data[:,i], bins=bins_2, density=True)
-                    ax.hist(generated[:,i], bins=bins_2, density=True, histtype="step")
-                    # ax.set_xscale("log")
-                    ax.set_yscale("log")
+                        
+            # Now create the histograms
+            if plot_path is None:
+                subdir = os.path.join("plots", f'epoch_{epoch:03d}')
+                plot_dir = self.doc.get_file(subdir)
+            else:
+                plot_dir = plot_path
+            
+            if i == 0:
+                name = "summary_all_eincs.pdf"
+            else:
+                name = f"summary_{energies[i-1].item()}_MeV.pdf"
                 
-                else:  
-                    ax.hist(train_data[:,i], bins=bins_1, density=True)
-                    ax.hist(generated[:,i], bins=bins_1, density=True, histtype="step")
-                
-            fig.savefig(os.path.join(self.doc.basedir, "plots",  f'epoch_{epoch:03d}',"in_vae_latent.pdf"), bbox_inches='tight', dpi=500)
-            plt.close()
+            plotting.plot_all_hist([data_post.cpu().numpy(), generated_post.cpu().numpy()], 
+                                [cond_true_post.cpu().numpy(), cond_fake_post.cpu().numpy()], 
+                                params, plot_dir=plot_dir, summary_plot=True,
+                                summary_plot_name=name, errorbars_true=True,
+                                errorbars_fake=True, ncol=5)
         
     def set_optimizer(self, steps_per_epoch=1, no_training=False, params=None):
         """ Initialize optimizer and learning rate scheduling """
@@ -993,7 +1026,6 @@ class ECAETrainer:
 
     def save(self, epoch="", name=None):
         """ Save the model, its optimizer, losses, learning rates and the epoch """
-        # self.vae_trainer.save(epoch, name)
         torch.save({"opt": self.optim.state_dict(),
                     "net": self.model.state_dict(),
                     "losses_test": self.losses_test,
@@ -1012,7 +1044,8 @@ class ECAETrainer:
     def load(self, epoch="", update_offset=True):
         """ Load the model, its optimizer, losses, learning rates and the epoch """
         
-        self.vae_trainer.load(epoch)
+        if self.VAE_type is not None:
+            self.preprocessor.load(epoch)
         
         name = self.doc.get_file(f"model{epoch}.pt")
         state_dicts = torch.load(name, map_location=self.device)
@@ -1042,48 +1075,19 @@ class ECAETrainer:
 
     def _get_incident_energies(self, num_samples):             
 
-        particle_type = self.params["particle_type"]
+        eincs = self.train_loader.cond
         
-        # Pions and photons have discrete energies         
-        if particle_type == "photon" or particle_type == "pion":
-
-            if particle_type == "pion": # 120800 samples
-                energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  9800,  5000,  3000,  2000,  1000]
-            elif particle_type == "photon": # 121000 samples
-                energy_numbers = [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,  5000,  3000,  2000,  1000]
-                
-            
-            energy_values = torch.tensor([
-                2.560000e-03, 5.120000e-03, 1.024000e-02, 2.048000e-02,
-                4.096000e-02, 8.192000e-02, 1.638400e-01, 3.276800e-01,
-                6.553600e-01, 1.310720e+00, 2.621440e+00, 5.242880e+00,
-                1.048576e+01, 2.097152e+01, 4.194304e+01])
-            
-            # Use exact energy distribution if possible
-            if num_samples == np.sum(energy_numbers):                    
-                energies = np.array([])
-                for energy_value, energy_number in zip(energy_values, energy_numbers):
-                    energies = np.append(energies, np.ones(energy_number)*energy_value.item())
-                energies = torch.tensor(energies, dtype=torch.get_default_dtype()).unsqueeze(-1)
-            
-            # Use multinomial sampling if exact dist cannot be taken
-            else:
-                probabilities = torch.tensor(energy_numbers) / np.sum(energy_numbers)
-                dist = torch.distributions.Categorical(probabilities)
-                energies = energy_values[dist.sample((num_samples,1))]
+        energy_values = torch.unique(eincs, return_counts=True)[0]
         
-        # Else scale the energies uniformly in the logspace
-        elif particle_type == "electron":
-            energies = torch.tensor(10**(np.random.rand(num_samples, 1)*3 - 2), dtype=torch.get_default_dtype())
-            print("Sampling uniformly in the logspace between 1.e-2 and 1.e1")
+        probabilities = torch.unique(eincs, return_counts=True)[1] /\
+            torch.sum(torch.unique(eincs, return_counts=True)[1])
             
-        else:
-            raise ValueError("Unknown particle type!")
+        dist = torch.distributions.Categorical(probabilities)
+        energies = energy_values[dist.sample((num_samples,1))]
         
-        assert energies.shape[0] == num_samples
         return energies
     
-    def _sample_INN(self, energies, batch_size = 10000):     
+    def _sample_INN(self, energies, batch_size = 1000):     
         self.model.eval() 
         
         with torch.no_grad():
@@ -1104,7 +1108,7 @@ class ECAETrainer:
             
             return samples_INN
      
-    def generate(self, num_samples, batch_size = 10000, return_in_training_space=False):
+    def generate(self, num_samples, batch_size = 1000, return_in_training_space=False, einc=None):
         """
             generate new data using the modle and storing them to a file in the run folder.
 
@@ -1113,7 +1117,13 @@ class ECAETrainer:
             batch_size (int): Batch size for samlpling
         """     
         
-        energies = self._get_incident_energies(num_samples)           
+        if einc is None:
+            energies = self._get_incident_energies(num_samples)           
+
+        else:
+            # cast float einc into the shape (num_samples,1) -> Reduplicate along axis 0
+            energies = torch.tensor(einc, dtype=torch.get_default_dtype()).repeat(num_samples,1)
+            
             
         # 1) INN Part
         samples_INN = self._sample_INN(energies, batch_size)
@@ -1122,7 +1132,7 @@ class ECAETrainer:
             return samples_INN
         
         # 2) VAE Part
-        return self.vae_trainer.decode(samples_INN, energies, batch_size)
+        return self.preprocessor.decode(samples_INN, energies, batch_size)
 
     def latent_samples(self, epoch=None):
         """
