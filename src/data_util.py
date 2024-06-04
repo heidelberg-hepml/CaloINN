@@ -132,7 +132,7 @@ def load_data(filename, used_layers=None, ):
     
     return x, energy, layer_boundaries, coordinates
 
-def separate_negative_energies(x, layer_boundaries):
+def separate_negative_energies_old(x, layer_boundaries):
     negative_layers = []
         
     new_layers = [x]
@@ -153,6 +153,36 @@ def separate_negative_energies(x, layer_boundaries):
     x = torch.cat(new_layers, axis=1)
     
     return x, layer_boundaries, negative_layers
+    
+def separate_negative_energies(x, layer_boundaries):
+    negative_layers = []
+        
+    old_layers = [x]
+    new_layers = []
+    new_layer_boundaries = [0]
+    for i, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
+        layer = x[..., layer_start:layer_end]
+        if torch.any(layer < 0):
+            
+            negative_layers.append(i)
+            
+            new_layers.append(-torch.clip(layer, None, 0))
+            
+            x[..., layer_start:layer_end] = torch.clip(layer, 0, None)
+            
+            new_layer_boundaries.append(new_layer_boundaries[-1] + layer.shape[1])
+            
+    offset = new_layer_boundaries[-1]
+    for boundary in layer_boundaries[1:]:
+        new_layer_boundaries.append(boundary+offset)
+            
+    print(f"Fixed {len(negative_layers)} negative layers")
+    
+    x = torch.cat(new_layers+old_layers, axis=1)
+    
+    print(x.shape, new_layer_boundaries, negative_layers)
+    
+    return x, new_layer_boundaries, negative_layers
     
 def get_energy_dims(x, c, layer_boundaries, eps=1.e-10):
     """Appends the extra dimensions and the layer energies to the conditions
@@ -193,6 +223,12 @@ def preprocess(x, energy, layer_boundaries, eps=1.e-10):
     """Transforms the list 'layers' into the ndarray 'x'. Furthermore, the events
     are masked and the extra dims are appended to the incident energies"""
         
+    x[x < 0] = 0
+    
+    print(f"Number of voxels below zero: {torch.sum(x < 0)} ({100*torch.sum(x < 0)/x.numel():.2f}%)")
+    print(f"Minumum voxel value: {torch.min(x)}")
+    print(f"Mean negative voxel value: {torch.mean(x[x < 0])}")    
+    
     x, layer_boundaries, negative_layers = separate_negative_energies(x, layer_boundaries)
 
     binary_mask = torch.full((len(energy),), True)
@@ -214,9 +250,9 @@ def preprocess(x, energy, layer_boundaries, eps=1.e-10):
 
     c = get_energy_dims(x, c, layer_boundaries, eps)
     
-    return x, c, negative_layers
+    return x, c, negative_layers, layer_boundaries
 
-def recombine_negative_energies(x, layer_boundaries, negative_layers):
+def recombine_negative_energies_old(x, layer_boundaries, negative_layers):
     """Subtracts the negative layers from the positive layers to receive the original data."""
     
     n_layers = len(negative_layers)
@@ -228,6 +264,28 @@ def recombine_negative_energies(x, layer_boundaries, negative_layers):
         x[..., layer_boundaries[layer_index]:layer_boundaries[layer_index+1]] = positive_layer - negative_layer
     
     return x[..., :layer_boundaries[-n_layers-1]], layer_boundaries[:-n_layers]
+
+def recombine_negative_energies(x, layer_boundaries, negative_layers):
+    """Subtracts the negative layers from the positive layers to receive the original data."""
+    
+    n_layers = len(negative_layers)
+    
+    # negative_layers = x[..., 0:layer_boundaries[len(negative_layers)]]
+    # positive_layers = x[..., layer_boundaries[len(negative_layers)]:layer_boundaries[-1]]
+    
+    for i, layer_index in enumerate(negative_layers):
+        negative_layer = x[..., layer_boundaries[i]:layer_boundaries[i+1]]
+        positive_layer = x[..., layer_boundaries[n_layers+layer_index]:layer_boundaries[n_layers+layer_index+1]]
+        # positive_layer = x[..., layer_boundaries[layer_index]:layer_boundaries[layer_index+1]]
+        # negative_layer = x[..., layer_boundaries[-n_layers+i-1]:layer_boundaries[-n_layers+i]]
+        
+        x[..., layer_boundaries[n_layers+layer_index]:layer_boundaries[n_layers+layer_index+1]] = positive_layer - negative_layer
+    
+    new_layer_boundaries = []    
+    for layer_boundary in layer_boundaries[n_layers:]:
+        new_layer_boundaries.append(layer_boundary - layer_boundaries[n_layers])
+    
+    return x[..., layer_boundaries[n_layers]:], new_layer_boundaries
 
 def postprocess(x, c, layer_boundaries, negative_layers, threshold=1e-10, inplace=False):
     """Reverses the effect of the preprocess funtion"""
@@ -254,12 +312,24 @@ def postprocess(x, c, layer_boundaries, negative_layers, threshold=1e-10, inplac
 
     return x, c[..., [0]], layer_boundaries
 
-def save_data(new_file, old_file, x, energy, layer_boundaries):
+def save_data(new_file, old_file, x, energy, layer_boundaries, used_layers):
     """Saves the data to an hdf5 file"""
     
     new_file = h5py.File(new_file, 'w')
+    max_index = 0
     
+    layer_shapes = {}
     with h5py.File(old_file, 'r') as old_file:
+        
+        for key in old_file.keys():
+            if "energy_layer" in key:
+                index = int(key.split("layer_")[-1])
+                if max_index < index:
+                    max_index = index
+                    
+                layer_shapes[index] = old_file[key].shape[1]
+                
+        
         for key in old_file.keys():
             if "bin" in key:
                 new_file.create_dataset(key, data=old_file[key][:], compression="gzip", compression_opts=9)
@@ -269,7 +339,11 @@ def save_data(new_file, old_file, x, energy, layer_boundaries):
     energy = energy.cpu().numpy()
     
     for layer_index, (layer_start, layer_end) in enumerate(zip(layer_boundaries[:-1], layer_boundaries[1:])):
-        new_file.create_dataset(f"energy_layer_{layer_index}", data=x[:, layer_start:layer_end], compression="gzip", compression_opts=9)
+        new_file.create_dataset(f"energy_layer_{used_layers[layer_index]}", data=x[:, layer_start:layer_end], compression="gzip", compression_opts=9)
+        
+    for i in range(max_index+1):
+        if i not in used_layers:
+            new_file.create_dataset(f"energy_layer_{i}", data=np.zeros((x.shape[0], layer_shapes[i])), compression="gzip", compression_opts=9)
         
     new_file.create_dataset("incident_energy", data=energy[:, 0], compression="gzip", compression_opts=9)
     
@@ -285,7 +359,9 @@ def get_loaders(filename, val_frac, batch_size=None, used_layers=None, eps=1.e-1
     x, energy, layer_boundaries, coordinates = load_data(filename, used_layers=used_layers)
 
     # preprocess the data and append the extra dims
-    x, c, negative_layers = preprocess(x, energy, layer_boundaries, eps)
+    x, c, negative_layers, layer_boundaries = preprocess(x, energy, layer_boundaries, eps)
+    
+    print(x.shape, layer_boundaries, negative_layers)
     
     # Create an index array, used for splitting into train and val set
     number_of_samples = len(x)
