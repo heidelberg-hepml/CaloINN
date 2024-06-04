@@ -1,8 +1,10 @@
 # General
-data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_binned/dataset_eta_020.hdf5"
+# data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_binned/dataset_eta_020.hdf5"
+data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_coarse_binning/dataset_eta_020.hdf5"
+# data_path: "/afs/cern.ch/user/f/fernst/FrozenShowerInputSamples/eta_020_coarse_binning_2/dataset_eta_020.hdf5"
 
 # Documenter information
-run_name: cubic_less_blocks
+run_name: coarse_dataset_positive
 vae_dir: null
 # Data
 dtype: float32
@@ -30,15 +32,15 @@ lr_scheduler: one_cycle_lr
 weight_decay: 0.
 betas: [0.9, 0.999]
 n_epochs: 200
-save_interval: 20
+save_interval: 25
 keep_models: 1000
 # Bayesian Setup
 bayesian: False
 prior_prec: 5000
 std_init: -15.0
 # INN Architecture
-n_blocks: 10
-internal_size: 256
+n_blocks: 12
+internal_size: 90
 layer_act: nn.SiLU
 # layer_act: nn.LeakyReLU
 layer_norm: null
